@@ -78,14 +78,34 @@ Working from: `/Users/sigey/Documents/Projects/NBA_Predictor/docs/superpowers/pl
 
 ---
 
-### Task 4: Tracking database schema and store
-- [ ] Write tests in `tests/test_tracking_store.py`
-- [ ] Write `src/nba_predictor/tracking/__init__.py`
-- [ ] Write `src/nba_predictor/tracking/store.py`
-- [ ] Run tests to verify they pass
-- [ ] Commit
+### Task 4: Tracking database schema and store ✅
+- [x] Write tests in `tests/test_tracking_store.py`
+- [x] Write `src/nba_predictor/tracking/__init__.py`
+- [x] Write `src/nba_predictor/tracking/store.py`
+- [x] Run tests to verify they pass
+- [x] Commit
 
-**Status:** Awaiting implementation
+**Status:** Complete
+- **Commit SHA(s):** `7fd8bb3`, `386e973`
+- **Test summary:** 4 passed
+
+**Interfaces produced:**
+- `store.init_db(db_path: Path) -> None` — creates all 6 tables if they don't exist (idempotent)
+- `store.get_connection(db_path: Path)` — context manager yielding a `sqlite3.Connection` with `row_factory = sqlite3.Row`
+- `store.insert_prediction(db_path, *, game_id: str, created_at: str, model_version: str, home_win_prob: float, predicted_margin: float, predicted_total: float) -> int` — returns new row id
+- `store.get_predictions_for_game(db_path: Path, game_id: str) -> list[sqlite3.Row]`
+
+**Tables created:** `predictions`, `game_market_predictions`, `game_forecast_snapshots`, `odds_timing_snapshots`, `player_prediction_snapshots`, `game_player_outcomes`
+
+**Files created:**
+1. `tests/test_tracking_store.py` - 4 test cases as specified in plan
+2. `src/nba_predictor/tracking/__init__.py` - empty file
+3. `src/nba_predictor/tracking/store.py` - schema and CRUD functions
+
+**Verification:**
+- Test command: `pytest tests/test_tracking_store.py -v`
+- Result: 4 passed
+- Install: `pip install -e .` completed successfully
 
 ---
 

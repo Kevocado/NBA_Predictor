@@ -19,6 +19,7 @@ dependencies = [
     "optuna>=4.0",
     "nba_api>=1.5",
     "requests>=2.32",
+    "tenacity>=8.0",
 ]
 
 [project.optional-dependencies]

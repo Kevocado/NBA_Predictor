@@ -95,3 +95,46 @@ def test_get_game_players_returns_tracked_props(tmp_path, monkeypatch):
     body = response.json()
     assert body[0]["stat"] == "points"
     assert body[0]["predicted_value"] == 27.5
+
+
+def _client_with_week_schedule(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    import json
+
+    from nba_predictor.api.app import app
+    from nba_predictor.api import deps
+    from nba_predictor.tracking import store
+
+    db_path = tmp_path / "tracking.db"
+    store.init_db(db_path)
+
+    schedule_path = tmp_path / "games.json"
+    schedule_path.write_text(
+        json.dumps(
+            [
+                {"game_id": "g1", "game_date": "2026-02-16", "home_team": "BOS", "away_team": "MIA"},
+                {"game_id": "g2", "game_date": "2026-02-19", "home_team": "LAL", "away_team": "GSW"},
+                {"game_id": "g3", "game_date": "2026-02-23", "home_team": "DEN", "away_team": "PHX"},
+            ]
+        )
+    )
+
+    app.dependency_overrides[deps.get_db_path] = lambda: db_path
+    app.dependency_overrides[deps.get_schedule_path] = lambda: schedule_path
+
+    return TestClient(app)
+
+
+def test_list_games_for_week_requires_start_param(tmp_path, monkeypatch):
+    client = _client_with_week_schedule(tmp_path, monkeypatch)
+    response = client.get("/games/week")
+    assert response.status_code == 422
+
+
+def test_list_games_for_week_returns_only_games_in_window(tmp_path, monkeypatch):
+    client = _client_with_week_schedule(tmp_path, monkeypatch)
+    response = client.get("/games/week", params={"start": "2026-02-16"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [g["game_id"] for g in body] == ["g1", "g2"]

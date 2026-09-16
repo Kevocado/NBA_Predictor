@@ -116,6 +116,7 @@ export const api = {
   getTeams: () => fetchJson<Team[]>("/teams"),
   getTeam: (abbreviation: string) => fetchJson<Team>(`/teams/${abbreviation}`),
   getGames: (date: string) => fetchJson<Game[]>(`/games?date=${date}`),
+  getGamesWeek: (start: string) => fetchJson<Game[]>(`/games/week?start=${start}`),
   getGameDetail: (gameId: string) => fetchJson<GameDetail>(`/games/${gameId}`),
   getGamePlayers: (gameId: string) => fetchJson<PlayerProp[]>(`/games/${gameId}/players`),
   getHubTeams: () => fetchJson<TeamHubRow[]>("/hub/teams"),

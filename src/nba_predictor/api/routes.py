@@ -24,7 +24,7 @@ from nba_predictor.api.schemas import (
 from nba_predictor.data.team_reference import TEAMS, get_team
 from nba_predictor.pipeline.retrain import run_retrain_pipeline
 from nba_predictor.services.hub_service import compute_track_record, load_hub_cache
-from nba_predictor.services.schedule_repository import get_game, get_games_for_date
+from nba_predictor.services.schedule_repository import get_game, get_games_for_date, get_games_for_week
 from nba_predictor.tracking import store
 from nba_predictor import config
 
@@ -67,6 +67,20 @@ def _prediction_out(db_path: Path, game_id: str) -> PredictionOut | None:
 @router.get("/games", response_model=list[GameOut])
 def list_games(date: str, schedule: list[dict] = Depends(get_schedule), db_path: Path = Depends(get_db_path)) -> list[GameOut]:
     games = get_games_for_date(schedule, date)
+    return [
+        GameOut(
+            game_id=g["game_id"], game_date=g["game_date"], home_team=g["home_team"], away_team=g["away_team"],
+            prediction=_prediction_out(db_path, g["game_id"]),
+        )
+        for g in games
+    ]
+
+
+@router.get("/games/week", response_model=list[GameOut])
+def list_games_for_week(
+    start: str, schedule: list[dict] = Depends(get_schedule), db_path: Path = Depends(get_db_path)
+) -> list[GameOut]:
+    games = get_games_for_week(schedule, start)
     return [
         GameOut(
             game_id=g["game_id"], game_date=g["game_date"], home_team=g["home_team"], away_team=g["away_team"],

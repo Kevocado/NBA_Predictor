@@ -1,142 +1,159 @@
-"""Tests for espn module with mocked API responses."""
+from unittest.mock import patch
+
 import pytest
-from unittest.mock import MagicMock, patch
-import json
-from pathlib import Path
 
 
-class TestESPN:
-    """Test suite for espn module."""
+@pytest.fixture
+def clear_cache(tmp_path, monkeypatch):
+    from nba_predictor.data import espn
 
-    @pytest.fixture(autouse=True)
-    def setup_module(self):
-        """Setup mocks before each test."""
-        pass
+    monkeypatch.setattr(espn, "ESPN_CACHE_DIR", tmp_path / "espn")
+    return espn.ESPN_CACHE_DIR
 
-    @pytest.fixture
-    def clear_cache(self, tmp_path):
-        """Clear cache directory before each test."""
-        from nba_predictor import config
-        from nba_predictor.data import espn
-        original_cache_dir = config.CACHE_DIR
-        config.CACHE_DIR = tmp_path / "cache"
-        config.CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        espn.ESPN_CACHE_DIR = config.CACHE_DIR / "espn"
-        espn.ESPN_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        yield espn.ESPN_CACHE_DIR
-        config.CACHE_DIR = original_cache_dir
 
-    @patch("nba_predictor.data.espn._fetch_espn_data")
-    def test_get_injuries_returns_list(self, mock_fetch, clear_cache):
-        """Test get_injuries returns list."""
-        from nba_predictor.data import espn
-        mock_fetch.return_value = {"gameId": "1", "injuries": [{"id": 1, "name": "LeBron James", "status": "Questionable"}]}
-        
-        result = espn.get_injuries("1")
-        
-        assert isinstance(result, dict)
-        assert isinstance(result["injuries"], list)
+def test_normalize_abbreviation_maps_known_mismatches():
+    from nba_predictor.data.espn import normalize_abbreviation
 
-    @patch("nba_predictor.data.espn._fetch_espn_data")
-    def test_get_injuries_retry_on_failure(self, mock_fetch, clear_cache):
-        """Test get_injuries retries on failure."""
-        from nba_predictor.data import espn
-        
-        mock_fetch.side_effect = Exception("Network error")
-        
-        with pytest.raises(Exception):
-            espn.get_injuries("1")
+    assert normalize_abbreviation("GS") == "GSW"
+    assert normalize_abbreviation("UTAH") == "UTA"
+    assert normalize_abbreviation("NY") == "NYK"
 
-    @patch("nba_predictor.data.espn._fetch_espn_data")
-    def test_get_injuries_handles_empty_injuries(self, mock_fetch, clear_cache):
-        """Test get_injuries handles empty list."""
-        from nba_predictor.data import espn
-        mock_fetch.return_value = {"gameId": "1", "injuries": []}
-        
-        result = espn.get_injuries("1")
-        
-        assert isinstance(result, dict)
-        assert isinstance(result["injuries"], list)
-        assert len(result["injuries"]) == 0
 
-    @patch("nba_predictor.data.espn._fetch_espn_data")
-    def test_get_lineup_returns_lineup_list(self, mock_fetch, clear_cache):
-        """Test get_lineup returns lineup."""
-        from nba_predictor.data import espn
-        mock_fetch.return_value = {"gameId": "1", "lineups": [{"id": 1, "players": []}]}
-        
-        result = espn.get_lineup("1")
-        
-        assert isinstance(result, dict)
+def test_normalize_abbreviation_passes_through_matching_ones():
+    from nba_predictor.data.espn import normalize_abbreviation
 
-    @patch("nba_predictor.data.espn._fetch_espn_data")
-    def test_get_lineup_handles_empty_lineup(self, mock_fetch, clear_cache):
-        """Test get_lineup handles empty lineup."""
-        from nba_predictor.data import espn
-        mock_fetch.return_value = {"gameId": "1", "lineups": []}
-        
-        result = espn.get_lineup("999")
-        
-        assert isinstance(result, dict)
+    assert normalize_abbreviation("BOS") == "BOS"
 
-    @patch("nba_predictor.data.espn._fetch_espn_data")
-    def test_get_team_status_returns_dict(self, mock_fetch, clear_cache):
-        """Test get_team_status returns dict."""
-        from nba_predictor.data import espn
-        mock_fetch.return_value = {"status": "active", "restDays": 0}
-        
-        result = espn.get_team_status(1)
-        
-        assert isinstance(result, dict)
 
-    @patch("nba_predictor.data.espn._fetch_espn_data")
-    def test_get_injuries_handles_network_error(self, mock_fetch, clear_cache):
-        """Test get_injuries handles network error."""
-        from nba_predictor.data import espn
-        
-        mock_fetch.side_effect = Exception("Network error")
-        
-        with pytest.raises(Exception):
-            espn.get_injuries("1")
+@patch("nba_predictor.data.espn._fetch_json")
+def test_get_scoreboard_parses_completed_game(mock_fetch, clear_cache):
+    from nba_predictor.data import espn
 
-    @patch("nba_predictor.data.espn._fetch_espn_data")
-    def test_get_lineup_handles_network_error(self, mock_fetch, clear_cache):
-        """Test get_lineup handles network error."""
-        from nba_predictor.data import espn
-        
-        mock_fetch.side_effect = Exception("Network error")
-        
-        with pytest.raises(Exception):
-            espn.get_lineup("1")
+    mock_fetch.return_value = {
+        "events": [
+            {
+                "id": "401810448",
+                "competitions": [
+                    {
+                        "status": {"type": {"completed": True}},
+                        "competitors": [
+                            {"homeAway": "home", "team": {"abbreviation": "DAL"}, "score": "138"},
+                            {"homeAway": "away", "team": {"abbreviation": "UTAH"}, "score": "120"},
+                        ],
+                    }
+                ],
+            }
+        ]
+    }
 
-    @patch("nba_predictor.data.espn._fetch_espn_data")
-    def test_get_team_status_handles_network_error(self, mock_fetch, clear_cache):
-        """Test get_team_status handles network error."""
-        from nba_predictor.data import espn
-        
-        mock_fetch.side_effect = Exception("Network error")
-        
-        with pytest.raises(Exception):
-            espn.get_team_status(1)
+    games = espn.get_scoreboard("2026-01-17")
 
-    @patch("nba_predictor.data.espn._fetch_espn_data")
-    def test_get_injuries_caches_response(self, mock_fetch, clear_cache):
-        """Test get_injuries caches response."""
-        from nba_predictor.data import espn
-        mock_fetch.return_value = {"gameId": "1", "injuries": [{"id": 1, "name": "Test"}]}
-        
-        result = espn.get_injuries("1")
-        
-        assert isinstance(result, dict)
-        assert mock_fetch.called is True
+    assert len(games) == 1
+    game = games[0]
+    assert game["game_id"] == "401810448"
+    assert game["home_team"] == "DAL"
+    assert game["away_team"] == "UTA"
+    assert game["completed"] is True
+    assert game["home_pts"] == 138
+    assert game["away_pts"] == 120
 
-    @patch("nba_predictor.data.espn._fetch_espn_data")
-    def test_get_team_status_zero_rest_days(self, mock_fetch, clear_cache):
-        """Test get_team_status with zero rest days."""
-        from nba_predictor.data import espn
-        mock_fetch.return_value = {"restDays": 0, "status": "active"}
-        
-        result = espn.get_team_status(1)
-        
-        assert isinstance(result, dict)
-        assert "restDays" in result
+
+@patch("nba_predictor.data.espn._fetch_json")
+def test_get_scoreboard_handles_upcoming_game_without_score(mock_fetch, clear_cache):
+    from nba_predictor.data import espn
+
+    mock_fetch.return_value = {
+        "events": [
+            {
+                "id": "1",
+                "competitions": [
+                    {
+                        "status": {"type": {"completed": False}},
+                        "competitors": [
+                            {"homeAway": "home", "team": {"abbreviation": "BOS"}},
+                            {"homeAway": "away", "team": {"abbreviation": "MIA"}},
+                        ],
+                    }
+                ],
+            }
+        ]
+    }
+
+    games = espn.get_scoreboard("2026-11-01")
+
+    assert games[0]["completed"] is False
+    assert games[0]["home_pts"] is None
+
+
+@patch("nba_predictor.data.espn._fetch_json")
+def test_get_scoreboard_caches_across_calls(mock_fetch, clear_cache):
+    from nba_predictor.data import espn
+
+    mock_fetch.return_value = {"events": []}
+
+    espn.get_scoreboard("2026-01-17")
+    espn.get_scoreboard("2026-01-17")
+
+    assert mock_fetch.call_count == 1
+
+
+@patch("nba_predictor.data.espn._fetch_json")
+def test_get_boxscore_parses_four_factors_inputs(mock_fetch, clear_cache):
+    from nba_predictor.data import espn
+
+    mock_fetch.return_value = {
+        "boxscore": {
+            "teams": [
+                {
+                    "team": {"abbreviation": "UTAH"},
+                    "statistics": [
+                        {"name": "fieldGoalsMade-fieldGoalsAttempted", "displayValue": "48-89"},
+                        {"name": "threePointFieldGoalsMade-threePointFieldGoalsAttempted", "displayValue": "10-31"},
+                        {"name": "freeThrowsMade-freeThrowsAttempted", "displayValue": "14-20"},
+                        {"name": "offensiveRebounds", "displayValue": "11"},
+                        {"name": "defensiveRebounds", "displayValue": "30"},
+                        {"name": "turnovers", "displayValue": "15"},
+                    ],
+                }
+            ]
+        }
+    }
+
+    box = espn.get_boxscore("401810448")
+
+    assert box["UTA"]["fgm"] == 48.0
+    assert box["UTA"]["fga"] == 89.0
+    assert box["UTA"]["fg3m"] == 10.0
+    assert box["UTA"]["ftm"] == 14.0
+    assert box["UTA"]["fta"] == 20.0
+    assert box["UTA"]["oreb"] == 11.0
+    assert box["UTA"]["dreb"] == 30.0
+    assert box["UTA"]["tov"] == 15.0
+
+
+@patch("nba_predictor.data.espn._fetch_json")
+def test_get_injuries_maps_team_display_name_to_abbreviation(mock_fetch, clear_cache):
+    from nba_predictor.data import espn
+
+    mock_fetch.return_value = {
+        "injuries": [
+            {
+                "displayName": "Boston Celtics",
+                "injuries": [{"athlete": {"displayName": "Jayson Tatum"}, "status": "Day-To-Day"}],
+            }
+        ]
+    }
+
+    injuries = espn.get_injuries()
+
+    assert injuries == [{"team": "BOS", "player_name": "Jayson Tatum", "status": "Day-To-Day"}]
+
+
+@patch("nba_predictor.data.espn._fetch_json")
+def test_get_injuries_retries_and_raises_on_persistent_failure(mock_fetch, clear_cache):
+    from nba_predictor.data import espn
+
+    mock_fetch.side_effect = Exception("network error")
+
+    with pytest.raises(Exception):
+        espn.get_injuries()

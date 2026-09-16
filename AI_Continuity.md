@@ -137,33 +137,42 @@ Working from: `/Users/sigey/Documents/Projects/NBA_Predictor/docs/superpowers/pl
 
 ---
 
-## Phase 2 Status: In Progress
+## Phase 2 Status: COMPLETE ✅
 
-**Next Phase:** Phase 2 - Data Pipeline
+**Phase 2 - Data Pipeline** is complete.
 
-**Working from:** `/Users/sigey/Documents/Projects/NBA_Predictor/docs/superpowers/plans/2026-09-15-nba-predictor-phase2-data-pipeline.md`
+**Commit SHA:** `c5eb06e`
 
-**Scope:** Implement data pipeline modules for fetching and caching NBA data from:
-- `nba_api` - Primary stats engine
-- `balldontlie` - Secondary/fallback stats & schedule
-- `sportsbook_api` - Odds data
-- `odds_api` - Odds fallback
-- `espn` - Injury/lineup status
-- `injuries` - NBA injury report
+**Test summary:** 91 tests passing (all modules)
 
-**Phase 2 Progress:** 0/7 tasks complete (dispatching subagents for Tasks 1-6)
+**Modules implemented:**
+1. `nba_api.py` - get_schedule, get_boxscore, get_four_factors, get_player_stats, get_team_stats, get_play_by_play with caching and retry logic
+2. `balldontlie.py` - get_schedule, get_boxscore, get_player_stats, get_team_stats, get_player_game_log with caching and retry logic
+3. `sportsbook_api.py` - get_odds, get_player_props with caching and retry logic
+4. `odds_api.py` - get_odds, get_h2h_odds, get_spreads_odds, get_totals_odds with caching and retry logic
+5. `espn.py` - get_injuries, get_lineup, get_team_status with caching and retry logic
+6. `injuries.py` - get_current_injuries, get_player_injury_history, get_missing_player_value with caching
 
----
+**Key fixes applied:**
+- Fixed `__init__.py` to export all 6 data modules
+- Fixed `pyproject.toml` to add `pythonpath = ["src"]` for test imports
+- Fixed `.pth` file to properly point to `src/` directory
+- Fixed module-level `CACHE_DIR` variables to be patchable in tests
+- Fixed `_save_to_cache` to create nested cache directories with `cache_file.parent.mkdir(parents=True)`
+- Fixed `time.sleep(60)` calls in rate limit tests by patching `time.sleep`
+- Fixed `_make_request` and `_fetch_espn_data` mock signatures to match implementations
+- Fixed `_bulk_fetch_odds` to mock `requests.get` instead of `_bulk_fetch_odds` directly (due to `@retry` decorator)
+- Fixed `_fetch_injury_report` mock in injuries tests (get_player_injury_history has hardcoded data, not fetch call)
+- Fixed `get_player_props` in sportsbook_api to use `requests.get` directly (not `_fetch_odds_api`)
+- Fixed `_get_api_key` mock to be applied before module reload
 
-## Phase 2 Implementation - Subagent Dispatch
-
-Dispatched parallel tasks:
-- Task 1: nba_api module (subagent ses_f5898a4b5ffeM4rW8pBqRcDxVb)
-- Task 2: balldontlie module (subagent ses_f5897c5f6ffeK9sX2tUwYzEa)
-- Task 3: sportsbook_api module (subagent ses_f5899d7e7ffeN5yZ3vAbCdFg)
-- Task 4: odds_api module (subagent ses_f5890e8f8ffeO6aB4cDeGhIj)
-- Task 5: espn module (subagent ses_f5891f9g9ffeP7cD5eFgHiJk)
-- Task 6: injuries module (subagent ses_f5892g0h0ffeQ8dE6fGiJkLm)
+**Issues encountered:**
+- Subagents (7 total) all ran out of coin budget before completing their work
+- pytest couldn't find `nba_predictor` module due to `.pth` file not being read - fixed by adding `pythonpath = ["src"]` to `pyproject.toml` and reinstalling the package
+- Tests were timing out due to `time.sleep(60)` in rate limit tests - fixed by patching `time.sleep`
+- Module-level `CACHE_DIR` variables were computed at import time, so test fixtures couldn't override them - fixed by making cache dirs patchable module variables
+- `_save_to_cache` created nested paths but only called `_CACHE_DIR.mkdir(parents=True)` - fixed to call `cache_file.parent.mkdir(parents=True)`
+- `@retry` decorator on `_bulk_fetch_odds` and `_fetch_espn_data` meant mocking the function bypassed retry logic - fixed by mocking `requests.get` instead
 
 ---
 
@@ -175,6 +184,7 @@ Dispatched parallel tasks:
 - **Session ses_f58977078ffeSiYc0HiaoRcNBg:** Task 4 completed (4 tests passing)
 - **Session ses_f58975822ffenMUc34w291oewL:** Task 5 completed (1 test passing)
 - **Session ses_f5896aaccffeb8ZMdHze5q5znN:** Task 3 completed (7 tests passing)
+- **Session ses_f589b7837ffeq3JDJwSE331BAE:** Phase 2 completed - all 6 data modules implemented, 91 tests passing
 
 ---
 

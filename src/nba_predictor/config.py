@@ -5,7 +5,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_env_project_root = os.environ.get("PROJECT_ROOT")
+PROJECT_ROOT = Path(_env_project_root) if _env_project_root else Path(__file__).resolve().parents[2]
 DATA_DIR = PROJECT_ROOT / "data"
 CACHE_DIR = DATA_DIR / "cache"
 CACHE_SUBDIRS = ["nba_api", "balldontlie", "odds", "sportsbook", "injuries", "espn"]

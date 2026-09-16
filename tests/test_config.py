@@ -19,6 +19,20 @@ def test_default_paths_are_under_data_dir():
     assert config.TRACKING_DB_PATH == config.DATA_DIR / "tracking.db"
 
 
+def test_project_root_uses_env_override_when_set(monkeypatch, tmp_path):
+    import importlib
+
+    from nba_predictor import config
+
+    monkeypatch.setenv("PROJECT_ROOT", str(tmp_path))
+    importlib.reload(config)
+
+    assert config.PROJECT_ROOT == tmp_path
+
+    monkeypatch.delenv("PROJECT_ROOT", raising=False)
+    importlib.reload(config)
+
+
 def test_public_mode_defaults_false(monkeypatch):
     monkeypatch.delenv("PUBLIC_MODE", raising=False)
     import importlib

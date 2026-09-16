@@ -1,7 +1,3 @@
-import pytest
-
-
-@pytest.mark.skip(reason="fastapi.testclient import issue with starlette")
 def test_health_endpoint_returns_ok():
     from fastapi.testclient import TestClient
 

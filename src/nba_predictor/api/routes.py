@@ -1,143 +1,169 @@
-"""Extended API routes for NBA predictions."""
-from typing import Any
-from nba_predictor.data import nba_api, balldontlie, injuries, espn
-from nba_predictor.models import GameOutcomeModel, SpreadModel, PlayerPropsModel, ManifestModel
-from nba_predictor.features.build import build_features
-from nba_predictor.odds.value_bets import detect_value_bets, compute_value_bets
+import json
+from datetime import datetime, timezone
+from pathlib import Path
 
-# Extended routes mapping
-ROUTES = {
-    "GET /games": "Get all games for a date",
-    "GET /games/{game_id}": "Get specific game details",
-    "GET /teams": "Get all team data",
-    "GET /teams/{team_id}": "Get specific team data",
-    "GET /manifest": "Get all game manifests",
-    "GET /manifest/{game_id}": "Get game manifest",
-    "GET /hub/schedule": "Get schedule from hub",
-    "GET /hub/odds": "Get odds from hub",
-    "GET /hub/injuries": "Get injuries from hub",
-    "GET /hub/player_stats": "Get player stats from hub",
-    "GET /hub/lineups": "Get lineups from hub",
-    "POST /predictions": "Get predictions for games",
-    "POST /value_bets": "Detect value bets",
-    "GET /health": "Health check",
-}
+import pandas as pd
+from fastapi import APIRouter, Depends, HTTPException
 
+from nba_predictor.api.deps import (
+    get_db_path,
+    get_models_dir,
+    get_schedule,
+    get_training_games_path,
+    require_admin,
+)
+from nba_predictor.api.schemas import (
+    GameDetailOut,
+    GameOut,
+    MarketPredictionOut,
+    PlayerPropOut,
+    PredictionOut,
+    TeamOut,
+    TrackRecordOut,
+)
+from nba_predictor.data.team_reference import TEAMS, get_team
+from nba_predictor.pipeline.retrain import run_retrain_pipeline
+from nba_predictor.services.hub_service import compute_track_record, load_hub_cache
+from nba_predictor.services.schedule_repository import get_game, get_games_for_date
+from nba_predictor.tracking import store
+from nba_predictor import config
 
-def get_games(date: str) -> list[dict]:
-    """Get all games for a date."""
-    return nba_api.get_schedule(date)
-
-
-def get_game(game_id: str) -> dict:
-    """Get specific game details."""
-    schedule = nba_api.get_schedule("2024-10-25")
-    for game in schedule:
-        if str(game.get("id", "")) == str(game_id):
-            return game
-    return {}
+router = APIRouter()
 
 
-def get_teams() -> list[dict]:
-    """Get all team data."""
-    from nba_predictor.data.team_reference import TEAMS
-    return [team.__dict__ for team in TEAMS]
+@router.get("/health")
+def health() -> dict[str, str]:
+    return {"status": "ok"}
 
 
-def get_team(team_id: int) -> dict:
-    """Get specific team data."""
-    from nba_predictor.data.team_reference import TEAMS
-    for team in TEAMS:
-        if team.nba_api_id == team_id:
-            return team.__dict__
-    return {}
+@router.get("/teams", response_model=list[TeamOut])
+def list_teams() -> list[TeamOut]:
+    return [
+        TeamOut(abbreviation=t.abbreviation, name=t.name, conference=t.conference, division=t.division)
+        for t in TEAMS
+    ]
 
 
-def get_manifest(game_id: str) -> dict:
-    """Get game manifest."""
-    game_data = get_game(game_id)
-    if not game_data:
-        return {}
-    
-    manifest = ManifestModel()
-    return manifest.generate_manifest(game_data)
+@router.get("/teams/{abbreviation}", response_model=TeamOut)
+def get_team_detail(abbreviation: str) -> TeamOut:
+    try:
+        team = get_team(abbreviation)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Unknown team: {abbreviation}")
+    return TeamOut(abbreviation=team.abbreviation, name=team.name, conference=team.conference, division=team.division)
 
 
-def get_manifests() -> list[dict]:
-    """Get all game manifests."""
-    schedule = nba_api.get_schedule("2024-10-25")
-    manifests = []
-    manifest_model = ManifestModel()
-    for game in schedule:
-        manifests.append(manifest_model.generate_manifest(game))
-    return manifests
+def _prediction_out(db_path: Path, game_id: str) -> PredictionOut | None:
+    row = store.get_latest_prediction_for_game(db_path, game_id)
+    if row is None:
+        return None
+    return PredictionOut(
+        home_win_probability=row["home_win_prob"],
+        predicted_margin=row["predicted_margin"],
+        predicted_total=row["predicted_total"],
+    )
 
 
-def get_hub_schedule() -> list[dict]:
-    """Get schedule from hub data."""
-    return nba_api.get_schedule("2024-10-25")
+@router.get("/games", response_model=list[GameOut])
+def list_games(date: str, schedule: list[dict] = Depends(get_schedule), db_path: Path = Depends(get_db_path)) -> list[GameOut]:
+    games = get_games_for_date(schedule, date)
+    return [
+        GameOut(
+            game_id=g["game_id"], game_date=g["game_date"], home_team=g["home_team"], away_team=g["away_team"],
+            prediction=_prediction_out(db_path, g["game_id"]),
+        )
+        for g in games
+    ]
 
 
-def get_hub_odds() -> list[dict]:
-    """Get odds from hub data."""
-    return balldontlie.get_schedule("2024-10-25")
+@router.get("/games/{game_id}", response_model=GameDetailOut)
+def get_game_detail(
+    game_id: str, schedule: list[dict] = Depends(get_schedule), db_path: Path = Depends(get_db_path)
+) -> GameDetailOut:
+    game = get_game(schedule, game_id)
+    if game is None:
+        raise HTTPException(status_code=404, detail=f"Unknown game: {game_id}")
+
+    markets = [
+        MarketPredictionOut(
+            market=row["market"], selection=row["selection"], model_probability=row["model_probability"],
+            market_probability=row["market_probability"], edge=row["edge"], bookmaker=row["bookmaker"],
+            american_odds=row["american_odds"],
+        )
+        for row in store.get_market_predictions_for_game(db_path, game_id)
+    ]
+
+    return GameDetailOut(
+        game_id=game["game_id"], game_date=game["game_date"], home_team=game["home_team"], away_team=game["away_team"],
+        prediction=_prediction_out(db_path, game_id), markets=markets,
+    )
 
 
-def get_hub_injuries() -> list[dict]:
-    """Get injuries from hub data."""
-    return espn.get_injuries("1")
+@router.get("/games/{game_id}/players", response_model=list[PlayerPropOut])
+def get_game_players(
+    game_id: str, schedule: list[dict] = Depends(get_schedule), db_path: Path = Depends(get_db_path)
+) -> list[PlayerPropOut]:
+    game = get_game(schedule, game_id)
+    if game is None:
+        raise HTTPException(status_code=404, detail=f"Unknown game: {game_id}")
+
+    return [
+        PlayerPropOut(
+            player_id=row["player_id"], player_name=row["player_id"], stat=row["stat"],
+            predicted_value=row["predicted_value"],
+        )
+        for row in store.get_player_predictions_for_game(db_path, game_id)
+    ]
 
 
-def get_hub_player_stats() -> list[dict]:
-    """Get player stats from hub data."""
-    return [balldontlie.get_player_stats(203999, 2023)]
+@router.get("/hub/teams")
+def hub_teams() -> list[dict]:
+    return load_hub_cache(config.DATA_DIR / "cache" / "hub" / "teams.json")
 
 
-def get_hub_lineups() -> list[dict]:
-    """Get lineups from hub data."""
-    return [espn.get_lineup("1")]
+@router.get("/hub/players")
+def hub_players() -> list[dict]:
+    return load_hub_cache(config.DATA_DIR / "cache" / "hub" / "players.json")
 
 
-def get_predictions(games: list[dict]) -> list[dict]:
-    """Get predictions for games."""
-    model = GameOutcomeModel()
-    predictions = []
-    for game in games:
-        prediction = model.predict(game)
-        predictions.append(prediction)
-    return predictions
+@router.get("/hub/rankings")
+def hub_rankings() -> list[dict]:
+    return load_hub_cache(config.DATA_DIR / "cache" / "hub" / "rankings.json")
 
 
-def get_value_bets(games: list[dict]) -> list[dict]:
-    """Detect value bets for games."""
-    value_bets = []
-    for game in games:
-        odds = {"home_odds": -110, "away_odds": -110}
-        game_data = {
-            "game_id": game.get("id", ""),
-            "home_team": game.get("home_team", {}),
-            "away_team": game.get("away_team", {}),
-            "home_prob": 0.5,
-        }
-        bets = detect_value_bets(game_data, odds)
-        value_bets.extend(bets)
-    return value_bets
+@router.get("/hub/standings")
+def hub_standings() -> list[dict]:
+    return load_hub_cache(config.DATA_DIR / "cache" / "hub" / "standings.json")
 
 
-def get_all_features(games: list[dict], team_data: dict, injury_data: dict) -> list[dict]:
-    """Build features for all games."""
-    features_list = []
-    for game in games:
-        features = build_features(game, team_data, injury_data)
-        features_list.append(features)
-    return features_list
+@router.get("/hub/track-record", response_model=list[TrackRecordOut])
+def hub_track_record(db_path: Path = Depends(get_db_path)) -> list[TrackRecordOut]:
+    return compute_track_record(db_path)
 
 
-def get_all_spread_predictions(games: list[dict]) -> list[dict]:
-    """Get spread predictions for all games."""
-    model = SpreadModel()
-    predictions = []
-    for game in games:
-        prediction = model.predict(game)
-        predictions.append(prediction)
-    return predictions
+@router.get("/manifest")
+def get_manifest(models_dir: Path = Depends(get_models_dir)) -> dict:
+    manifest_path = models_dir / "manifest.json"
+    if not manifest_path.exists():
+        raise HTTPException(status_code=404, detail="No manifest found — run /retrain first")
+    return json.loads(manifest_path.read_text())
+
+
+@router.post("/retrain", dependencies=[Depends(require_admin)])
+def retrain(
+    models_dir: Path = Depends(get_models_dir),
+    training_games_path: Path = Depends(get_training_games_path),
+) -> dict:
+    if not training_games_path.exists():
+        raise HTTPException(status_code=400, detail="No training games cache found")
+
+    games = pd.DataFrame(json.loads(training_games_path.read_text()))
+    model_version = datetime.now(timezone.utc).strftime("v%Y%m%d%H%M%S")
+    trained_at = datetime.now(timezone.utc).isoformat()
+
+    return run_retrain_pipeline(games, models_dir, model_version=model_version, trained_at=trained_at)
+
+
+@router.post("/refresh-odds", dependencies=[Depends(require_admin)], status_code=202)
+def refresh_odds() -> dict:
+    return {"status": "not implemented"}

@@ -108,3 +108,77 @@ def get_predictions_for_game(db_path: Path, game_id: str) -> list[sqlite3.Row]:
             (game_id,),
         )
         return cur.fetchall()
+
+
+def insert_market_prediction(
+    db_path: Path,
+    *,
+    game_id: str,
+    market: str,
+    selection: str,
+    model_probability: float,
+    market_probability: float | None,
+    edge: float | None,
+    bookmaker: str | None,
+    american_odds: int | None,
+    created_at: str,
+) -> int:
+    with get_connection(db_path) as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO game_market_predictions
+                (game_id, market, selection, model_probability, market_probability, edge, bookmaker, american_odds, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (game_id, market, selection, model_probability, market_probability, edge, bookmaker, american_odds, created_at),
+        )
+        conn.commit()
+        return cur.lastrowid
+
+
+def get_market_predictions_for_game(db_path: Path, game_id: str) -> list[sqlite3.Row]:
+    with get_connection(db_path) as conn:
+        cur = conn.execute(
+            "SELECT * FROM game_market_predictions WHERE game_id = ? ORDER BY created_at",
+            (game_id,),
+        )
+        return cur.fetchall()
+
+
+def insert_player_prediction(
+    db_path: Path,
+    *,
+    game_id: str,
+    player_id: str,
+    stat: str,
+    predicted_value: float,
+    created_at: str,
+) -> int:
+    with get_connection(db_path) as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO player_prediction_snapshots (game_id, player_id, stat, predicted_value, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (game_id, player_id, stat, predicted_value, created_at),
+        )
+        conn.commit()
+        return cur.lastrowid
+
+
+def get_player_predictions_for_game(db_path: Path, game_id: str) -> list[sqlite3.Row]:
+    with get_connection(db_path) as conn:
+        cur = conn.execute(
+            "SELECT * FROM player_prediction_snapshots WHERE game_id = ? ORDER BY created_at",
+            (game_id,),
+        )
+        return cur.fetchall()
+
+
+def get_latest_prediction_for_game(db_path: Path, game_id: str) -> sqlite3.Row | None:
+    with get_connection(db_path) as conn:
+        cur = conn.execute(
+            "SELECT * FROM predictions WHERE game_id = ? ORDER BY created_at DESC LIMIT 1",
+            (game_id,),
+        )
+        return cur.fetchone()

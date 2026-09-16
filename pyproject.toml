@@ -33,3 +33,4 @@ packages = ["src/nba_predictor"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["src"]

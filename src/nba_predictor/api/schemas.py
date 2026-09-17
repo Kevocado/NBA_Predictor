@@ -30,6 +30,9 @@ class GameOut(BaseModel):
     home_team: str
     away_team: str
     prediction: PredictionOut | None = None
+    completed: bool = False
+    home_pts: int | None = None
+    away_pts: int | None = None
 
 
 class GameDetailOut(GameOut):

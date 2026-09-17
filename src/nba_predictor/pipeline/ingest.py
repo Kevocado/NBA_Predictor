@@ -50,9 +50,19 @@ def enrich_with_boxscores(games: list[dict]) -> list[dict]:
 
 
 def to_schedule_cache(games: list[dict]) -> list[dict]:
-    """Minimal {game_id, game_date, home_team, away_team} shape for the schedule repository."""
+    """Schedule repository shape, including final scores/completion status
+    so settlement (track record, calibration) can determine actual outcomes
+    without a separate DB table."""
     return [
-        {"game_id": g["game_id"], "game_date": g["game_date"], "home_team": g["home_team"], "away_team": g["away_team"]}
+        {
+            "game_id": g["game_id"],
+            "game_date": g["game_date"],
+            "home_team": g["home_team"],
+            "away_team": g["away_team"],
+            "completed": g.get("completed", False),
+            "home_pts": g.get("home_pts"),
+            "away_pts": g.get("away_pts"),
+        }
         for g in games
     ]
 

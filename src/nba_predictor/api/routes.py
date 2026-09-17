@@ -64,16 +64,18 @@ def _prediction_out(db_path: Path, game_id: str) -> PredictionOut | None:
     )
 
 
+def _game_out(g: dict, db_path: Path) -> GameOut:
+    return GameOut(
+        game_id=g["game_id"], game_date=g["game_date"], home_team=g["home_team"], away_team=g["away_team"],
+        prediction=_prediction_out(db_path, g["game_id"]),
+        completed=g.get("completed", False), home_pts=g.get("home_pts"), away_pts=g.get("away_pts"),
+    )
+
+
 @router.get("/games", response_model=list[GameOut])
 def list_games(date: str, schedule: list[dict] = Depends(get_schedule), db_path: Path = Depends(get_db_path)) -> list[GameOut]:
     games = get_games_for_date(schedule, date)
-    return [
-        GameOut(
-            game_id=g["game_id"], game_date=g["game_date"], home_team=g["home_team"], away_team=g["away_team"],
-            prediction=_prediction_out(db_path, g["game_id"]),
-        )
-        for g in games
-    ]
+    return [_game_out(g, db_path) for g in games]
 
 
 @router.get("/games/week", response_model=list[GameOut])
@@ -81,13 +83,7 @@ def list_games_for_week(
     start: str, schedule: list[dict] = Depends(get_schedule), db_path: Path = Depends(get_db_path)
 ) -> list[GameOut]:
     games = get_games_for_week(schedule, start)
-    return [
-        GameOut(
-            game_id=g["game_id"], game_date=g["game_date"], home_team=g["home_team"], away_team=g["away_team"],
-            prediction=_prediction_out(db_path, g["game_id"]),
-        )
-        for g in games
-    ]
+    return [_game_out(g, db_path) for g in games]
 
 
 @router.get("/games/{game_id}", response_model=GameDetailOut)
@@ -107,10 +103,8 @@ def get_game_detail(
         for row in store.get_market_predictions_for_game(db_path, game_id)
     ]
 
-    return GameDetailOut(
-        game_id=game["game_id"], game_date=game["game_date"], home_team=game["home_team"], away_team=game["away_team"],
-        prediction=_prediction_out(db_path, game_id), markets=markets,
-    )
+    base = _game_out(game, db_path)
+    return GameDetailOut(**base.model_dump(), markets=markets)
 
 
 @router.get("/games/{game_id}/players", response_model=list[PlayerPropOut])
@@ -151,8 +145,10 @@ def hub_standings() -> list[dict]:
 
 
 @router.get("/hub/track-record", response_model=list[TrackRecordOut])
-def hub_track_record(db_path: Path = Depends(get_db_path)) -> list[TrackRecordOut]:
-    return compute_track_record(db_path)
+def hub_track_record(
+    db_path: Path = Depends(get_db_path), schedule: list[dict] = Depends(get_schedule)
+) -> list[TrackRecordOut]:
+    return compute_track_record(db_path, schedule)
 
 
 @router.get("/manifest")

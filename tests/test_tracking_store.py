@@ -67,3 +67,39 @@ def test_get_predictions_for_game_returns_empty_for_unknown_game(tmp_path):
 
     rows = store.get_predictions_for_game(db_path, "does-not-exist")
     assert rows == []
+
+
+def test_get_all_predictions_returns_latest_per_game(tmp_path):
+    from nba_predictor.tracking import store
+
+    db_path = tmp_path / "tracking.db"
+    store.init_db(db_path)
+
+    store.insert_prediction(
+        db_path, game_id="g1", created_at="2026-11-01T08:00:00", model_version="v1",
+        home_win_prob=0.55, predicted_margin=1.0, predicted_total=220.0,
+    )
+    store.insert_prediction(
+        db_path, game_id="g1", created_at="2026-11-01T18:00:00", model_version="v1",
+        home_win_prob=0.60, predicted_margin=2.0, predicted_total=222.0,
+    )
+    store.insert_prediction(
+        db_path, game_id="g2", created_at="2026-11-01T09:00:00", model_version="v1",
+        home_win_prob=0.40, predicted_margin=-1.0, predicted_total=210.0,
+    )
+
+    rows = store.get_all_predictions(db_path)
+    by_game = {row["game_id"]: row for row in rows}
+
+    assert len(rows) == 2
+    assert by_game["g1"]["home_win_prob"] == pytest.approx(0.60)
+    assert by_game["g2"]["home_win_prob"] == pytest.approx(0.40)
+
+
+def test_get_all_predictions_empty_db_returns_empty_list(tmp_path):
+    from nba_predictor.tracking import store
+
+    db_path = tmp_path / "tracking.db"
+    store.init_db(db_path)
+
+    assert store.get_all_predictions(db_path) == []

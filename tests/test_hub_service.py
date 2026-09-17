@@ -52,3 +52,79 @@ def test_compute_track_record_empty_db_returns_empty_list(tmp_path):
     store.init_db(db_path)
 
     assert compute_track_record(db_path) == []
+
+
+def _completed_game(game_id, home, away, home_pts, away_pts):
+    return {
+        "game_id": game_id, "game_date": "2026-03-01", "home_team": home, "away_team": away,
+        "completed": True, "home_pts": home_pts, "away_pts": away_pts,
+    }
+
+
+def test_compute_track_record_settles_game_outcome_against_real_results(tmp_path):
+    from nba_predictor.services.hub_service import compute_track_record
+    from nba_predictor.tracking import store
+
+    db_path = tmp_path / "tracking.db"
+    store.init_db(db_path)
+
+    # Correct call: predicted BOS (home) to win, BOS did win.
+    store.insert_prediction(
+        db_path, game_id="g1", created_at="2026-03-01T00:00:00", model_version="v1",
+        home_win_prob=0.7, predicted_margin=5.0, predicted_total=220.0,
+    )
+    # Incorrect call: predicted LAL (home) to win, LAL lost.
+    store.insert_prediction(
+        db_path, game_id="g2", created_at="2026-03-01T00:00:00", model_version="v1",
+        home_win_prob=0.6, predicted_margin=3.0, predicted_total=215.0,
+    )
+
+    schedule = [
+        _completed_game("g1", "BOS", "MIA", 110, 100),
+        _completed_game("g2", "LAL", "GSW", 95, 105),
+    ]
+
+    records = compute_track_record(db_path, schedule)
+    game_outcome = next(r for r in records if r.market == "game_outcome")
+
+    assert game_outcome.total_predictions == 2
+    assert game_outcome.correct_predictions == 1
+    assert game_outcome.hit_rate == 0.5
+
+
+def test_compute_track_record_ignores_predictions_for_incomplete_games(tmp_path):
+    from nba_predictor.services.hub_service import compute_track_record
+    from nba_predictor.tracking import store
+
+    db_path = tmp_path / "tracking.db"
+    store.init_db(db_path)
+    store.insert_prediction(
+        db_path, game_id="g1", created_at="2026-03-01T00:00:00", model_version="v1",
+        home_win_prob=0.6, predicted_margin=3.0, predicted_total=220.0,
+    )
+    schedule = [{"game_id": "g1", "game_date": "2026-11-01", "home_team": "BOS", "away_team": "MIA", "completed": False, "home_pts": None, "away_pts": None}]
+
+    records = compute_track_record(db_path, schedule)
+
+    assert not any(r.market == "game_outcome" for r in records)
+
+
+def test_compute_track_record_settles_h2h_market_predictions(tmp_path):
+    from nba_predictor.services.hub_service import compute_track_record
+    from nba_predictor.tracking import store
+
+    db_path = tmp_path / "tracking.db"
+    store.init_db(db_path)
+    store.insert_market_prediction(
+        db_path, game_id="g1", market="h2h", selection="BOS", model_probability=0.65,
+        market_probability=0.55, edge=0.1, bookmaker="DraftKings", american_odds=-140,
+        created_at="2026-03-01T00:00:00",
+    )
+    schedule = [_completed_game("g1", "BOS", "MIA", 110, 100)]
+
+    records = compute_track_record(db_path, schedule)
+    h2h = next(r for r in records if r.market == "h2h")
+
+    assert h2h.total_predictions == 1
+    assert h2h.correct_predictions == 1
+    assert h2h.hit_rate == 1.0

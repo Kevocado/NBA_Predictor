@@ -10,17 +10,18 @@ from nba_predictor.tracking.store import init_db
 
 def generate_snapshot(schedule_path: Path, hub_dir: Path, manifest_path: Path, db_path: Path) -> dict:
     manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else None
+    schedule = load_schedule(schedule_path)
 
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "schedule": load_schedule(schedule_path),
+        "schedule": schedule,
         "hub": {
             "teams": load_hub_cache(hub_dir / "teams.json"),
             "players": load_hub_cache(hub_dir / "players.json"),
             "rankings": load_hub_cache(hub_dir / "rankings.json"),
             "standings": load_hub_cache(hub_dir / "standings.json"),
         },
-        "track_record": [record.model_dump() for record in compute_track_record(db_path)],
+        "track_record": [record.model_dump() for record in compute_track_record(db_path, schedule)],
         "manifest": manifest,
     }
 

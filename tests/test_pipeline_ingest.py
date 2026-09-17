@@ -65,14 +65,30 @@ def test_enrich_with_boxscores_skips_upcoming_games():
     assert "home_fgm" not in enriched[0]
 
 
-def test_to_schedule_cache_returns_minimal_shape():
+def test_to_schedule_cache_includes_scores_and_completion():
     from nba_predictor.pipeline.ingest import to_schedule_cache
 
     games = [{"game_id": "1", "game_date": "2026-03-01", "home_team": "BOS", "away_team": "MIA", "completed": True, "home_pts": 110, "away_pts": 100, "home_fgm": 40}]
 
     cache = to_schedule_cache(games)
 
-    assert cache == [{"game_id": "1", "game_date": "2026-03-01", "home_team": "BOS", "away_team": "MIA"}]
+    assert cache == [
+        {
+            "game_id": "1", "game_date": "2026-03-01", "home_team": "BOS", "away_team": "MIA",
+            "completed": True, "home_pts": 110, "away_pts": 100,
+        }
+    ]
+
+
+def test_to_schedule_cache_handles_upcoming_games_without_scores():
+    from nba_predictor.pipeline.ingest import to_schedule_cache
+
+    games = [{"game_id": "2", "game_date": "2026-11-01", "home_team": "LAL", "away_team": "GSW", "completed": False}]
+
+    cache = to_schedule_cache(games)
+
+    assert cache[0]["completed"] is False
+    assert cache[0]["home_pts"] is None
 
 
 def test_to_training_frame_only_includes_completed_games_with_box_scores():

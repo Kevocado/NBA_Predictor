@@ -182,3 +182,19 @@ def get_latest_prediction_for_game(db_path: Path, game_id: str) -> sqlite3.Row |
             (game_id,),
         )
         return cur.fetchone()
+
+
+def get_all_predictions(db_path: Path) -> list[sqlite3.Row]:
+    """The latest prediction per game across the whole tracking DB (for settlement)."""
+    with get_connection(db_path) as conn:
+        cur = conn.execute(
+            """
+            SELECT p.* FROM predictions p
+            INNER JOIN (
+                SELECT game_id, MAX(created_at) AS max_created_at
+                FROM predictions
+                GROUP BY game_id
+            ) latest ON p.game_id = latest.game_id AND p.created_at = latest.max_created_at
+            """
+        )
+        return cur.fetchall()

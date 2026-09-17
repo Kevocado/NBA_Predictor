@@ -30,3 +30,14 @@ def shin_devig(raw_probabilities: list[float]) -> list[float]:
 
 def compute_edge(model_probability: float, market_probability: float) -> float:
     return model_probability - market_probability
+
+
+def std_from_mae(mae: float) -> float:
+    return mae * math.sqrt(math.pi / 2)
+
+
+def normal_cover_probability(mean: float, line: float, std: float) -> float:
+    if std <= 0:
+        return 1.0 if mean > line else 0.0
+    z = (mean - line) / (std * math.sqrt(2))
+    return 0.5 * (1 + math.erf(z))

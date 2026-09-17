@@ -3,7 +3,7 @@ from pathlib import Path
 
 from nba_predictor.data import sportsbook_api
 from nba_predictor.data.team_reference import TEAMS
-from nba_predictor.odds.value_bets import compute_edge, implied_probability, shin_devig
+from nba_predictor.odds.value_bets import compute_edge, implied_probability, normal_cover_probability, shin_devig, std_from_mae
 from nba_predictor.tracking import store
 
 _NAME_TO_ABBREVIATION = {team.name: team.abbreviation for team in TEAMS}
@@ -36,17 +36,40 @@ def match_schedule_to_sportsbook_events(schedule: list[dict], events: list[dict]
     return mapping
 
 
-def refresh_market_predictions(schedule: list[dict], db_path: Path) -> int:
-    """Fetches live odds for upcoming (not completed) scheduled games, de-vigs
-    each bookmaker's own h2h market against the model's stored win
-    probability (Shin's method), and stores value-bet rows. Returns the
-    number of market-prediction rows written.
+def _model_probability(
+    market: str,
+    selection: str,
+    point: float | None,
+    game: dict,
+    prediction,
+    margin_std: float,
+    total_std: float,
+) -> float | None:
+    """Model's probability that `selection` wins its side of `market`."""
+    if market == "h2h":
+        return prediction["home_win_prob"] if selection == game["home_team"] else 1 - prediction["home_win_prob"]
 
-    Only h2h is wired here — spread/total would need the same devig
-    treatment plus a stored line value the current schema doesn't carry
-    (see hub_service._settle_h2h_market_predictions for the matching
-    settlement-side gap); a natural follow-up once that's added.
-    """
+    if market == "spread":
+        if point is None:
+            return None
+        cover_mean = prediction["predicted_margin"] if selection == game["home_team"] else -prediction["predicted_margin"]
+        return normal_cover_probability(mean=cover_mean, line=-point, std=margin_std)
+
+    if market == "total":
+        if point is None:
+            return None
+        over_probability = normal_cover_probability(mean=prediction["predicted_total"], line=point, std=total_std)
+        return over_probability if selection == "over" else 1 - over_probability
+
+    return None
+
+
+def refresh_market_predictions(
+    schedule: list[dict],
+    db_path: Path,
+    margin_std: float = 12.0,
+    total_std: float = 15.0,
+) -> int:
     upcoming = [g for g in schedule if not g.get("completed")]
     if not upcoming:
         return 0
@@ -69,31 +92,36 @@ def refresh_market_predictions(schedule: list[dict], db_path: Path) -> int:
             continue
 
         odds_rows = sportsbook_api.get_odds(event_key)
-        h2h_by_bookmaker: dict[str, list[dict]] = {}
+        rows_by_market_bookmaker: dict[tuple[str, str], list[dict]] = {}
         for row in odds_rows:
-            if row["market"] == "h2h":
-                h2h_by_bookmaker.setdefault(row["bookmaker"], []).append(row)
+            rows_by_market_bookmaker.setdefault((row["market"], row["bookmaker"]), []).append(row)
 
-        for bookmaker, rows in h2h_by_bookmaker.items():
+        for (market, bookmaker), rows in rows_by_market_bookmaker.items():
             if len(rows) != 2:
                 continue
-            raw_probs = [implied_probability(r["american_odds"]) for r in rows]
+
+            model_probs = [
+                _model_probability(market, row["selection"], row.get("point"), game, prediction, margin_std, total_std)
+                for row in rows
+            ]
+            if any(p is None for p in model_probs):
+                continue
+
+            raw_probs = [implied_probability(row["american_odds"]) for row in rows]
             fair_probs = shin_devig(raw_probs)
 
-            for row, fair_prob in zip(rows, fair_probs):
-                model_prob = (
-                    prediction["home_win_prob"] if row["selection"] == game["home_team"] else 1 - prediction["home_win_prob"]
-                )
+            for row, model_prob, fair_prob in zip(rows, model_probs, fair_probs):
                 store.insert_market_prediction(
                     db_path,
                     game_id=game["game_id"],
-                    market="h2h",
+                    market=market,
                     selection=row["selection"],
                     model_probability=model_prob,
                     market_probability=fair_prob,
                     edge=compute_edge(model_prob, fair_prob),
                     bookmaker=bookmaker,
                     american_odds=row["american_odds"],
+                    point=row.get("point"),
                     created_at=created_at,
                 )
                 stored += 1

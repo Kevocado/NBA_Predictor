@@ -120,3 +120,88 @@ def test_refresh_market_predictions_skips_games_with_no_stored_prediction(mock_e
 
     assert stored == 0
     mock_odds.assert_not_called()
+
+
+@patch("nba_predictor.pipeline.refresh_odds.sportsbook_api.get_odds")
+@patch("nba_predictor.pipeline.refresh_odds.sportsbook_api.fetch_nba_events_raw")
+def test_refresh_market_predictions_stores_devigged_spread_rows(mock_events, mock_odds, tmp_path):
+    from nba_predictor.pipeline.refresh_odds import refresh_market_predictions
+    from nba_predictor.tracking import store
+
+    db_path = tmp_path / "tracking.db"
+    store.init_db(db_path)
+    store.insert_prediction(
+        db_path, game_id="g1", created_at="2026-10-30T00:00:00", model_version="v1",
+        home_win_prob=0.62, predicted_margin=5.0, predicted_total=220.0,
+    )
+
+    mock_events.return_value = [_real_event()]
+    mock_odds.return_value = [
+        {"market": "spread", "selection": "BOS", "bookmaker": "DRAFT_KINGS", "american_odds": -110, "point": -4.5},
+        {"market": "spread", "selection": "MIA", "bookmaker": "DRAFT_KINGS", "american_odds": -110, "point": 4.5},
+    ]
+
+    schedule = [{"game_id": "g1", "game_date": "2026-11-01", "home_team": "BOS", "away_team": "MIA", "completed": False}]
+
+    stored = refresh_market_predictions(schedule, db_path, margin_std=10.0)
+
+    assert stored == 2
+    rows = store.get_market_predictions_for_game(db_path, "g1")
+    by_selection = {r["selection"]: r for r in rows}
+    assert by_selection["BOS"]["market"] == "spread"
+    assert by_selection["BOS"]["point"] == pytest.approx(-4.5)
+    assert by_selection["BOS"]["model_probability"] > 0.5
+    assert by_selection["MIA"]["model_probability"] == pytest.approx(1 - by_selection["BOS"]["model_probability"])
+
+
+@patch("nba_predictor.pipeline.refresh_odds.sportsbook_api.get_odds")
+@patch("nba_predictor.pipeline.refresh_odds.sportsbook_api.fetch_nba_events_raw")
+def test_refresh_market_predictions_stores_devigged_total_rows(mock_events, mock_odds, tmp_path):
+    from nba_predictor.pipeline.refresh_odds import refresh_market_predictions
+    from nba_predictor.tracking import store
+
+    db_path = tmp_path / "tracking.db"
+    store.init_db(db_path)
+    store.insert_prediction(
+        db_path, game_id="g1", created_at="2026-10-30T00:00:00", model_version="v1",
+        home_win_prob=0.62, predicted_margin=5.0, predicted_total=230.0,
+    )
+
+    mock_events.return_value = [_real_event()]
+    mock_odds.return_value = [
+        {"market": "total", "selection": "over", "bookmaker": "DRAFT_KINGS", "american_odds": -110, "point": 220.5},
+        {"market": "total", "selection": "under", "bookmaker": "DRAFT_KINGS", "american_odds": -110, "point": 220.5},
+    ]
+
+    schedule = [{"game_id": "g1", "game_date": "2026-11-01", "home_team": "BOS", "away_team": "MIA", "completed": False}]
+
+    stored = refresh_market_predictions(schedule, db_path, total_std=10.0)
+
+    assert stored == 2
+    rows = store.get_market_predictions_for_game(db_path, "g1")
+    by_selection = {r["selection"]: r for r in rows}
+    assert by_selection["over"]["point"] == pytest.approx(220.5)
+    assert by_selection["over"]["model_probability"] > 0.5
+    assert by_selection["under"]["model_probability"] == pytest.approx(1 - by_selection["over"]["model_probability"])
+
+
+@patch("nba_predictor.pipeline.refresh_odds.sportsbook_api.get_odds")
+@patch("nba_predictor.pipeline.refresh_odds.sportsbook_api.fetch_nba_events_raw")
+def test_refresh_market_predictions_skips_lopsided_market_groups(mock_events, mock_odds, tmp_path):
+    from nba_predictor.pipeline.refresh_odds import refresh_market_predictions
+    from nba_predictor.tracking import store
+
+    db_path = tmp_path / "tracking.db"
+    store.init_db(db_path)
+    store.insert_prediction(
+        db_path, game_id="g1", created_at="2026-10-30T00:00:00", model_version="v1",
+        home_win_prob=0.62, predicted_margin=5.0, predicted_total=230.0,
+    )
+
+    mock_events.return_value = [_real_event()]
+    mock_odds.return_value = [
+        {"market": "total", "selection": "over", "bookmaker": "DRAFT_KINGS", "american_odds": -110, "point": 220.5},
+    ]
+    schedule = [{"game_id": "g1", "game_date": "2026-11-01", "home_team": "BOS", "away_team": "MIA", "completed": False}]
+
+    assert refresh_market_predictions(schedule, db_path) == 0

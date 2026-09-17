@@ -1,0 +1,20 @@
+{
+  "model_version": "v20260917142656",
+  "trained_at": "2026-09-17T14:26:56.625945+00:00",
+  "models": [
+    "win_probability",
+    "margin",
+    "total"
+  ],
+  "metrics": {
+    "win_probability": {
+      "accuracy": 0.6353790613718412
+    },
+    "margin": {
+      "mae": 13.90418908605184
+    },
+    "total": {
+      "mae": 18.600432302977634
+    }
+  }
+}

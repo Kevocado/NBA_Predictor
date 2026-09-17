@@ -353,6 +353,13 @@ def main() -> None:
         help="How many days (most recent, within --start/--end) to fetch per-player box scores for. "
         "0 skips Player Hub entirely. Bounded by default since it's a second ESPN request per game.",
     )
+    parser.add_argument(
+        "--skip-predictions", action="store_true",
+        help="Skip scoring/storing predictions into the tracking DB. For CI contexts (e.g. a scheduled "
+        "workflow with no persistent tracking.db) that only need fresh schedule/hub caches and a "
+        "retrained model committed to git — predictions belong on the deployed server's live DB, "
+        "not a stateless CI runner's throwaway one.",
+    )
     args = parser.parse_args()
 
     print(f"Fetching schedule {args.start} to {args.end} from ESPN...")
@@ -393,9 +400,12 @@ def main() -> None:
     )
     print(f"  trained {model_version}: {manifest['metrics']}")
 
-    store.init_db(config.TRACKING_DB_PATH)
-    stored = score_and_store_predictions(training_df, models_dir, config.TRACKING_DB_PATH, model_version)
-    print(f"  stored {stored} real predictions for browsing in the UI")
+    if args.skip_predictions:
+        print("  --skip-predictions set: not scoring/storing predictions")
+    else:
+        store.init_db(config.TRACKING_DB_PATH)
+        stored = score_and_store_predictions(training_df, models_dir, config.TRACKING_DB_PATH, model_version)
+        print(f"  stored {stored} real predictions for browsing in the UI")
 
 
 if __name__ == "__main__":

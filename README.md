@@ -75,6 +75,25 @@ resource group. See `.github/workflows/deploy-azure.yml`.
 After this one-time setup, every push to `main` redeploys automatically via
 `.github/workflows/deploy-azure.yml`.
 
+### Data refresh
+
+`.github/workflows/refresh-data.yml` runs daily (no secrets required — it
+only uses ESPN's keyless API): fetches a rolling 60-days-back/14-days-ahead
+window of real schedule and box-score data, rewrites the schedule/hub JSON
+caches, retrains the model, and commits the result (schedule/hub caches,
+`models/*.pkl`, `manifest.json`) directly to `main`. Predictions aren't
+scored/stored here (`--skip-predictions`) — a stateless CI runner has no
+access to the deployed server's live `tracking.db`, and predictions belong
+there, not in a throwaway runner. Run it manually:
+
+```bash
+python -m nba_predictor.pipeline.ingest --start 2025-10-01 --end 2026-06-27
+```
+
+Live odds (`POST /refresh-odds`) and settling predictions against results
+both need a running server with its own `tracking.db` — trigger those on
+the deployed instance, not via this workflow.
+
 ### Public snapshot
 
 `data/public_snapshot.json` bundles the current schedule, hub aggregates,

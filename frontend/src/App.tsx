@@ -2,6 +2,7 @@ import { NavLink, Route, Routes } from "react-router-dom";
 import GamesPage from "./pages/GamesPage";
 import DataHubPage from "./pages/DataHubPage";
 import ModelSummaryPage from "./pages/ModelSummaryPage";
+import CalibrationPage from "./pages/CalibrationPage";
 
 const navLinkClass = ({ isActive }: { isActive: boolean }) =>
   `border-b-2 px-1 py-1 text-sm transition-colors ${
@@ -26,6 +27,9 @@ export default function App() {
             <NavLink to="/model" className={navLinkClass}>
               Model Summary
             </NavLink>
+            <NavLink to="/calibration" className={navLinkClass}>
+              Calibration
+            </NavLink>
           </nav>
         </div>
       </header>
@@ -34,6 +38,7 @@ export default function App() {
           <Route path="/" element={<GamesPage />} />
           <Route path="/hub" element={<DataHubPage />} />
           <Route path="/model" element={<ModelSummaryPage />} />
+          <Route path="/calibration" element={<CalibrationPage />} />
         </Routes>
       </main>
     </div>

@@ -104,6 +104,14 @@ export interface Manifest {
   metrics: Record<string, Record<string, number | null>>;
 }
 
+export interface CalibrationBin {
+  bin_start: number;
+  bin_end: number;
+  predicted_rate: number;
+  actual_rate: number;
+  count: number;
+}
+
 async function fetchJson<T>(path: string): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`);
   if (!response.ok) {
@@ -125,4 +133,5 @@ export const api = {
   getHubStandings: () => fetchJson<StandingsRow[]>("/hub/standings"),
   getTrackRecord: () => fetchJson<TrackRecord[]>("/hub/track-record"),
   getManifest: () => fetchJson<Manifest>("/manifest"),
+  getCalibration: () => fetchJson<CalibrationBin[]>("/calibration"),
 };

@@ -43,3 +43,10 @@ def test_hub_track_record_empty_when_no_predictions(tmp_path, monkeypatch):
     response = client.get("/hub/track-record")
     assert response.status_code == 200
     assert response.json() == []
+
+
+def test_calibration_empty_when_no_predictions(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    response = client.get("/calibration")
+    assert response.status_code == 200
+    assert response.json() == []

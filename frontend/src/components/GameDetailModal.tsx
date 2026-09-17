@@ -6,6 +6,21 @@ interface GameDetailModalProps {
   onClose: () => void;
 }
 
+function FormBadge({ result }: { result: string }) {
+  return (
+    <span
+      data-testid="form-badge"
+      className={
+        result === "W"
+          ? "inline-flex h-5 w-5 items-center justify-center rounded-full bg-[var(--color-win)]/20 text-xs text-[var(--color-win)]"
+          : "inline-flex h-5 w-5 items-center justify-center rounded-full bg-[var(--color-shotclock)]/20 text-xs text-[var(--color-shotclock)]"
+      }
+    >
+      {result}
+    </span>
+  );
+}
+
 export default function GameDetailModal({ gameId, onClose }: GameDetailModalProps) {
   const [detail, setDetail] = useState<GameDetail | null>(null);
   const [players, setPlayers] = useState<PlayerProp[] | null>(null);
@@ -22,6 +37,14 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
       })
       .catch(() => setError("Couldn't load game details."));
   }, [gameId]);
+
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
 
   const sortedMarkets = detail ? [...detail.markets].sort((a, b) => (b.edge ?? 0) - (a.edge ?? 0)) : [];
 
@@ -41,21 +64,56 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
         {error && <p className="text-[var(--color-shotclock)]">{error}</p>}
         {!error && !detail && <p>Loading…</p>}
 
-        {detail?.prediction && (
-          <div className="mb-5 grid grid-cols-3 gap-4 border-b border-[var(--color-line)] pb-5">
-            <div>
-              <div className="stat-display text-2xl leading-none text-[var(--color-hardwood-bright)]">
-                {Math.round(detail.prediction.home_win_probability * 100)}%
+        {detail?.completed ? (
+          <div className="mb-5 flex items-center justify-center gap-6 border-b border-[var(--color-line)] pb-5">
+            <div className="text-center">
+              <div className="stat-display text-3xl leading-none">{detail.away_pts}</div>
+              <div className="mt-1 text-xs text-[var(--color-net-faint)]">{detail.away_team}</div>
+            </div>
+            <div className="text-xs uppercase text-[var(--color-net-faint)]">Final</div>
+            <div className="text-center">
+              <div className="stat-display text-3xl leading-none">{detail.home_pts}</div>
+              <div className="mt-1 text-xs text-[var(--color-net-faint)]">{detail.home_team}</div>
+            </div>
+          </div>
+        ) : (
+          detail?.prediction && (
+            <div className="mb-5 grid grid-cols-3 gap-4 border-b border-[var(--color-line)] pb-5">
+              <div>
+                <div className="stat-display text-2xl leading-none text-[var(--color-hardwood-bright)]">
+                  {Math.round(detail.prediction.home_win_probability * 100)}%
+                </div>
+                <div className="mt-1 text-xs text-[var(--color-net-faint)]">{detail.home_team} win probability</div>
               </div>
-              <div className="mt-1 text-xs text-[var(--color-net-faint)]">{detail.home_team} win probability</div>
+              <div>
+                <div className="stat-display text-2xl leading-none">{detail.prediction.predicted_margin.toFixed(1)}</div>
+                <div className="mt-1 text-xs text-[var(--color-net-faint)]">Predicted margin</div>
+              </div>
+              <div>
+                <div className="stat-display text-2xl leading-none">{detail.prediction.predicted_total.toFixed(1)}</div>
+                <div className="mt-1 text-xs text-[var(--color-net-faint)]">Predicted total</div>
+              </div>
             </div>
+          )
+        )}
+
+        {detail && (detail.home_recent_form.length > 0 || detail.away_recent_form.length > 0) && (
+          <div className="mb-5 flex items-center justify-between border-b border-[var(--color-line)] pb-5 text-sm">
             <div>
-              <div className="stat-display text-2xl leading-none">{detail.prediction.predicted_margin.toFixed(1)}</div>
-              <div className="mt-1 text-xs text-[var(--color-net-faint)]">Predicted margin</div>
+              <div className="mb-1 text-xs text-[var(--color-net-faint)]">{detail.away_team} form</div>
+              <div className="flex gap-1">
+                {detail.away_recent_form.map((r, i) => (
+                  <FormBadge key={i} result={r} />
+                ))}
+              </div>
             </div>
-            <div>
-              <div className="stat-display text-2xl leading-none">{detail.prediction.predicted_total.toFixed(1)}</div>
-              <div className="mt-1 text-xs text-[var(--color-net-faint)]">Predicted total</div>
+            <div className="text-right">
+              <div className="mb-1 text-xs text-[var(--color-net-faint)]">{detail.home_team} form</div>
+              <div className="flex justify-end gap-1">
+                {detail.home_recent_form.map((r, i) => (
+                  <FormBadge key={i} result={r} />
+                ))}
+              </div>
             </div>
           </div>
         )}
@@ -66,6 +124,9 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
               <tr className="text-left text-[var(--color-net-faint)]">
                 <th>Market</th>
                 <th>Selection</th>
+                <th>Line</th>
+                <th>Bookmaker</th>
+                <th>Odds</th>
                 <th>Model %</th>
                 <th>Market %</th>
                 <th>Edge</th>
@@ -76,6 +137,9 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
                 <tr key={i} data-testid="market-row">
                   <td>{market.market}</td>
                   <td>{market.selection}</td>
+                  <td>{market.point !== null ? market.point : "—"}</td>
+                  <td>{market.bookmaker ?? "—"}</td>
+                  <td>{market.american_odds !== null ? market.american_odds : "—"}</td>
                   <td>{Math.round(market.model_probability * 100)}%</td>
                   <td>{market.market_probability !== null ? `${Math.round(market.market_probability * 100)}%` : "—"}</td>
                   <td
@@ -93,6 +157,22 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
               ))}
             </tbody>
           </table>
+        )}
+
+        {detail && detail.head_to_head.length > 0 && (
+          <div className="mb-4">
+            <h3 className="mb-2 text-sm text-[var(--color-net-faint)]">Head to head</h3>
+            <ul className="text-sm">
+              {detail.head_to_head.map((meeting) => (
+                <li key={meeting.game_id} className="flex justify-between border-b border-[var(--color-line)] py-1">
+                  <span>{meeting.game_date}</span>
+                  <span>
+                    {meeting.away_team} {meeting.away_pts} – {meeting.home_pts} {meeting.home_team}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
         )}
 
         {players && players.length > 0 && (

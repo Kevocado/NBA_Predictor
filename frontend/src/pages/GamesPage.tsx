@@ -34,12 +34,20 @@ function formatDayHeader(isoDate: string): string {
 }
 
 export default function GamesPage() {
-  const [weekStart, setWeekStart] = useState(mondayOf(new Date()));
+  const [weekStart, setWeekStart] = useState<string | null>(null);
   const [games, setGames] = useState<Game[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedGameId, setSelectedGameId] = useState<string | null>(null);
 
   useEffect(() => {
+    api
+      .getSeasonFirstWeek()
+      .then((bounds) => setWeekStart(bounds.first_week_start ?? mondayOf(new Date())))
+      .catch(() => setWeekStart(mondayOf(new Date())));
+  }, []);
+
+  useEffect(() => {
+    if (weekStart === null) return;
     setGames(null);
     setError(null);
     api
@@ -60,15 +68,15 @@ export default function GamesPage() {
       <div className="mb-6 flex items-center justify-between">
         <button
           aria-label="Previous week"
-          onClick={() => setWeekStart((w) => addDays(w, -7))}
+          onClick={() => setWeekStart((w) => addDays(w ?? mondayOf(new Date()), -7))}
           className="text-[var(--color-net-dim)] hover:text-[var(--color-net)]"
         >
           ←
         </button>
-        <span className="stat-display text-lg">{formatWeekRange(weekStart)}</span>
+        <span className="stat-display text-lg">{weekStart ? formatWeekRange(weekStart) : ""}</span>
         <button
           aria-label="Next week"
-          onClick={() => setWeekStart((w) => addDays(w, 7))}
+          onClick={() => setWeekStart((w) => addDays(w ?? mondayOf(new Date()), 7))}
           className="text-[var(--color-net-dim)] hover:text-[var(--color-net)]"
         >
           →

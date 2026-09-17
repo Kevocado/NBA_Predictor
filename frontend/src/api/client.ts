@@ -13,12 +13,24 @@ export interface Prediction {
   predicted_total: number;
 }
 
+export interface HeadToHeadMeeting {
+  game_id: string;
+  game_date: string;
+  home_team: string;
+  away_team: string;
+  home_pts: number | null;
+  away_pts: number | null;
+}
+
 export interface Game {
   game_id: string;
   game_date: string;
   home_team: string;
   away_team: string;
   prediction: Prediction | null;
+  completed: boolean;
+  home_pts: number | null;
+  away_pts: number | null;
 }
 
 export interface MarketPrediction {
@@ -29,10 +41,18 @@ export interface MarketPrediction {
   edge: number | null;
   bookmaker: string | null;
   american_odds: number | null;
+  point: number | null;
 }
 
 export interface GameDetail extends Game {
   markets: MarketPrediction[];
+  head_to_head: HeadToHeadMeeting[];
+  home_recent_form: string[];
+  away_recent_form: string[];
+}
+
+export interface SeasonBounds {
+  first_week_start: string | null;
 }
 
 export interface PlayerProp {
@@ -127,6 +147,7 @@ export const api = {
   getGamesWeek: (start: string) => fetchJson<Game[]>(`/games/week?start=${start}`),
   getGameDetail: (gameId: string) => fetchJson<GameDetail>(`/games/${gameId}`),
   getGamePlayers: (gameId: string) => fetchJson<PlayerProp[]>(`/games/${gameId}/players`),
+  getSeasonFirstWeek: () => fetchJson<SeasonBounds>("/season/first-week"),
   getHubTeams: () => fetchJson<TeamHubRow[]>("/hub/teams"),
   getHubPlayers: () => fetchJson<PlayerHubRow[]>("/hub/players"),
   getHubRankings: () => fetchJson<PowerRankingRow[]>("/hub/rankings"),

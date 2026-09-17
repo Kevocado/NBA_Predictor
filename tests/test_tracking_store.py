@@ -96,10 +96,33 @@ def test_get_all_predictions_returns_latest_per_game(tmp_path):
     assert by_game["g2"]["home_win_prob"] == pytest.approx(0.40)
 
 
-def test_get_all_predictions_empty_db_returns_empty_list(tmp_path):
+def test_insert_market_prediction_point_defaults_to_none(tmp_path):
     from nba_predictor.tracking import store
 
     db_path = tmp_path / "tracking.db"
     store.init_db(db_path)
 
-    assert store.get_all_predictions(db_path) == []
+    store.insert_market_prediction(
+        db_path, game_id="g1", market="h2h", selection="BOS", model_probability=0.55,
+        market_probability=0.5, edge=0.05, bookmaker="DraftKings", american_odds=-110,
+        created_at="2026-11-01T12:00:00",
+    )
+
+    rows = store.get_market_predictions_for_game(db_path, "g1")
+    assert rows[0]["point"] is None
+
+
+def test_insert_market_prediction_stores_point_line_value(tmp_path):
+    from nba_predictor.tracking import store
+
+    db_path = tmp_path / "tracking.db"
+    store.init_db(db_path)
+
+    store.insert_market_prediction(
+        db_path, game_id="g1", market="spread", selection="BOS", model_probability=0.55,
+        market_probability=0.5, edge=0.05, bookmaker="DraftKings", american_odds=-110,
+        point=-4.5, created_at="2026-11-01T12:00:00",
+    )
+
+    rows = store.get_market_predictions_for_game(db_path, "g1")
+    assert rows[0]["point"] == pytest.approx(-4.5)

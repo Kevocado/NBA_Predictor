@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS game_market_predictions (
     edge REAL,
     bookmaker TEXT,
     american_odds INTEGER,
+    point REAL,
     created_at TEXT NOT NULL
 );
 
@@ -66,6 +67,18 @@ def init_db(db_path: Path) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(db_path) as conn:
         conn.executescript(SCHEMA)
+        _ensure_point_column(conn)
+
+
+def _ensure_point_column(conn: sqlite3.Connection) -> None:
+    """Adds `point` to a game_market_predictions table created before this
+    column existed. CREATE TABLE IF NOT EXISTS above won't add it to an
+    already-existing table, so this migration covers any DB file left over
+    from a prior deploy."""
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(game_market_predictions)")}
+    if "point" not in columns:
+        conn.execute("ALTER TABLE game_market_predictions ADD COLUMN point REAL")
+        conn.commit()
 
 
 @contextmanager
@@ -122,15 +135,16 @@ def insert_market_prediction(
     bookmaker: str | None,
     american_odds: int | None,
     created_at: str,
+    point: float | None = None,
 ) -> int:
     with get_connection(db_path) as conn:
         cur = conn.execute(
             """
             INSERT INTO game_market_predictions
-                (game_id, market, selection, model_probability, market_probability, edge, bookmaker, american_odds, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (game_id, market, selection, model_probability, market_probability, edge, bookmaker, american_odds, point, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (game_id, market, selection, model_probability, market_probability, edge, bookmaker, american_odds, created_at),
+            (game_id, market, selection, model_probability, market_probability, edge, bookmaker, american_odds, point, created_at),
         )
         conn.commit()
         return cur.lastrowid

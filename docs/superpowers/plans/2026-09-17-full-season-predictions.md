@@ -12,6 +12,7 @@
 
 ## Global Constraints
 
+- **Written for a small/local implementer model.** Every step that edits a file already containing code gives an exact `old_string` (verbatim current text) and `new_string` (verbatim replacement) — find the `old_string` with an exact text search, don't infer or paraphrase it, and don't reformat anything outside the given block. If an `old_string` doesn't match the file exactly (e.g. an earlier task's edit landed slightly differently), stop and re-read the actual current file rather than guessing at a fix. Work one task at a time, in order — later tasks assume every earlier task's exact code is already in place. If running this under subagent-driven-development with a 7B-class model, expect the fix-loop's round-4/5 escalation to a more capable model to trigger more often than usual on tasks involving pandas (Tasks 1, 3, 8) or multi-edit JSX (Task 14) — that escalation path exists for exactly this.
 - Every new/changed backend function needs a pytest test in the matching `tests/test_*.py` file, following this repo's one-file-per-module convention.
 - Every new/changed frontend component needs a vitest + Testing Library test in its co-located `*.test.tsx` file.
 - No fabricated data: every new field is a real computation over real stored/cached data. Where a simplification is used (rolling-average features, last-5-games roster estimate, in-sample player-model metrics), it is documented in a code comment the same way `pipeline/ingest.py`'s existing rating/usage_rate simplifications already are — never silently presented as more precise than it is.
@@ -22,6 +23,8 @@
 ---
 
 ### Task 1: Generalize the team feature builder to score upcoming games
+
+> **Note for the implementer (any model, but especially a small local model):** every step below that touches a file already containing code gives you the *exact current text* to find (`old_string`) and the *exact new text* to replace it with (`new_string`) — copy both verbatim, character for character, including indentation. Do not paraphrase, reformat, or "improve" anything beyond what's shown. If the `old_string` you're told to find does not match the file exactly, stop and re-read the file rather than guessing.
 
 **Files:**
 - Modify: `src/nba_predictor/features/build.py`
@@ -114,12 +117,81 @@ Expected: FAIL with `ImportError` — `build_feature_frame` doesn't exist yet.
 
 - [ ] **Step 3: Implement**
 
-```python
-# src/nba_predictor/features/build.py
-# Rename build_training_frame's body to build_feature_frame, with one
-# change: guard the results-history append with a null check. Then make
-# build_training_frame a one-line wrapper.
+In `src/nba_predictor/features/build.py`, find this exact block (it is the
+entire current `build_training_frame` function, unchanged since the file
+was last touched) and replace it — the whole thing, from `def
+build_training_frame` down to the final `return games, FEATURE_COLUMNS` —
+with the new code that follows.
 
+`old_string` (find this exactly):
+
+```python
+def build_training_frame(games: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
+    games = games.copy()
+
+    for col in _OPTIONAL_COLUMNS_DEFAULT_ZERO:
+        if col not in games.columns:
+            games[col] = 0.0
+    games["power_rating_diff"] = games["home_power_rating"] - games["away_power_rating"]
+
+    long_form = add_rolling_four_factors(_long_format_box_scores(games))
+    rolled = long_form.set_index(["game_id", "team"])[
+        ["efg_pct_roll", "tov_rate_roll", "orb_pct_roll", "ft_rate_roll"]
+    ]
+
+    for side, team_col in [("home", "home_team"), ("away", "away_team")]:
+        merged = games.merge(
+            rolled.reset_index(),
+            left_on=["game_id", team_col],
+            right_on=["game_id", "team"],
+            how="left",
+        )
+        for factor in ["efg_pct_roll", "tov_rate_roll", "orb_pct_roll", "ft_rate_roll"]:
+            games[f"{side}_{factor}"] = merged[factor].values
+
+    games = games.sort_values("game_date").reset_index(drop=True)
+
+    home_last_game: dict[str, str] = {}
+    away_last_game: dict[str, str] = {}
+    home_results: dict[str, list[str]] = {}
+    away_results: dict[str, list[str]] = {}
+    rest_days_home, rest_days_away = [], []
+    streak_home, streak_away = [], []
+
+    for _, row in games.iterrows():
+        home, away, game_date = row["home_team"], row["away_team"], row["game_date"]
+
+        rest_days_home.append(compute_rest_days(game_date, home_last_game.get(home)))
+        rest_days_away.append(compute_rest_days(game_date, away_last_game.get(away)))
+        streak_home.append(current_streak(home_results.get(home, [])))
+        streak_away.append(current_streak(away_results.get(away, [])))
+
+        home_last_game[home] = game_date
+        away_last_game[away] = game_date
+        home_results.setdefault(home, []).append("W" if row["home_win"] == 1 else "L")
+        away_results.setdefault(away, []).append("L" if row["home_win"] == 1 else "W")
+
+    games["home_rest_days"] = rest_days_home
+    games["away_rest_days"] = rest_days_away
+    games["home_back_to_back"] = [is_back_to_back(d) for d in rest_days_home]
+    games["away_back_to_back"] = [is_back_to_back(d) for d in rest_days_away]
+    games["home_streak"] = streak_home
+    games["away_streak"] = streak_away
+
+    games["is_high_altitude"] = games["home_team"].apply(is_high_altitude)
+    flags = games.apply(lambda r: game_flags(r["home_team"], r["away_team"]), axis=1, result_type="expand")
+    games["conference_game"] = flags["conference_game"]
+    games["division_game"] = flags["division_game"]
+
+    games = games.dropna(subset=FEATURE_COLUMNS).reset_index(drop=True)
+    return games, FEATURE_COLUMNS
+```
+
+`new_string` (replace with this — the same logic, renamed, with one added
+guard on the results-history append, plus a thin `build_training_frame`
+wrapper so every existing caller keeps working unchanged):
+
+```python
 def build_feature_frame(games: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     games = games.copy()
 
@@ -292,7 +364,33 @@ def test_score_upcoming_games_returns_zero_when_nothing_upcoming(tmp_path):
     assert stored == 0
 ```
 
-Note: `_sample_completed_games()` and `pd`/`pandas` are already available in this test file's imports/helpers (see the top of `tests/test_pipeline_ingest.py`) — add `import pandas as pd` at the top of the file if it isn't already imported at module level (it's currently only imported inside individual test functions; adding a module-level import is fine and matches the pattern other test files in this repo use).
+In `tests/test_pipeline_ingest.py`, find this exact block at the very top
+of the file:
+
+`old_string`:
+
+```python
+from unittest.mock import patch
+
+import pytest
+```
+
+`new_string`:
+
+```python
+from unittest.mock import patch
+
+import pandas as pd
+import pytest
+```
+
+This module-level import is required — the test above uses `pd.isna(...)`
+directly with no local import, and a test added in a later task
+(`test_to_player_scoring_frame_adds_a_row_per_estimated_roster_player`,
+Task 8) does too. Individual test functions elsewhere in this file that
+already have their own local `import pandas as pd` are unaffected — a
+local import shadowing a module-level one of the same name is harmless in
+Python.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -301,12 +399,27 @@ Expected: FAIL with `ImportError` — neither function exists yet.
 
 - [ ] **Step 3: Implement**
 
-```python
-# src/nba_predictor/pipeline/ingest.py
-# Add to imports:
-from nba_predictor.features.build import build_feature_frame, build_training_frame
+In `src/nba_predictor/pipeline/ingest.py`, find this exact import line:
 
-# Add after to_training_frame:
+`old_string`:
+
+```python
+from nba_predictor.features.build import build_training_frame
+```
+
+`new_string`:
+
+```python
+from nba_predictor.features.build import build_feature_frame, build_training_frame
+```
+
+Then add these two new functions after `to_training_frame` (find the end
+of `to_training_frame` — it ends with `return pd.DataFrame(rows)` followed
+by two blank lines and `def _completed_with_box`; insert the new functions
+between those two blank lines, i.e. immediately before `def
+_completed_with_box`):
+
+```python
 def to_scoring_frame(games: list[dict]) -> pd.DataFrame:
     """All games (completed + upcoming), shaped for
     features.build.build_feature_frame. Upcoming games (or completed games
@@ -690,16 +803,63 @@ Expected: FAIL with `ImportError`.
 
 - [ ] **Step 3: Implement**
 
-```python
-# src/nba_predictor/pipeline/ingest.py
-# Add to imports:
-import numpy as np
+In `src/nba_predictor/pipeline/ingest.py`, find this exact block (the top
+of the file's import section):
 
+`old_string`:
+
+```python
+import joblib
+import pandas as pd
+
+from nba_predictor import config
+```
+
+`new_string`:
+
+```python
+import joblib
+import numpy as np
+import pandas as pd
+
+from nba_predictor import config
+```
+
+Then find this exact line (the import Task 2 left in place):
+
+`old_string`:
+
+```python
+from nba_predictor.features.build import build_feature_frame, build_training_frame
+```
+
+`new_string`:
+
+```python
+from nba_predictor.features.build import build_feature_frame, build_training_frame
 from nba_predictor.features.player_stats import build_player_feature_frame
+```
+
+Then find this exact line:
+
+`old_string`:
+
+```python
+from nba_predictor.models.game_outcome import predict_win_probability
+```
+
+`new_string`:
+
+```python
+from nba_predictor.models.game_outcome import predict_win_probability
 from nba_predictor.models.manifest import build_manifest, write_manifest
 from nba_predictor.models.player_props import predict_player_stat, train_player_stat_model
+```
 
-# Append, after to_player_training_frame:
+Then append this constant and function at the end of the file (after
+`to_player_training_frame`, which was added in Task 4):
+
+```python
 PLAYER_STAT_TARGET_COLUMNS = {"points": "points", "rebounds": "rebounds", "assists": "assists", "threes": "fg3m"}
 
 
@@ -1164,12 +1324,21 @@ git commit -m "feat: score player props for upcoming games via estimated roster"
 
 **Files:**
 - Modify: `src/nba_predictor/pipeline/ingest.py`
-- Modify: `.github/workflows/refresh-data.yml`
 - Test: `tests/test_pipeline_ingest.py`
 
 **Interfaces:**
 - Consumes: `to_player_training_frame` (Task 4), `store.insert_player_outcome` (Task 6), and every pipeline function from Tasks 2/5/7/8.
 - Produces: `store_player_outcomes(training_df: pd.DataFrame, db_path: Path) -> int`. This is the last pipeline task — `main()` afterward runs the complete flow described in the spec's Architecture diagram.
+
+**Do not touch `.github/workflows/refresh-data.yml` in this task.** It was
+checked directly (read the file, don't assume) and it already computes its
+`--start`/`--end` as a rolling window (`60 days ago` to `14 days ahead` of
+the real current date, recomputed on every scheduled run) rather than fixed
+dates — it will automatically start picking up 2026-27 season games as real
+time passes, with no change needed. Widening it to fixed dates would be a
+regression (it would stop auto-advancing). The wider `--start`/`--end`
+defaults in this task's `main()` change are for the one-time *manual*
+backfill run only (Task 17), not the scheduled CI job.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1229,7 +1398,85 @@ def store_player_outcomes(training_df: pd.DataFrame, db_path: Path) -> int:
     return stored
 ```
 
-Now wire everything into `main()`. Replace the whole function body from the `--start`/`--end` defaults through the end:
+Now wire everything into `main()`. Find this exact block in
+`src/nba_predictor/pipeline/ingest.py` — it is the entire current `main()`
+function plus the `if __name__ == "__main__":` line after it, unchanged by
+any earlier task in this plan (Tasks 1-8 only add new functions elsewhere
+in the file) — and replace it with the new version that follows.
+
+`old_string` (find this exactly, starting at `def main() -> None:` and
+ending at `    main()`):
+
+```python
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Ingest real NBA schedule/box-score data and refresh caches.")
+    parser.add_argument("--start", default="2026-02-16")
+    parser.add_argument("--end", default="2026-03-22")
+    parser.add_argument(
+        "--player-hub-days", type=int, default=21,
+        help="How many days (most recent, within --start/--end) to fetch per-player box scores for. "
+        "0 skips Player Hub entirely. Bounded by default since it's a second ESPN request per game.",
+    )
+    parser.add_argument(
+        "--skip-predictions", action="store_true",
+        help="Skip scoring/storing predictions into the tracking DB. For CI contexts (e.g. a scheduled "
+        "workflow with no persistent tracking.db) that only need fresh schedule/hub caches and a "
+        "retrained model committed to git — predictions belong on the deployed server's live DB, "
+        "not a stateless CI runner's throwaway one.",
+    )
+    args = parser.parse_args()
+
+    print(f"Fetching schedule {args.start} to {args.end} from ESPN...")
+    games = fetch_schedule_range(args.start, args.end)
+    print(f"  {len(games)} games found")
+
+    print("Fetching box scores for completed games...")
+    games = enrich_with_boxscores(games)
+
+    schedule_path = config.DATA_DIR / "cache" / "schedule" / "games.json"
+    schedule_path.parent.mkdir(parents=True, exist_ok=True)
+    schedule_path.write_text(json.dumps(to_schedule_cache(games)))
+    print(f"  wrote {schedule_path}")
+
+    hub_dir = config.DATA_DIR / "cache" / "hub"
+    hub_dir.mkdir(parents=True, exist_ok=True)
+    (hub_dir / "teams.json").write_text(json.dumps(compute_team_hub(games)))
+    (hub_dir / "rankings.json").write_text(json.dumps(compute_power_rankings(games)))
+    (hub_dir / "standings.json").write_text(json.dumps(compute_standings(games)))
+
+    if args.player_hub_days > 0:
+        cutoff = (date.fromisoformat(args.end) - timedelta(days=args.player_hub_days)).isoformat()
+        recent_games = [g for g in games if g["game_date"] >= cutoff]
+        print(f"Fetching player box scores for {len(recent_games)} games since {cutoff}...")
+        player_boxscores = fetch_player_boxscores(recent_games)
+        (hub_dir / "players.json").write_text(json.dumps(compute_player_hub(recent_games, player_boxscores)))
+    else:
+        (hub_dir / "players.json").write_text(json.dumps([]))
+    print(f"  wrote hub caches to {hub_dir}")
+
+    training_df = to_training_frame(games)
+    print(f"Training on {len(training_df)} completed games with full box scores...")
+
+    models_dir = config.PROJECT_ROOT / "models"
+    model_version = datetime.now(timezone.utc).strftime("v%Y%m%d%H%M%S")
+    manifest = run_retrain_pipeline(
+        training_df, models_dir, model_version=model_version, trained_at=datetime.now(timezone.utc).isoformat()
+    )
+    print(f"  trained {model_version}: {manifest['metrics']}")
+
+    if args.skip_predictions:
+        print("  --skip-predictions set: not scoring/storing predictions")
+    else:
+        store.init_db(config.TRACKING_DB_PATH)
+        stored = score_and_store_predictions(training_df, models_dir, config.TRACKING_DB_PATH, model_version)
+        print(f"  stored {stored} real predictions for browsing in the UI")
+
+
+if __name__ == "__main__":
+    main()
+```
+
+`new_string` (replace with this):
 
 ```python
 def main() -> None:
@@ -1323,8 +1570,6 @@ if __name__ == "__main__":
     main()
 ```
 
-Widen the scheduled CI ingest range to match — open `.github/workflows/refresh-data.yml`, find the `python -m nba_predictor.pipeline.ingest` invocation, and update its `--start`/`--end` arguments to a rolling window that always covers from the season start through several weeks ahead (matching the new `main()` defaults' spirit — if the workflow already computes dates dynamically, adjust the offset used for the end date to extend far enough forward to keep picking up newly-announced games; if it uses fixed dates, change them to `2025-10-01`/`2026-11-30` to match the new `main()` defaults).
-
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `pytest tests/test_pipeline_ingest.py -v`
@@ -1333,7 +1578,7 @@ Expected: PASS (all tests — this also re-confirms every test from Tasks 1-8 st
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/nba_predictor/pipeline/ingest.py tests/test_pipeline_ingest.py .github/workflows/refresh-data.yml
+git add src/nba_predictor/pipeline/ingest.py tests/test_pipeline_ingest.py
 git commit -m "feat: wire upcoming-game and player-prop scoring into the ingest pipeline"
 ```
 
@@ -1496,9 +1741,25 @@ Expected: `get_head_to_head`/`get_recent_form` tests PASS immediately (the funct
 
 - [ ] **Step 3: Implement**
 
+In `src/nba_predictor/services/schedule_repository.py`, find this exact
+block and delete it entirely (do not keep it, even commented out —
+nothing else in the codebase calls `first_week_start`):
+
+`old_string` (find and delete this):
+
 ```python
-# src/nba_predictor/services/schedule_repository.py
-# Remove first_week_start entirely, replace with:
+def first_week_start(schedule: list[dict]) -> str | None:
+    """The Monday of the week containing the earliest game_date in the
+    schedule, or None if the schedule is empty."""
+    if not schedule:
+        return None
+    earliest = min(game["game_date"] for game in schedule)
+    return monday_of(earliest)
+```
+
+In its place, add this new function (same location in the file):
+
+```python
 def default_week_start(schedule: list[dict], today: str) -> str | None:
     """Monday of the earliest game overall, UNLESS today >= (the next
     not-yet-completed game's date - 7 days) — then Monday of the week
@@ -1581,19 +1842,56 @@ Expected: FAIL — `deps.get_today` doesn't exist yet, `dependency_overrides` as
 
 - [ ] **Step 3: Implement**
 
-```python
-# src/nba_predictor/api/deps.py
-# Add to imports:
-from datetime import date
+In `src/nba_predictor/api/deps.py`, find this exact block (the file's
+current import lines at the top):
 
-# Append:
+`old_string`:
+
+```python
+from pathlib import Path
+
+from fastapi import Depends, HTTPException
+
+from nba_predictor import config
+from nba_predictor.services.schedule_repository import load_schedule
+```
+
+`new_string`:
+
+```python
+from datetime import date
+from pathlib import Path
+
+from fastapi import Depends, HTTPException
+
+from nba_predictor import config
+from nba_predictor.services.schedule_repository import load_schedule
+```
+
+Then append this new function at the end of the same file:
+
+```python
 def get_today() -> str:
     return date.today().isoformat()
 ```
 
+In `src/nba_predictor/api/routes.py`, find this exact block:
+
+`old_string`:
+
 ```python
-# src/nba_predictor/api/routes.py
-# Update import:
+from nba_predictor.api.deps import (
+    get_db_path,
+    get_models_dir,
+    get_schedule,
+    get_training_games_path,
+    require_admin,
+)
+```
+
+`new_string`:
+
+```python
 from nba_predictor.api.deps import (
     get_db_path,
     get_models_dir,
@@ -1602,8 +1900,26 @@ from nba_predictor.api.deps import (
     get_training_games_path,
     require_admin,
 )
+```
 
-# Update the schedule_repository import:
+Then find this exact block, further down in the same file's imports:
+
+`old_string`:
+
+```python
+from nba_predictor.services.schedule_repository import (
+    first_week_start,
+    get_game,
+    get_games_for_date,
+    get_games_for_week,
+    get_head_to_head,
+    get_recent_form,
+)
+```
+
+`new_string`:
+
+```python
 from nba_predictor.services.schedule_repository import (
     default_week_start,
     get_game,
@@ -1612,8 +1928,21 @@ from nba_predictor.services.schedule_repository import (
     get_head_to_head,
     get_recent_form,
 )
+```
 
-# Replace the season_first_week route:
+Finally, find this exact block (the current route function):
+
+`old_string`:
+
+```python
+@router.get("/season/first-week", response_model=SeasonBoundsOut)
+def season_first_week(schedule: list[dict] = Depends(get_schedule)) -> SeasonBoundsOut:
+    return SeasonBoundsOut(first_week_start=first_week_start(schedule))
+```
+
+`new_string`:
+
+```python
 @router.get("/season/first-week", response_model=SeasonBoundsOut)
 def season_first_week(schedule: list[dict] = Depends(get_schedule), today: str = Depends(get_today)) -> SeasonBoundsOut:
     return SeasonBoundsOut(first_week_start=default_week_start(schedule, today))
@@ -1686,8 +2015,21 @@ Expected: FAIL — `actual_value` key absent from the response.
 
 - [ ] **Step 3: Implement**
 
+In `src/nba_predictor/api/schemas.py`, find this exact block:
+
+`old_string`:
+
 ```python
-# src/nba_predictor/api/schemas.py
+class PlayerPropOut(BaseModel):
+    player_id: str
+    player_name: str
+    stat: str
+    predicted_value: float
+```
+
+`new_string`:
+
+```python
 class PlayerPropOut(BaseModel):
     player_id: str
     player_name: str
@@ -1696,9 +2038,34 @@ class PlayerPropOut(BaseModel):
     actual_value: float | None = None
 ```
 
+In `src/nba_predictor/api/routes.py`, find this exact block (the entire
+current `get_game_players` function):
+
+`old_string`:
+
 ```python
-# src/nba_predictor/api/routes.py
-# Replace get_game_players:
+@router.get("/games/{game_id}/players", response_model=list[PlayerPropOut])
+def get_game_players(
+    game_id: str, schedule: list[dict] = Depends(get_schedule), db_path: Path = Depends(get_db_path)
+) -> list[PlayerPropOut]:
+    game = get_game(schedule, game_id)
+    if game is None:
+        raise HTTPException(status_code=404, detail=f"Unknown game: {game_id}")
+
+    name_by_id = load_player_name_map(config.DATA_DIR / "cache" / "hub" / "players.json")
+
+    return [
+        PlayerPropOut(
+            player_id=row["player_id"], player_name=name_by_id.get(row["player_id"], row["player_id"]),
+            stat=row["stat"], predicted_value=row["predicted_value"],
+        )
+        for row in store.get_player_predictions_for_game(db_path, game_id)
+    ]
+```
+
+`new_string`:
+
+```python
 @router.get("/games/{game_id}/players", response_model=list[PlayerPropOut])
 def get_game_players(
     game_id: str, schedule: list[dict] = Depends(get_schedule), db_path: Path = Depends(get_db_path)
@@ -1767,8 +2134,22 @@ Expected: FAIL — `actual_value` doesn't exist on the `PlayerProp` type / is `u
 
 - [ ] **Step 3: Implement**
 
+In `frontend/src/api/client.ts`, find this exact block:
+
+`old_string`:
+
 ```typescript
-// frontend/src/api/client.ts
+export interface PlayerProp {
+  player_id: string;
+  player_name: string;
+  stat: string;
+  predicted_value: number;
+}
+```
+
+`new_string`:
+
+```typescript
 export interface PlayerProp {
   player_id: string;
   player_name: string;
@@ -1778,7 +2159,23 @@ export interface PlayerProp {
 }
 ```
 
-Note: this makes `actual_value` a required field on the TypeScript type (matching how `Game.completed`/`home_pts`/`away_pts` were made required in a previous session, not optional) — fix any existing test literal in `frontend/src/components/GameDetailModal.test.tsx` that builds a `players` array without it by adding `actual_value: null` to each entry, as part of this step.
+This makes `actual_value` a required field on the TypeScript type (matching
+how `Game.completed`/`home_pts`/`away_pts` were made required in a previous
+session, not optional). That means one existing test fixture won't
+type-check anymore. In `frontend/src/components/GameDetailModal.test.tsx`,
+find this exact line:
+
+`old_string`:
+
+```typescript
+const players = [{ player_id: "203999", player_name: "Nikola Jokic", stat: "points", predicted_value: 27.5 }];
+```
+
+`new_string`:
+
+```typescript
+const players = [{ player_id: "203999", player_name: "Nikola Jokic", stat: "points", predicted_value: 27.5, actual_value: null }];
+```
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -1876,10 +2273,24 @@ Expected: FAIL on all five new tests — no verdict text is rendered yet.
 
 - [ ] **Step 3: Implement**
 
-```tsx
-// frontend/src/components/GameDetailModal.tsx
-// Add near the top, above the component (module scope):
+This task makes three separate, independent edits to
+`frontend/src/components/GameDetailModal.tsx`. Do them in order. None of
+them require you to understand or rewrite the existing final-score/
+prediction-grid ternary block — the new verdict section is inserted as a
+sibling right after it, unchanged.
 
+**Edit 1 — add helper functions above the component.** Find this exact
+block near the top of the file:
+
+`old_string`:
+
+```tsx
+function FormBadge({ result }: { result: string }) {
+```
+
+`new_string`:
+
+```tsx
 interface FavoredTeam {
   team: string;
   value: number;
@@ -1915,17 +2326,49 @@ export function computePostMatchVerdict(detail: GameDetail): PostMatchVerdict | 
     totalDiff: Math.abs(detail.prediction.predicted_total - actualTotal),
   };
 }
+
+function FormBadge({ result }: { result: string }) {
 ```
 
-Inside the component, after `const sortedMarkets = ...`, add:
+(Note: `old_string` above is a single line that already exists in the
+file — you are inserting new code immediately before it, not deleting
+it. `FormBadge`'s own body, unchanged, still follows right after.)
+
+**Edit 2 — compute the verdict inside the component.** Find this exact
+line:
+
+`old_string`:
 
 ```tsx
+  const sortedMarkets = detail ? [...detail.markets].sort((a, b) => (b.edge ?? 0) - (a.edge ?? 0)) : [];
+```
+
+`new_string`:
+
+```tsx
+  const sortedMarkets = detail ? [...detail.markets].sort((a, b) => (b.edge ?? 0) - (a.edge ?? 0)) : [];
   const verdict = detail ? computePostMatchVerdict(detail) : null;
 ```
 
-And in the JSX, replace the existing `{detail?.prediction && (...)}` prediction-stat-grid block (the one showing home win probability / predicted margin / predicted total for a non-completed game) with a version that shows the verdict instead when the game is completed:
+**Edit 3 — insert the verdict section into the JSX.** Find this exact
+block (it is the closing of the existing final-score/prediction-grid
+ternary, immediately followed by the start of the recent-form section —
+do not touch anything above the blank line, only insert between the two
+existing blocks):
+
+`old_string`:
 
 ```tsx
+        )}
+
+        {detail && (detail.home_recent_form.length > 0 || detail.away_recent_form.length > 0) && (
+```
+
+`new_string`:
+
+```tsx
+        )}
+
         {verdict && (
           <div className="mb-5 border-b border-[var(--color-line)] pb-5 text-sm" data-testid="post-match-verdict">
             <div className="mb-2 flex items-center gap-2">
@@ -1944,27 +2387,16 @@ And in the JSX, replace the existing `{detail?.prediction && (...)}` prediction-
           </div>
         )}
 
-        {!verdict && detail?.prediction && (
-          <div className="mb-5 grid grid-cols-3 gap-4 border-b border-[var(--color-line)] pb-5">
-            <div>
-              <div className="stat-display text-2xl leading-none text-[var(--color-hardwood-bright)]">
-                {Math.round(detail.prediction.home_win_probability * 100)}%
-              </div>
-              <div className="mt-1 text-xs text-[var(--color-net-faint)]">{detail.home_team} win probability</div>
-            </div>
-            <div>
-              <div className="stat-display text-2xl leading-none">{detail.prediction.predicted_margin.toFixed(1)}</div>
-              <div className="mt-1 text-xs text-[var(--color-net-faint)]">Predicted margin</div>
-            </div>
-            <div>
-              <div className="stat-display text-2xl leading-none">{detail.prediction.predicted_total.toFixed(1)}</div>
-              <div className="mt-1 text-xs text-[var(--color-net-faint)]">Predicted total</div>
-            </div>
-          </div>
-        )}
+        {detail && (detail.home_recent_form.length > 0 || detail.away_recent_form.length > 0) && (
 ```
 
-This replaces the modal's existing `detail?.completed ? (...final score header...) : (detail?.prediction && (...))` block from the previous session — the final-score header (away/FINAL/home) stays exactly as it was, placed above this new verdict section; only the non-completed prediction grid gets the added `!verdict &&` guard (it was already conditioned on `detail?.prediction`, this just also excludes the completed case, which now shows the verdict block instead).
+After this edit, a completed game with a stored prediction shows the
+final-score header (unchanged, from the existing ternary above) followed
+immediately by this new verdict block. `verdict` is `null` for a
+not-completed game, so the block simply doesn't render there — the
+existing prediction-stat grid (home win probability / predicted margin /
+predicted total) is untouched and still shows exactly as before for
+upcoming games.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -2046,9 +2478,29 @@ Expected: FAIL on the two new hit/miss tests — no "Result" column exists yet.
 
 - [ ] **Step 3: Implement**
 
+This task makes two separate edits to
+`frontend/src/components/GameDetailModal.tsx`.
+
+**Edit 1 — add `marketVerdict` above the component.** Find this exact
+block (the end of `computePostMatchVerdict`, added in Task 14, followed by
+the start of `FormBadge`):
+
+`old_string`:
+
 ```tsx
-// frontend/src/components/GameDetailModal.tsx
-// Add near computePostMatchVerdict:
+    totalDiff: Math.abs(detail.prediction.predicted_total - actualTotal),
+  };
+}
+
+function FormBadge({ result }: { result: string }) {
+```
+
+`new_string`:
+
+```tsx
+    totalDiff: Math.abs(detail.prediction.predicted_total - actualTotal),
+  };
+}
 
 export function marketVerdict(market: MarketPrediction, detail: GameDetail): boolean | null {
   if (!detail.completed || detail.home_pts === null || detail.away_pts === null) return null;
@@ -2072,9 +2524,55 @@ export function marketVerdict(market: MarketPrediction, detail: GameDetail): boo
   }
   return null;
 }
+
+function FormBadge({ result }: { result: string }) {
 ```
 
-Update the markets table: add a `<th>Result</th>` header, and change the `.map()` body from an implicit-return arrow to a block so the verdict is computed once per row:
+**Edit 2 — add a Result column to the markets table.** Find this exact
+block (the entire current markets `<thead>`/`<tbody>`):
+
+`old_string`:
+
+```tsx
+            <thead>
+              <tr className="text-left text-[var(--color-net-faint)]">
+                <th>Market</th>
+                <th>Selection</th>
+                <th>Line</th>
+                <th>Bookmaker</th>
+                <th>Odds</th>
+                <th>Model %</th>
+                <th>Market %</th>
+                <th>Edge</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sortedMarkets.map((market, i) => (
+                <tr key={i} data-testid="market-row">
+                  <td>{market.market}</td>
+                  <td>{market.selection}</td>
+                  <td>{market.point !== null ? market.point : "—"}</td>
+                  <td>{market.bookmaker ?? "—"}</td>
+                  <td>{market.american_odds !== null ? market.american_odds : "—"}</td>
+                  <td>{Math.round(market.model_probability * 100)}%</td>
+                  <td>{market.market_probability !== null ? `${Math.round(market.market_probability * 100)}%` : "—"}</td>
+                  <td
+                    className={
+                      market.edge === null
+                        ? undefined
+                        : market.edge > 0
+                          ? "text-[var(--color-win)]"
+                          : "text-[var(--color-shotclock)]"
+                    }
+                  >
+                    {market.edge !== null ? `${(market.edge * 100).toFixed(1)}pp` : "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+```
+
+`new_string`:
 
 ```tsx
             <thead>
@@ -2190,9 +2688,29 @@ Expected: FAIL on the "predicted vs actual" test — the player list currently o
 
 - [ ] **Step 3: Implement**
 
+In `frontend/src/components/GameDetailModal.tsx`, find this exact block
+(the entire current player list rendering):
+
+`old_string`:
+
 ```tsx
-// frontend/src/components/GameDetailModal.tsx
-// Replace the player list rendering:
+        {players && players.length > 0 && (
+          <ul className="text-sm">
+            {players.map((player, i) => (
+              <li key={i} className="flex justify-between border-b border-[var(--color-line)] py-1">
+                <span>{player.player_name}</span>
+                <span>
+                  <span>{player.stat}</span>: <span>{player.predicted_value}</span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+```
+
+`new_string`:
+
+```tsx
         {players && players.length > 0 && (
           <ul className="text-sm">
             {players.map((player, i) => (

@@ -22,6 +22,7 @@ from nba_predictor.api.schemas import (
     TrackRecordOut,
 )
 from nba_predictor.data.team_reference import TEAMS, get_team
+from nba_predictor.pipeline.refresh_odds import refresh_market_predictions
 from nba_predictor.pipeline.retrain import run_retrain_pipeline
 from nba_predictor.services.hub_service import compute_track_record, load_hub_cache
 from nba_predictor.services.schedule_repository import get_game, get_games_for_date, get_games_for_week
@@ -175,5 +176,6 @@ def retrain(
 
 
 @router.post("/refresh-odds", dependencies=[Depends(require_admin)], status_code=202)
-def refresh_odds() -> dict:
-    return {"status": "not implemented"}
+def refresh_odds(schedule: list[dict] = Depends(get_schedule), db_path: Path = Depends(get_db_path)) -> dict:
+    stored = refresh_market_predictions(schedule, db_path)
+    return {"status": "ok", "market_predictions_stored": stored}

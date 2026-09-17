@@ -10,6 +10,8 @@ def compute_four_factors(
     opp_dreb: float,
     fta: float,
 ) -> dict:
+    if fgm is None or fga is None or fg3m is None or tov is None or oreb is None or opp_dreb is None or fta is None:
+        return {"efg_pct": float("nan"), "tov_rate": float("nan"), "orb_pct": float("nan"), "ft_rate": float("nan")}
     efg_pct = (fgm + 0.5 * fg3m) / fga if fga else 0.0
     tov_rate = tov / (fga + 0.44 * fta + tov) if (fga + 0.44 * fta + tov) else 0.0
     orb_pct = oreb / (oreb + opp_dreb) if (oreb + opp_dreb) else 0.0

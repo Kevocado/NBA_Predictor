@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "nba-predictor-backend",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-c", "PYTHONPATH=/Users/sigey/Documents/Projects/NBA_Predictor/src:/Users/sigey/Documents/Projects/NBA_Predictor/.venv/lib/python3.13/site-packages /Library/Frameworks/Python.framework/Versions/3.13/bin/python3.13 -m uvicorn nba_predictor.api.app:app --host 127.0.0.1 --port 8020"],
+      "port": 8020
+    },
+    {
+      "name": "nba-predictor-frontend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--prefix", "frontend"],
+      "port": 5173
+    }
+  ]
+}

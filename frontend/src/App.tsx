@@ -27,7 +27,7 @@ export default function App() {
             <NavLink to="/model" className={navLinkClass}>
               Model Summary
             </NavLink>
-            <NavLink to="/calibration" className={navLinkClass}>
+            <NavLink to="/calibration-report" className={navLinkClass}>
               Calibration
             </NavLink>
           </nav>
@@ -38,7 +38,7 @@ export default function App() {
           <Route path="/" element={<GamesPage />} />
           <Route path="/hub" element={<DataHubPage />} />
           <Route path="/model" element={<ModelSummaryPage />} />
-          <Route path="/calibration" element={<CalibrationPage />} />
+          <Route path="/calibration-report" element={<CalibrationPage />} />
         </Routes>
       </main>
     </div>

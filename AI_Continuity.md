@@ -356,3 +356,85 @@ Verified live: rebuilt the Docker image, ran the ingest inside the running
 container, confirmed real data flowing through `/hub/teams`, `/games/week`,
 `/manifest`, and the frontend UI (screenshots taken via Chrome). 212
 backend tests passing, 33 frontend tests passing.
+
+---
+
+## Comprehensive completion pass: Tasks A-E + Dockerfile/SPA fixes
+
+**Date:** 2026-09-17
+
+At the user's request ("comprehensively complete each part of the plan
+you've missed"), closed out every item previously flagged as deferred:
+
+- **A — Track record settlement**: was hardcoded to 0 correct/0% hit rate.
+  Extended the schedule cache with real final scores
+  (`pipeline/ingest.py::to_schedule_cache`), added
+  `store.get_all_predictions`, and settled real predictions against real
+  results (`services/hub_service.py`). Real result over the full season:
+  85.8% hit rate on 1365 settled game-outcome calls — **note this is
+  train+holdout combined, not just the holdout set**, so it's higher than
+  the 63.5% holdout accuracy shown on Model Summary; both numbers are
+  real, they just measure different things and that should stay visible
+  to anyone reading the Track Record page.
+- **B — Player Hub**: added `espn.get_player_boxscore` (verified live)
+  and `pipeline/ingest.py::compute_player_hub`. 213 real players
+  populated from a 60-day window (full-season player box scores weren't
+  fetched — would double the ~1200-request backfill).
+- **C — `POST /refresh-odds`**: was a stub. Found the *existing*
+  `sportsbook_api.py` was ALSO fabricated (fake api.the-odds-api.com/
+  sportsbook/... endpoint, 404s) — same class of bug as the espn.py fix
+  from the prior session. Rewrote it against the real
+  sportsbook-api2.p.rapidapi.com API (found the NBA competition key,
+  verified event/market/outcome shape against a real live WNBA game,
+  verified decimal-to-American odds conversion against real values).
+  `pipeline/refresh_odds.py` matches schedule to sportsbook events and
+  de-vigs real odds with Shin's method. Runs correctly today, reports 0
+  stored (NBA off-season, nothing to match) — verified via WNBA live data
+  before writing the matching logic into tests as fixtures.
+- **D — Calibration page**: added `services/calibration_service.py` +
+  `GET /calibration` + frontend `CalibrationPage`.
+- **E — Scheduled data refresh**: `.github/workflows/refresh-data.yml`
+  runs daily against a rolling window using only ESPN's keyless API (no
+  secrets needed), commits schedule/hub caches + retrained model directly.
+  Predictions aren't scored in CI (`--skip-predictions` flag added) since
+  a stateless runner has no access to the deployed server's live
+  `tracking.db`.
+
+**Real bugs found and fixed along the way** (each discovered by actually
+running things against live data/services, not just by review):
+1. `data/espn.py`'s `get_scoreboard` crashed on a real preseason
+   exhibition game (Suns playing under a one-off "Melbourne Pnx"
+   international-tour branding with no normal team structure) — found
+   running the full-season backfill, not the 5-week one.
+2. `test_get_odds_no_api_key` only "passed" because no `.env` existed;
+   broke the moment a real `.env` was added, revealing it patched
+   `os.environ` while the code actually reads `config.ODDS_API_KEY`
+   (resolved once at import time).
+3. `sportsbook_api.py` (Task C) was entirely fabricated — 404s. Rewritten
+   against the real, verified API.
+4. **StaticFiles SPA routing**: direct navigation/refresh on `/hub`,
+   `/model`, `/calibration-report` 404'd — `StaticFiles(html=True)` only
+   serves `index.html` for `/`, and raises `HTTPException(404)` (not a
+   404 response) for anything else, so a naive status-code check doesn't
+   catch it either. Fixed with a proper `SPAStaticFiles` subclass. This
+   had been broken since Phase 6 and only surfaced now because previous
+   verification always started at `/` and navigated client-side.
+5. **Route collision**: the frontend's Calibration page and the backend's
+   `GET /calibration` were both literally `/calibration` — a direct visit
+   hit the API and showed raw JSON instead of the app. Renamed the
+   frontend route to `/calibration-report`.
+6. **Dockerfile never copied the schedule/hub caches** into the image at
+   all, even after they were committed to git — container booted with
+   real teams/model but empty Player Hub/Team Hub. Also needed the same
+   `data/cache/*` (not `data/cache/`) gitignore/dockerignore fix twice,
+   once per file, for the same underlying reason: a bare directory
+   pattern blocks traversal to the negated subpaths entirely.
+7. A Docker build hung indefinitely on the `amd64-builder` buildx node
+   (no active buildkit worker despite the process staying alive) —
+   switching to `--builder desktop-linux` explicitly fixed it.
+
+**Verification**: 239 backend tests passing, 36 frontend tests passing,
+`npm run build` clean, Docker image built and run live with real data
+(1391 games, 213 players, 1365 settled predictions), direct navigation to
+every SPA route verified working post-fix, screenshots taken via Chrome
+for Games/Data Hub/Player Hub/Calibration.

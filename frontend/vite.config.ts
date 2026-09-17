@@ -13,6 +13,8 @@ export default defineConfig({
       "/manifest": "http://127.0.0.1:8020",
       "/retrain": "http://127.0.0.1:8020",
       "/refresh-odds": "http://127.0.0.1:8020",
+      "/calibration": "http://127.0.0.1:8020",
+      "/season": "http://127.0.0.1:8020",
     },
   },
   test: {

@@ -51,3 +51,39 @@ def test_compute_edge_negative_when_market_favors_selection():
     from nba_predictor.odds.value_bets import compute_edge
 
     assert compute_edge(0.45, 0.52) == pytest.approx(-0.07)
+
+
+import math
+
+
+def test_std_from_mae_converts_via_half_normal_relation():
+    from nba_predictor.odds.value_bets import std_from_mae
+
+    mae = 10.0
+    std = std_from_mae(mae)
+
+    assert std == pytest.approx(mae * math.sqrt(math.pi / 2))
+
+
+def test_normal_cover_probability_is_half_when_mean_equals_line():
+    from nba_predictor.odds.value_bets import normal_cover_probability
+
+    assert normal_cover_probability(mean=5.0, line=5.0, std=10.0) == pytest.approx(0.5)
+
+
+def test_normal_cover_probability_increases_with_higher_mean():
+    from nba_predictor.odds.value_bets import normal_cover_probability
+
+    low = normal_cover_probability(mean=1.0, line=5.0, std=10.0)
+    high = normal_cover_probability(mean=9.0, line=5.0, std=10.0)
+
+    assert high > low
+    assert 0.0 < low < 1.0
+    assert 0.0 < high < 1.0
+
+
+def test_normal_cover_probability_zero_std_is_a_step_function():
+    from nba_predictor.odds.value_bets import normal_cover_probability
+
+    assert normal_cover_probability(mean=6.0, line=5.0, std=0.0) == 1.0
+    assert normal_cover_probability(mean=4.0, line=5.0, std=0.0) == 0.0

@@ -146,25 +146,26 @@ class TestOddsApi:
         assert isinstance(result, dict)
         assert result == {}
 
-    def test_get_odds_no_api_key(self):
-        """Test that missing API key raises error."""
-        import importlib
+    def test_get_odds_no_api_key(self, monkeypatch, clear_cache):
+        """Test that missing API key raises error.
+
+        Patches config.ODDS_API_KEY directly (the already-resolved value
+        odds_api._get_api_key() actually reads) rather than os.environ —
+        env-var manipulation doesn't work here since config.py reads it
+        once at import time via load_dotenv(), and a real .env file (with
+        a real key, reused from another project) can exist on disk
+        regardless of this process's os.environ at test time. Also needs
+        clear_cache: get_odds() checks its on-disk cache before ever
+        calling _get_api_key(), so a leftover bulk_odds.json from an
+        earlier test/run would make this test pass for the wrong reason.
+        """
+        from nba_predictor import config
         from nba_predictor.data import odds_api
-        
-        original_key = os.environ.get('ODDS_API_KEY')
-        os.environ.pop('ODDS_API_KEY', None)
-        
-        try:
-            importlib.reload(odds_api)
-            
-            with pytest.raises(ValueError, match="ODDS_API_KEY"):
-                odds_api.get_odds()
-        finally:
-            if original_key:
-                os.environ['ODDS_API_KEY'] = original_key
-            else:
-                os.environ.pop('ODDS_API_KEY', None)
-            importlib.reload(odds_api)
+
+        monkeypatch.setattr(config, "ODDS_API_KEY", None)
+
+        with pytest.raises(ValueError, match="ODDS_API_KEY"):
+            odds_api.get_odds()
 
     @patch("nba_predictor.data.odds_api._get_api_key")
     @patch("time.sleep")

@@ -1,198 +1,199 @@
-"""Tests for sportsbook_api module with mocked API responses."""
+from unittest.mock import patch
+
 import pytest
-from unittest.mock import MagicMock, patch
-import json
-import os
-from pathlib import Path
 
 
-class TestSportsbookAPI:
-    """Test suite for sportsbook_api module."""
+@pytest.fixture
+def clear_cache(tmp_path, monkeypatch):
+    from nba_predictor.data import sportsbook_api
 
-    @pytest.fixture(autouse=True)
-    def setup_module(self):
-        """Setup mocks before each test."""
-        pass
+    monkeypatch.setattr(sportsbook_api, "CACHE_DIR", tmp_path / "sportsbook")
+    monkeypatch.setattr(sportsbook_api.config, "SPORTSBOOK_API_KEY", "test-key")
+    return sportsbook_api.CACHE_DIR
 
-    @pytest.fixture
-    def clear_cache(self, tmp_path):
-        """Clear cache directory before each test."""
-        from nba_predictor import config
-        from nba_predictor.data import sportsbook_api
-        original_cache_dir = config.CACHE_DIR
-        config.CACHE_DIR = tmp_path / "cache"
-        config.CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        sportsbook_api.CACHE_DIR = config.CACHE_DIR / "sportsbook"
-        sportsbook_api.CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        yield sportsbook_api.CACHE_DIR
-        config.CACHE_DIR = original_cache_dir
 
-    def test_cache_key_returns_string(self, clear_cache):
-        """Test cache_key returns a string."""
-        from nba_predictor.data import sportsbook_api
-        
-        result = sportsbook_api.cache_key("0012400001")
-        
-        assert isinstance(result, str)
-        assert "0012400001" in result
+def test_decimal_to_american_favorite():
+    from nba_predictor.data.sportsbook_api import decimal_to_american
 
-    def test_cache_key_format(self, clear_cache):
-        """Test cache_key has correct format."""
-        from nba_predictor.data import sportsbook_api
-        
-        result = sportsbook_api.cache_key("0012400001")
-        
-        assert result.endswith(".json")
-        assert "odds_0012400001" in result
+    assert decimal_to_american(1.91) == -110
 
-    def test_cache_key_unique_per_game_id(self, clear_cache):
-        """Test cache_key is unique per game ID."""
-        from nba_predictor.data import sportsbook_api
-        
-        result1 = sportsbook_api.cache_key("0012400001")
-        result2 = sportsbook_api.cache_key("0012400002")
-        
-        assert result1 != result2
 
-    @patch("nba_predictor.data.sportsbook_api._get_api_key")
-    def test_get_odds_returns_dict(self, mock_api_key, clear_cache):
-        """Test get_odds returns dict with odds data."""
-        from nba_predictor.data import sportsbook_api
-        mock_api_key.return_value = "test-api-key"
-        
-        expected_response = {
-            "id": "0012400001",
-            "home_team": "Boston Celtics",
-            "away_team": "Brooklyn Nets",
-            "odds": {"h2h": {"Boston Celtics": -110, "Brooklyn Nets": -110}},
-        }
-        
-        with patch("nba_predictor.data.sportsbook_api._fetch_odds_api") as mock_fetch:
-            mock_fetch.return_value = expected_response
-            result = sportsbook_api.get_odds("0012400001")
-            
-        assert isinstance(result, dict)
+def test_decimal_to_american_underdog():
+    from nba_predictor.data.sportsbook_api import decimal_to_american
 
-    @patch("nba_predictor.data.sportsbook_api._get_api_key")
-    def test_get_odds_uses_cache_when_fresh(self, mock_api_key, clear_cache):
-        """Test get_odds uses cache when fresh."""
-        from nba_predictor.data import sportsbook_api
-        mock_api_key.return_value = "test-api-key"
-        
-        # Pre-populate cache
-        cache_path = clear_cache / "odds_0012400001.json"
-        cache_data = {"id": "0012400001", "cached_at": 9999999999}  # Far future timestamp
-        with open(cache_path, "w") as f:
-            json.dump(cache_data, f)
-        
-        with patch("nba_predictor.data.sportsbook_api._fetch_odds_api") as mock_fetch:
-            result = sportsbook_api.get_odds("0012400001")
-            
-        assert isinstance(result, dict)
+    assert decimal_to_american(9.5) == 850
 
-    @patch("nba_predictor.data.sportsbook_api._get_api_key")
-    def test_get_odds_refreshes_expired_cache(self, mock_api_key, clear_cache):
-        """Test get_odds refreshes expired cache."""
-        from nba_predictor.data import sportsbook_api
-        mock_api_key.return_value = "test-api-key"
-        
-        # Create expired cache file (older than 6 hours)
-        import time
-        from datetime import datetime, timedelta
-        cache_path = clear_cache / "odds_0012400001.json"
-        old_time = (datetime.now() - timedelta(hours=7)).timestamp()
-        expired_data = {"data": {"id": "0012400001"}, "cached_at": old_time}
-        with open(cache_path, "w") as f:
-            json.dump(expired_data, f)
-        
-        # Mock API response
-        with patch("nba_predictor.data.sportsbook_api._fetch_odds_api") as mock_fetch:
-            mock_fetch.return_value = {"id": "0012400001", "odds": {}}
-            
-            result = sportsbook_api.get_odds("0012400001")
-            
-        assert isinstance(result, dict)
-        # Verify API was called for expired cache
-        assert mock_fetch.called is True
 
-    @patch("nba_predictor.data.sportsbook_api._get_api_key")
-    def test_get_odds_handles_api_error(self, mock_api_key, clear_cache):
-        """Test get_odds handles API error."""
-        from nba_predictor.data import sportsbook_api
-        mock_api_key.return_value = "test-api-key"
-        
-        with patch("nba_predictor.data.sportsbook_api._fetch_odds_api") as mock_fetch:
-            mock_fetch.side_effect = Exception("HTTP Error")
-            
-            with pytest.raises(Exception):
-                sportsbook_api.get_odds("0012400001")
+def test_get_api_key_raises_when_missing(monkeypatch):
+    from nba_predictor import config
+    from nba_predictor.data.sportsbook_api import SportsbookAPIKeyMissing, _get_api_key
 
-    @patch("nba_predictor.data.sportsbook_api._get_api_key")
-    def test_get_player_props_returns_dict(self, mock_api_key, clear_cache):
-        """Test get_player_props returns dict."""
-        from nba_predictor.data import sportsbook_api
-        mock_api_key.return_value = "test-api-key"
-        
-        with patch("nba_predictor.data.sportsbook_api.requests.get") as mock_get:
-            mock_get.return_value = MagicMock(status_code=200, json=lambda: {"player_props": [{"player_id": "203999", "prop_type": "points", "odds": {"over": -110, "under": -110}}]})
-            result = sportsbook_api.get_player_props("0012400001")
-            
-        assert isinstance(result, dict)
-        assert "player_props" in result
+    monkeypatch.setattr(config, "SPORTSBOOK_API_KEY", None)
 
-    @patch("nba_predictor.data.sportsbook_api._get_api_key")
-    def test_get_player_props_uses_cache(self, mock_api_key, clear_cache):
-        """Test get_player_props uses cache."""
-        from nba_predictor.data import sportsbook_api
-        mock_api_key.return_value = "test-api-key"
-        
-        cache_path = clear_cache / "player_props_0012400001.json"
-        cache_data = {"data": {"player_props": []}, "cached_at": 9999999999}
-        with open(cache_path, "w") as f:
-            json.dump(cache_data, f)
-        
-        with patch("nba_predictor.data.sportsbook_api.requests.get") as mock_get:
-            result = sportsbook_api.get_player_props("0012400001")
-            
-        assert isinstance(result, dict)
-        assert mock_get.called is False
+    with pytest.raises(SportsbookAPIKeyMissing):
+        _get_api_key()
 
-    def test_complete_flow_with_realistic_data(self, clear_cache):
-        """Test complete flow with realistic data."""
-        from nba_predictor.data import sportsbook_api
-        
-        # Test cache_key function
-        key = sportsbook_api.cache_key("0012400001")
-        assert isinstance(key, str)
-        
-        # Test get_odds function exists and works
-        with patch("nba_predictor.data.sportsbook_api._get_api_key") as mock_key:
-            mock_key.return_value = "test-key"
-            
-            with patch("nba_predictor.data.sportsbook_api._fetch_odds_api") as mock_fetch:
-                mock_fetch.return_value = {
-                    "id": "0012400001",
-                    "teams": ["Boston Celtics", "Brooklyn Nets"],
-                    "player_props": [
-                        {"player_id": "203999", "prop_type": "points", "odds": {"over": -110, "under": -110}},
-                        {"player_id": "203540", "prop_type": "assists", "odds": {"over": -105, "under": -115}},
-                        {"player_id": "1629630", "prop_type": "rebounds", "odds": {"over": -120, "under": +100}},
-                    ],
-                }
-                result = sportsbook_api.get_odds("0012400001")
-                
-            assert isinstance(result, dict)
-            
-            # Get player props - uses requests.get directly, so patch that
-            with patch("nba_predictor.data.sportsbook_api.requests.get") as mock_get:
-                mock_get.return_value = MagicMock(status_code=200, json=lambda: {
-                    "player_props": [
-                        {"player_id": "203999", "prop_type": "points", "odds": {"over": -110, "under": -110}},
-                        {"player_id": "203540", "prop_type": "assists", "odds": {"over": -105, "under": -115}},
-                        {"player_id": "1629630", "prop_type": "rebounds", "odds": {"over": -120, "under": +100}},
+
+def _real_spread_event():
+    """Shape captured live from GET /v0/events?eventKeys= on a real WNBA game."""
+    return {
+        "key": "annT-Ajrx-meld",
+        "markets": [
+            {
+                "type": "MONEYLINE",
+                "participantKey": None,
+                "outcomes": {
+                    "DRAFT_KINGS": [
+                        {
+                            "modifier": 0, "payout": 1.5, "type": "WIN",
+                            "participantKey": "away-key",
+                            "participant": {"name": "Boston Celtics", "shortName": "BOS"},
+                        },
+                        {
+                            "modifier": 0, "payout": 2.7, "type": "WIN",
+                            "participantKey": "home-key",
+                            "participant": {"name": "Miami Heat", "shortName": "MIA"},
+                        },
                     ]
-                })
-                props = sportsbook_api.get_player_props("0012400001")
-                
-            assert isinstance(props, dict)
-            assert "player_props" in props
+                },
+            },
+            {
+                "type": "POINT_SPREAD",
+                "participantKey": None,
+                "outcomes": {
+                    "DRAFT_KINGS": [
+                        {
+                            "modifier": 15.5, "payout": 1.91, "type": "WIN",
+                            "participant": {"name": "Boston Celtics", "shortName": "BOS"},
+                        },
+                        {
+                            "modifier": -15.5, "payout": 1.91, "type": "WIN",
+                            "participant": {"name": "Miami Heat", "shortName": "MIA"},
+                        },
+                    ]
+                },
+            },
+            {
+                "type": "POINT_TOTAL",
+                "participantKey": None,
+                "outcomes": {
+                    "DRAFT_KINGS": [
+                        {"modifier": 168.5, "payout": 1.89, "type": "OVER", "participant": None},
+                        {"modifier": 168.5, "payout": 1.92, "type": "UNDER", "participant": None},
+                    ]
+                },
+            },
+        ],
+    }
+
+
+@patch("nba_predictor.data.sportsbook_api._get")
+def test_fetch_nba_events_raw_returns_events(mock_get, clear_cache):
+    from nba_predictor.data.sportsbook_api import fetch_nba_events_raw
+
+    mock_get.return_value = {"events": [{"key": "e1", "name": "BOS @ MIA"}]}
+
+    events = fetch_nba_events_raw()
+
+    assert events == [{"key": "e1", "name": "BOS @ MIA"}]
+
+
+@patch("nba_predictor.data.sportsbook_api._get")
+def test_fetch_nba_events_raw_caches_across_calls(mock_get, clear_cache):
+    from nba_predictor.data.sportsbook_api import fetch_nba_events_raw
+
+    mock_get.return_value = {"events": []}
+
+    fetch_nba_events_raw()
+    fetch_nba_events_raw()
+
+    assert mock_get.call_count == 1
+
+
+@patch("nba_predictor.data.sportsbook_api._get")
+def test_fetch_event_odds_raw_unwraps_nested_groups(mock_get, clear_cache):
+    from nba_predictor.data.sportsbook_api import fetch_event_odds_raw
+
+    mock_get.return_value = {"events": [[_real_spread_event()]]}
+
+    event = fetch_event_odds_raw("annT-Ajrx-meld")
+
+    assert event["key"] == "annT-Ajrx-meld"
+
+
+@patch("nba_predictor.data.sportsbook_api._get")
+def test_fetch_event_odds_raw_returns_none_for_empty_response(mock_get, clear_cache):
+    from nba_predictor.data.sportsbook_api import fetch_event_odds_raw
+
+    mock_get.return_value = {"events": []}
+
+    assert fetch_event_odds_raw("missing") is None
+
+
+@patch("nba_predictor.data.sportsbook_api._get")
+def test_get_odds_maps_team_markets_with_selection_and_american_odds(mock_get, clear_cache):
+    from nba_predictor.data.sportsbook_api import get_odds
+
+    mock_get.return_value = {"events": [[_real_spread_event()]]}
+
+    rows = get_odds("annT-Ajrx-meld")
+    by_market = {}
+    for row in rows:
+        by_market.setdefault(row["market"], []).append(row)
+
+    assert len(by_market["h2h"]) == 2
+    assert len(by_market["spread"]) == 2
+    assert len(by_market["total"]) == 2
+
+    spread_bos = next(r for r in by_market["spread"] if r["selection"] == "BOS")
+    assert spread_bos["point"] == 15.5
+    assert spread_bos["american_odds"] == -110
+
+    total_over = next(r for r in by_market["total"] if r["selection"] == "over")
+    assert total_over["point"] == 168.5
+
+
+@patch("nba_predictor.data.sportsbook_api._get")
+def test_get_odds_returns_empty_list_for_missing_event(mock_get, clear_cache):
+    from nba_predictor.data.sportsbook_api import get_odds
+
+    mock_get.return_value = {"events": []}
+
+    assert get_odds("missing") == []
+
+
+@patch("nba_predictor.data.sportsbook_api._get")
+def test_get_player_props_returns_empty_when_no_player_markets_posted(mock_get, clear_cache):
+    from nba_predictor.data.sportsbook_api import get_player_props
+
+    mock_get.return_value = {"events": [[_real_spread_event()]]}
+
+    assert get_player_props("annT-Ajrx-meld") == []
+
+
+@patch("nba_predictor.data.sportsbook_api._get")
+def test_get_player_props_extracts_markets_with_participant_key(mock_get, clear_cache):
+    from nba_predictor.data.sportsbook_api import get_player_props
+
+    event = {
+        "key": "e1",
+        "markets": [
+            {
+                "type": "PLAYER_POINTS",
+                "participantKey": "player-key",
+                "participant": {"name": "Jayson Tatum"},
+                "outcomes": {
+                    "DRAFT_KINGS": [
+                        {"modifier": 27.5, "payout": 1.91, "type": "OVER"},
+                    ]
+                },
+            }
+        ],
+    }
+    mock_get.return_value = {"events": [[event]]}
+
+    props = get_player_props("e1")
+
+    assert len(props) == 1
+    assert props[0]["player"] == "Jayson Tatum"
+    assert props[0]["point"] == 27.5

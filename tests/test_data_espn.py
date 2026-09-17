@@ -86,6 +86,46 @@ def test_get_scoreboard_handles_upcoming_game_without_score(mock_fetch, clear_ca
 
 
 @patch("nba_predictor.data.espn._fetch_json")
+def test_get_scoreboard_skips_non_standard_exhibition_events(mock_fetch, clear_cache):
+    from nba_predictor.data import espn
+
+    mock_fetch.return_value = {
+        "events": [
+            {
+                "id": "401812487",
+                "name": "Melbourne Pnx at New Orleans Pelicans",
+                "competitions": [
+                    {
+                        "status": {"type": {"completed": True}},
+                        "competitors": [
+                            {"homeAway": "home", "team": {"abbreviation": "NOP"}, "score": "100"},
+                            {"homeAway": "away"},
+                        ],
+                    }
+                ],
+            },
+            {
+                "id": "1",
+                "competitions": [
+                    {
+                        "status": {"type": {"completed": True}},
+                        "competitors": [
+                            {"homeAway": "home", "team": {"abbreviation": "BOS"}, "score": "110"},
+                            {"homeAway": "away", "team": {"abbreviation": "MIA"}, "score": "100"},
+                        ],
+                    }
+                ],
+            },
+        ]
+    }
+
+    games = espn.get_scoreboard("2025-10-04")
+
+    assert len(games) == 1
+    assert games[0]["game_id"] == "1"
+
+
+@patch("nba_predictor.data.espn._fetch_json")
 def test_get_scoreboard_caches_across_calls(mock_fetch, clear_cache):
     from nba_predictor.data import espn
 

@@ -15,6 +15,7 @@ from nba_predictor import config
 from nba_predictor.data.team_reference import TEAMS
 
 _NAME_TO_ABBREVIATION = {team.name: team.abbreviation for team in TEAMS}
+_KNOWN_ABBREVIATIONS = {team.abbreviation for team in TEAMS}
 
 ESPN_SITE_BASE = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba"
 
@@ -83,8 +84,20 @@ def get_scoreboard(date: str) -> list[dict]:
     games = []
     for event in data.get("events", []):
         competitors = event["competitions"][0]["competitors"]
-        home = next(c for c in competitors if c["homeAway"] == "home")
-        away = next(c for c in competitors if c["homeAway"] == "away")
+        home = next((c for c in competitors if c["homeAway"] == "home"), None)
+        away = next((c for c in competitors if c["homeAway"] == "away"), None)
+        if home is None or away is None or "abbreviation" not in home.get("team", {}) or "abbreviation" not in away.get("team", {}):
+            # Non-standard entries (e.g. international preseason exhibitions
+            # played under a special one-off team branding) don't have a
+            # normal team structure — skip rather than crash, since these
+            # aren't real regular-franchise games our model tracks anyway.
+            continue
+
+        home_abbr = normalize_abbreviation(home["team"]["abbreviation"])
+        away_abbr = normalize_abbreviation(away["team"]["abbreviation"])
+        if home_abbr not in _KNOWN_ABBREVIATIONS or away_abbr not in _KNOWN_ABBREVIATIONS:
+            continue
+
         status = event["competitions"][0].get("status", {}).get("type", {})
         completed = bool(status.get("completed", False))
 
@@ -92,8 +105,8 @@ def get_scoreboard(date: str) -> list[dict]:
             {
                 "game_id": event["id"],
                 "game_date": date,
-                "home_team": normalize_abbreviation(home["team"]["abbreviation"]),
-                "away_team": normalize_abbreviation(away["team"]["abbreviation"]),
+                "home_team": home_abbr,
+                "away_team": away_abbr,
                 "completed": completed,
                 "home_pts": int(home["score"]) if completed and "score" in home else None,
                 "away_pts": int(away["score"]) if completed and "score" in away else None,

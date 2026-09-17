@@ -285,3 +285,74 @@ placeholder navy/orange theme. 188 backend tests passing, 32 frontend tests
 passing, both `pytest` and `npm run build` clean.
 
 Phase 6 (deploy) has not been started.
+
+---
+
+## Phase 6 complete + real data pipeline wired up
+
+**Date:** 2026-09-16
+
+Phase 6 finished: `public_snapshot.py`, `Dockerfile`, `.dockerignore`,
+GitHub Actions (`deploy-azure.yml`, `refresh-public-snapshot.yml`), README
+runbook. Building and running the actual Docker image surfaced a real
+deploy-breaking bug: `config.PROJECT_ROOT` was derived from `__file__`'s
+location relative to the installed package, which is correct under an
+editable install (local dev) but resolves to the Python installation
+directory under a real `pip install .` (the Docker image) — this silently
+broke the tracking DB, cache dirs, and the static-frontend mount (`/` 404'd
+in the container). Fixed with a `PROJECT_ROOT` env var override, set to
+`/app` in the Dockerfile.
+
+Then, at the user's request, replaced the seeded/fake demo data with a real
+pipeline. Two more real bugs surfaced along the way: `stats.nba.com`
+(nba_api, the spec's chosen primary stats source) is unreachable from this
+sandbox network, and the existing `data/espn.py` module was calling
+fabricated ESPN endpoints that 404 against the live API (built against
+mocks that were never checked against the real service). Rewrote
+`espn.py` against ESPN's actual site API — `scoreboard` (schedule),
+`summary?event=` (box scores — has everything Four Factors needs: FGM/FGA,
+3PM/3PA, FTM/FTA, OREB/DREB, TOV), and `injuries` — all keyless.
+
+Added `pipeline/ingest.py`: fetches real schedule + box scores for a date
+range, writes schedule/hub JSON caches from real games (team records,
+Elo-based power rankings computed via chronological replay, conference
+standings), builds a real training frame, calls the existing retrain
+pipeline, then scores every game with real pre-game rolling features
+(no leakage — `build_training_frame` only looks at prior games via
+`shift(1)`) and stores those as real tracked predictions.
+
+Ran it for real against **2026-02-16 to 2026-03-22** (246 games, all from
+ESPN's live API — note: system clock in this environment reads
+2026-09-16, which is NBA off-season; the 2025-26 season already ended in
+June 2026, so this ingested window is real historical season data, not a
+live/current slice). Real result: **63.3% win-probability accuracy on a
+chronological holdout**, 229 predictions stored. Team Hub/Power
+Rankings/Standings are all computed from these same 246 real games — note
+the records are a ~5-week slice, not full-season, so some teams show
+small/lopsided records (e.g. an 0-16 team) that reflect that slice, not a
+real season total.
+
+**Explicitly not done in this pass** (said plainly, not silently skipped):
+- Player Hub / player prop predictions — ESPN's box score does have
+  individual player stats but aggregating them wasn't done here;
+  `hub/players.json` is an empty array.
+- Market odds/value-bets for these predictions — live odds APIs
+  (RapidAPI Sportsbook, The Odds API; keys copied into `.env` from
+  PL_Predictor, gitignored) only carry lines for current/upcoming games,
+  not games from Feb/Mar 2026 that already happened, so `market_probability`/
+  `edge` are correctly `null` throughout — this is the honest state given
+  API limitations, not a bug to chase.
+- A wider historical ingest (the ~35-day window took ~10 minutes
+  sequentially against ESPN, mostly per-game box-score fetches with retry
+  backoff) — re-running `python -m nba_predictor.pipeline.ingest --start
+  ... --end ...` with a wider range will backfill more.
+
+Also added `GET /games/week` (`services/schedule_repository.
+get_games_for_week` + `monday_of`) and switched the frontend Games page
+from a single-date picker to week navigation with day-grouped cards, per
+request.
+
+Verified live: rebuilt the Docker image, ran the ingest inside the running
+container, confirmed real data flowing through `/hub/teams`, `/games/week`,
+`/manifest`, and the frontend UI (screenshots taken via Chrome). 212
+backend tests passing, 33 frontend tests passing.

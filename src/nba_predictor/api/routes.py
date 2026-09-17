@@ -15,18 +15,28 @@ from nba_predictor.api.deps import (
 from nba_predictor.api.schemas import (
     GameDetailOut,
     GameOut,
+    HeadToHeadMeetingOut,
     MarketPredictionOut,
     PlayerPropOut,
     PredictionOut,
+    SeasonBoundsOut,
     TeamOut,
     TrackRecordOut,
 )
 from nba_predictor.data.team_reference import TEAMS, get_team
+from nba_predictor.odds.value_bets import std_from_mae
 from nba_predictor.pipeline.refresh_odds import refresh_market_predictions
 from nba_predictor.pipeline.retrain import run_retrain_pipeline
 from nba_predictor.services.calibration_service import compute_model_calibration
-from nba_predictor.services.hub_service import compute_track_record, load_hub_cache
-from nba_predictor.services.schedule_repository import get_game, get_games_for_date, get_games_for_week
+from nba_predictor.services.hub_service import compute_track_record, load_hub_cache, load_player_name_map
+from nba_predictor.services.schedule_repository import (
+    first_week_start,
+    get_game,
+    get_games_for_date,
+    get_games_for_week,
+    get_head_to_head,
+    get_recent_form,
+)
 from nba_predictor.tracking import store
 from nba_predictor import config
 
@@ -100,13 +110,27 @@ def get_game_detail(
         MarketPredictionOut(
             market=row["market"], selection=row["selection"], model_probability=row["model_probability"],
             market_probability=row["market_probability"], edge=row["edge"], bookmaker=row["bookmaker"],
-            american_odds=row["american_odds"],
+            american_odds=row["american_odds"], point=row["point"],
         )
         for row in store.get_market_predictions_for_game(db_path, game_id)
     ]
 
+    head_to_head = [
+        HeadToHeadMeetingOut(
+            game_id=g["game_id"], game_date=g["game_date"], home_team=g["home_team"], away_team=g["away_team"],
+            home_pts=g.get("home_pts"), away_pts=g.get("away_pts"),
+        )
+        for g in get_head_to_head(schedule, game["home_team"], game["away_team"], before_date=game["game_date"])
+    ]
+
     base = _game_out(game, db_path)
-    return GameDetailOut(**base.model_dump(), markets=markets)
+    return GameDetailOut(
+        **base.model_dump(),
+        markets=markets,
+        head_to_head=head_to_head,
+        home_recent_form=get_recent_form(schedule, game["home_team"], before_date=game["game_date"]),
+        away_recent_form=get_recent_form(schedule, game["away_team"], before_date=game["game_date"]),
+    )
 
 
 @router.get("/games/{game_id}/players", response_model=list[PlayerPropOut])
@@ -117,10 +141,12 @@ def get_game_players(
     if game is None:
         raise HTTPException(status_code=404, detail=f"Unknown game: {game_id}")
 
+    name_by_id = load_player_name_map(config.DATA_DIR / "cache" / "hub" / "players.json")
+
     return [
         PlayerPropOut(
-            player_id=row["player_id"], player_name=row["player_id"], stat=row["stat"],
-            predicted_value=row["predicted_value"],
+            player_id=row["player_id"], player_name=name_by_id.get(row["player_id"], row["player_id"]),
+            stat=row["stat"], predicted_value=row["predicted_value"],
         )
         for row in store.get_player_predictions_for_game(db_path, game_id)
     ]
@@ -184,6 +210,26 @@ def retrain(
 
 
 @router.post("/refresh-odds", dependencies=[Depends(require_admin)], status_code=202)
-def refresh_odds(schedule: list[dict] = Depends(get_schedule), db_path: Path = Depends(get_db_path)) -> dict:
-    stored = refresh_market_predictions(schedule, db_path)
+def refresh_odds(
+    schedule: list[dict] = Depends(get_schedule),
+    db_path: Path = Depends(get_db_path),
+    models_dir: Path = Depends(get_models_dir),
+) -> dict:
+    margin_std, total_std = 12.0, 15.0
+    manifest_path = models_dir / "manifest.json"
+    if manifest_path.exists():
+        metrics = json.loads(manifest_path.read_text()).get("metrics", {})
+        margin_mae = metrics.get("margin", {}).get("mae")
+        total_mae = metrics.get("total", {}).get("mae")
+        if margin_mae is not None:
+            margin_std = std_from_mae(margin_mae)
+        if total_mae is not None:
+            total_std = std_from_mae(total_mae)
+
+    stored = refresh_market_predictions(schedule, db_path, margin_std=margin_std, total_std=total_std)
     return {"status": "ok", "market_predictions_stored": stored}
+
+
+@router.get("/season/first-week", response_model=SeasonBoundsOut)
+def season_first_week(schedule: list[dict] = Depends(get_schedule)) -> SeasonBoundsOut:
+    return SeasonBoundsOut(first_week_start=first_week_start(schedule))

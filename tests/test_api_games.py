@@ -97,6 +97,43 @@ def test_get_game_players_returns_tracked_props(tmp_path, monkeypatch):
     assert body[0]["predicted_value"] == 27.5
 
 
+def test_get_game_players_uses_real_player_name_from_hub_cache(tmp_path, monkeypatch):
+    import json
+
+    from nba_predictor.tracking import store
+    from nba_predictor import config
+
+    client, db_path = _client_with_overrides(tmp_path, monkeypatch)
+    store.insert_player_prediction(
+        db_path, game_id="g1", player_id="203999", stat="points",
+        predicted_value=27.5, created_at="2026-11-01T12:00:00",
+    )
+
+    hub_dir = tmp_path / "data" / "cache" / "hub"
+    hub_dir.mkdir(parents=True)
+    (hub_dir / "players.json").write_text(json.dumps([{"player_id": "203999", "player_name": "Nikola Jokic"}]))
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path / "data")
+
+    response = client.get("/games/g1/players")
+    assert response.status_code == 200
+    assert response.json()[0]["player_name"] == "Nikola Jokic"
+
+
+def test_get_game_players_falls_back_to_id_when_name_unknown(tmp_path, monkeypatch):
+    from nba_predictor.tracking import store
+    from nba_predictor import config
+
+    client, db_path = _client_with_overrides(tmp_path, monkeypatch)
+    store.insert_player_prediction(
+        db_path, game_id="g1", player_id="203999", stat="points",
+        predicted_value=27.5, created_at="2026-11-01T12:00:00",
+    )
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path / "no-such-data-dir")
+
+    response = client.get("/games/g1/players")
+    assert response.json()[0]["player_name"] == "203999"
+
+
 def _client_with_week_schedule(tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
     import json

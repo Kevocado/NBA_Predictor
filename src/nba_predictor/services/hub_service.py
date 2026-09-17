@@ -12,6 +12,13 @@ def load_hub_cache(path: Path) -> list[dict]:
     return json.loads(path.read_text())
 
 
+def load_player_name_map(path: Path) -> dict[str, str]:
+    if not path.exists():
+        return {}
+    rows = json.loads(path.read_text())
+    return {row["player_id"]: row["player_name"] for row in rows}
+
+
 def _settle_game_outcome(db_path: Path, schedule: list[dict]) -> TrackRecordOut | None:
     """Settles the model's own win/loss call (predictions.home_win_prob >= 0.5)
     against each game's actual result. This is fully real: every prediction

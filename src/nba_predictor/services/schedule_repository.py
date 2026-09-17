@@ -29,3 +29,47 @@ def monday_of(iso_date: str) -> str:
     """The Monday of the week containing iso_date (YYYY-MM-DD)."""
     d = date.fromisoformat(iso_date)
     return (d - timedelta(days=d.weekday())).isoformat()
+
+
+def first_week_start(schedule: list[dict]) -> str | None:
+    """The Monday of the week containing the earliest game_date in the
+    schedule, or None if the schedule is empty."""
+    if not schedule:
+        return None
+    earliest = min(game["game_date"] for game in schedule)
+    return monday_of(earliest)
+
+
+def get_head_to_head(schedule: list[dict], team_a: str, team_b: str, before_date: str, limit: int = 5) -> list[dict]:
+    """Prior completed meetings between team_a and team_b, strictly before
+    before_date, most recent first."""
+    matches = [
+        game
+        for game in schedule
+        if game.get("completed")
+        and game["game_date"] < before_date
+        and {game["home_team"], game["away_team"]} == {team_a, team_b}
+    ]
+    matches.sort(key=lambda g: g["game_date"], reverse=True)
+    return matches[:limit]
+
+
+def get_recent_form(schedule: list[dict], team: str, before_date: str, limit: int = 5) -> list[str]:
+    """Team's last `limit` completed results strictly before before_date, as
+    "W"/"L", most recent first."""
+    games = [
+        game
+        for game in schedule
+        if game.get("completed")
+        and game["game_date"] < before_date
+        and team in (game["home_team"], game["away_team"])
+    ]
+    games.sort(key=lambda g: g["game_date"], reverse=True)
+
+    results = []
+    for game in games[:limit]:
+        is_home = game["home_team"] == team
+        team_pts = game["home_pts"] if is_home else game["away_pts"]
+        opp_pts = game["away_pts"] if is_home else game["home_pts"]
+        results.append("W" if team_pts > opp_pts else "L")
+    return results

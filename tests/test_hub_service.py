@@ -15,6 +15,26 @@ def test_load_hub_cache_reads_json_array(tmp_path):
     assert load_hub_cache(path) == [{"abbreviation": "BOS", "points_per_game": 118.2}]
 
 
+def test_load_player_name_map_builds_id_to_name_dict(tmp_path):
+    import json
+
+    from nba_predictor.services.hub_service import load_player_name_map
+
+    path = tmp_path / "players.json"
+    path.write_text(json.dumps([
+        {"player_id": "4251", "player_name": "Paul George"},
+        {"player_id": "203999", "player_name": "Nikola Jokic"},
+    ]))
+
+    assert load_player_name_map(path) == {"4251": "Paul George", "203999": "Nikola Jokic"}
+
+
+def test_load_player_name_map_missing_file_returns_empty_dict(tmp_path):
+    from nba_predictor.services.hub_service import load_player_name_map
+
+    assert load_player_name_map(tmp_path / "does-not-exist.json") == {}
+
+
 def test_compute_track_record_groups_by_market(tmp_path):
     from nba_predictor.services.hub_service import compute_track_record
     from nba_predictor.tracking import store

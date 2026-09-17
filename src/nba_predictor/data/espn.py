@@ -170,6 +170,59 @@ def get_boxscore(event_id: str) -> dict:
     return result
 
 
+def _to_float(value: str | None) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def get_player_boxscore(event_id: str) -> list[dict]:
+    """Per-player box score rows for a completed game, one row per athlete
+    who actually played (didNotPlay entries have no stats to parse).
+
+    ESPN's summary response pairs a per-team `labels` array (e.g.
+    ["MIN","PTS","FG","3PT","FT","REB","AST","TO","STL","BLK","OREB",
+    "DREB","PF","+/-"]) with each athlete's `stats`, a parallel array of
+    string values in the same order — confirmed live.
+    """
+    cached = _load_cache("player_boxscore", event_id)
+    if cached is not None:
+        return cached["rows"]
+
+    data = _fetch_json(f"{ESPN_SITE_BASE}/summary", params={"event": event_id})
+    player_blocks = data.get("boxscore", {}).get("players", [])
+
+    rows = []
+    for team_block in player_blocks:
+        abbr = normalize_abbreviation(team_block["team"]["abbreviation"])
+        for stat_group in team_block.get("statistics", []):
+            labels = stat_group.get("labels", [])
+            for entry in stat_group.get("athletes", []):
+                if entry.get("didNotPlay") or not entry.get("stats"):
+                    continue
+                stats = dict(zip(labels, entry["stats"]))
+                athlete = entry.get("athlete", {})
+                rows.append(
+                    {
+                        "player_id": athlete.get("id", ""),
+                        "player_name": athlete.get("displayName", ""),
+                        "team": abbr,
+                        "position": (athlete.get("position") or {}).get("abbreviation", ""),
+                        "minutes": _to_float(stats.get("MIN")),
+                        "points": _to_float(stats.get("PTS")),
+                        "rebounds": _to_float(stats.get("REB")),
+                        "assists": _to_float(stats.get("AST")),
+                        "fg_made_attempted": stats.get("FG", "0-0"),
+                        "three_made_attempted": stats.get("3PT", "0-0"),
+                        "ft_made_attempted": stats.get("FT", "0-0"),
+                    }
+                )
+
+    _save_cache("player_boxscore", event_id, {"rows": rows})
+    return rows
+
+
 def get_injuries() -> list[dict]:
     """League-wide current injury report."""
     cached = _load_cache("injuries", "current")

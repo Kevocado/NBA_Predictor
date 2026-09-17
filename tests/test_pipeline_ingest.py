@@ -128,6 +128,75 @@ def test_compute_power_rankings_ranks_winner_higher():
     assert by_team["BOS"]["rank"] == 1
 
 
+@patch("nba_predictor.pipeline.ingest.espn.get_player_boxscore")
+def test_fetch_player_boxscores_only_fetches_completed_games(mock_boxscore):
+    from nba_predictor.pipeline.ingest import fetch_player_boxscores
+
+    mock_boxscore.return_value = [{"player_id": "1"}]
+    games = [
+        {"game_id": "1", "completed": True},
+        {"game_id": "2", "completed": False},
+    ]
+
+    result = fetch_player_boxscores(games)
+
+    assert list(result.keys()) == ["1"]
+    mock_boxscore.assert_called_once_with("1")
+
+
+def _player_box_row(player_id, name, team, minutes, points, rebounds, assists, fg="4-8", fg3="1-3", ft="2-2"):
+    return {
+        "player_id": player_id, "player_name": name, "team": team, "position": "G",
+        "minutes": minutes, "points": points, "rebounds": rebounds, "assists": assists,
+        "fg_made_attempted": fg, "three_made_attempted": fg3, "ft_made_attempted": ft,
+    }
+
+
+def test_compute_player_hub_aggregates_real_per_game_rows():
+    from nba_predictor.pipeline.ingest import compute_player_hub
+
+    games = [
+        {"game_id": "g1", "game_date": "2026-03-01", "home_team": "BOS", "away_team": "MIA", "home_fga": 90, "away_fga": 85},
+        {"game_id": "g2", "game_date": "2026-03-03", "home_team": "MIA", "away_team": "BOS", "home_fga": 88, "away_fga": 92},
+    ]
+    player_boxscores = {
+        "g1": [_player_box_row("p1", "Jayson Tatum", "BOS", 34.0, 30.0, 8.0, 5.0)],
+        "g2": [_player_box_row("p1", "Jayson Tatum", "BOS", 36.0, 26.0, 6.0, 7.0)],
+    }
+
+    rows = compute_player_hub(games, player_boxscores)
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["player_name"] == "Jayson Tatum"
+    assert row["points_per_game"] == pytest.approx(28.0)
+    assert row["rebounds_per_game"] == pytest.approx(7.0)
+    assert row["assists_per_game"] == pytest.approx(6.0)
+    assert row["fg_pct"] == pytest.approx(8 / 16, abs=0.01)
+    assert row["minutes_per_game"] == pytest.approx(35.0)
+    assert row["rating"] > 0
+
+
+def test_compute_player_hub_live_form_uses_last_five_games_only():
+    from nba_predictor.pipeline.ingest import compute_player_hub
+
+    games = [
+        {"game_id": f"g{i}", "game_date": f"2026-03-{i:02d}", "home_team": "BOS", "away_team": "MIA", "home_fga": 90, "away_fga": 85}
+        for i in range(1, 8)
+    ]
+    # First two games: low output. Last five: high output.
+    player_boxscores = {}
+    for i in range(1, 8):
+        points = 10.0 if i <= 2 else 30.0
+        player_boxscores[f"g{i}"] = [_player_box_row("p1", "Jayson Tatum", "BOS", 30.0, points, 5.0, 5.0)]
+
+    rows = compute_player_hub(games, player_boxscores)
+    row = rows[0]
+
+    # Season average is pulled down by the two low games; form rating (last 5) should be higher.
+    assert row["live_form_rating"] > row["rating"]
+
+
 def test_score_and_store_predictions_stores_real_model_output(tmp_path):
     import numpy as np
     import pandas as pd

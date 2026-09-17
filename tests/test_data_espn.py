@@ -172,6 +172,59 @@ def test_get_boxscore_parses_four_factors_inputs(mock_fetch, clear_cache):
 
 
 @patch("nba_predictor.data.espn._fetch_json")
+def test_get_player_boxscore_parses_played_athletes(mock_fetch, clear_cache):
+    from nba_predictor.data import espn
+
+    mock_fetch.return_value = {
+        "boxscore": {
+            "players": [
+                {
+                    "team": {"abbreviation": "UTAH"},
+                    "statistics": [
+                        {
+                            "labels": ["MIN", "PTS", "FG", "3PT", "FT", "REB", "AST"],
+                            "athletes": [
+                                {
+                                    "didNotPlay": False,
+                                    "stats": ["29", "13", "6-11", "1-4", "0-0", "12", "5"],
+                                    "athlete": {"id": "1", "displayName": "Kyle Filipowski", "position": {"abbreviation": "F"}},
+                                },
+                                {
+                                    "didNotPlay": True,
+                                    "stats": [],
+                                    "athlete": {"id": "2", "displayName": "Kevin Love", "position": {"abbreviation": "F"}},
+                                },
+                            ],
+                        }
+                    ],
+                }
+            ]
+        }
+    }
+
+    rows = espn.get_player_boxscore("401810448")
+
+    assert len(rows) == 1
+    assert rows[0]["player_name"] == "Kyle Filipowski"
+    assert rows[0]["team"] == "UTA"
+    assert rows[0]["points"] == 13.0
+    assert rows[0]["rebounds"] == 12.0
+    assert rows[0]["fg_made_attempted"] == "6-11"
+
+
+@patch("nba_predictor.data.espn._fetch_json")
+def test_get_player_boxscore_caches_across_calls(mock_fetch, clear_cache):
+    from nba_predictor.data import espn
+
+    mock_fetch.return_value = {"boxscore": {"players": []}}
+
+    espn.get_player_boxscore("1")
+    espn.get_player_boxscore("1")
+
+    assert mock_fetch.call_count == 1
+
+
+@patch("nba_predictor.data.espn._fetch_json")
 def test_get_injuries_maps_team_display_name_to_abbreviation(mock_fetch, clear_cache):
     from nba_predictor.data import espn
 

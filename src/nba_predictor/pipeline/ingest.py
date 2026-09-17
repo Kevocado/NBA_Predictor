@@ -25,6 +25,14 @@ def _daterange(start_date: str, end_date: str) -> list[str]:
     return [(start + timedelta(days=i)).isoformat() for i in range(days + 1)]
 
 
+def _parse_made_attempted(value: str) -> tuple[float, float]:
+    try:
+        made, attempted = value.split("-")
+        return float(made), float(attempted)
+    except (ValueError, AttributeError):
+        return 0.0, 0.0
+
+
 def fetch_schedule_range(start_date: str, end_date: str) -> list[dict]:
     """All games (completed and upcoming) for each date in the range, via ESPN."""
     games = []
@@ -194,6 +202,110 @@ def compute_standings(games: list[dict]) -> list[dict]:
     return standings
 
 
+def fetch_player_boxscores(games: list[dict]) -> dict[str, list[dict]]:
+    """game_id -> per-player box score rows, for completed games only.
+
+    A second ESPN request per game (get_player_boxscore is cached
+    separately from get_boxscore) — callers should bound `games` to a
+    recent window rather than a full season to avoid doubling the whole
+    backfill's request count.
+    """
+    result = {}
+    for game in games:
+        if game.get("completed"):
+            result[game["game_id"]] = espn.get_player_boxscore(game["game_id"])
+    return result
+
+
+def compute_player_hub(games: list[dict], player_boxscores: dict[str, list[dict]]) -> list[dict]:
+    """Real per-player aggregates from real box scores.
+
+    `rating`/`live_form_rating` are a simple game-score-style composite
+    (PTS + 0.4*REB + 0.7*AST) over the full window vs. the last 5 games —
+    a simplified, clearly-labeled formula, not the league's own advanced
+    metric. `usage_rate` is each game's (player FGA + 0.44*player FTA) /
+    team FGA, averaged — a field-goal-attempt-share proxy, not the full
+    NBA usage% formula (which also needs team possessions/minutes-on-court
+    context this data doesn't carry per-player).
+    """
+    games_by_id = {g["game_id"]: g for g in games}
+    per_player_games: dict[str, list[dict]] = {}
+
+    ordered_game_ids = sorted(player_boxscores, key=lambda gid: games_by_id.get(gid, {}).get("game_date", ""))
+    for game_id in ordered_game_ids:
+        game = games_by_id.get(game_id)
+        if game is None:
+            continue
+        for row in player_boxscores[game_id]:
+            team_fga = game["home_fga"] if row["team"] == game["home_team"] else game.get("away_fga")
+            fgm, fga = _parse_made_attempted(row["fg_made_attempted"])
+            fg3m, fg3a = _parse_made_attempted(row["three_made_attempted"])
+            ftm, fta = _parse_made_attempted(row["ft_made_attempted"])
+            per_player_games.setdefault(row["player_id"], []).append(
+                {
+                    "player_name": row["player_name"],
+                    "team": row["team"],
+                    "position": row["position"],
+                    "minutes": row["minutes"],
+                    "points": row["points"],
+                    "rebounds": row["rebounds"],
+                    "assists": row["assists"],
+                    "fgm": fgm, "fga": fga, "fg3m": fg3m, "fg3a": fg3a, "ftm": ftm, "fta": fta,
+                    "usage_share": (fga + 0.44 * fta) / team_fga if team_fga else 0.0,
+                }
+            )
+
+    def _avg(values: list[float]) -> float:
+        return sum(values) / len(values) if values else 0.0
+
+    def _game_score(pts: float, reb: float, ast: float) -> float:
+        return pts + 0.4 * reb + 0.7 * ast
+
+    rows = []
+    for player_id, entries in per_player_games.items():
+        total_fgm = sum(e["fgm"] for e in entries)
+        total_fga = sum(e["fga"] for e in entries)
+        total_fg3m = sum(e["fg3m"] for e in entries)
+        total_fg3a = sum(e["fg3a"] for e in entries)
+        total_ftm = sum(e["ftm"] for e in entries)
+        total_fta = sum(e["fta"] for e in entries)
+        last5 = entries[-5:]
+
+        rows.append(
+            {
+                "player_id": player_id,
+                "player_name": entries[-1]["player_name"],
+                "team": entries[-1]["team"],
+                "position": entries[-1]["position"],
+                "rating": round(
+                    _game_score(
+                        _avg([e["points"] for e in entries]),
+                        _avg([e["rebounds"] for e in entries]),
+                        _avg([e["assists"] for e in entries]),
+                    ),
+                    1,
+                ),
+                "live_form_rating": round(
+                    _game_score(
+                        _avg([e["points"] for e in last5]),
+                        _avg([e["rebounds"] for e in last5]),
+                        _avg([e["assists"] for e in last5]),
+                    ),
+                    1,
+                ),
+                "points_per_game": round(_avg([e["points"] for e in entries]), 1),
+                "rebounds_per_game": round(_avg([e["rebounds"] for e in entries]), 1),
+                "assists_per_game": round(_avg([e["assists"] for e in entries]), 1),
+                "fg_pct": round(total_fgm / total_fga, 3) if total_fga else 0.0,
+                "three_pt_pct": round(total_fg3m / total_fg3a, 3) if total_fg3a else 0.0,
+                "ft_pct": round(total_ftm / total_fta, 3) if total_fta else 0.0,
+                "usage_rate": round(_avg([e["usage_share"] for e in entries]), 3),
+                "minutes_per_game": round(_avg([e["minutes"] for e in entries]), 1),
+            }
+        )
+    return rows
+
+
 def score_and_store_predictions(games_df: pd.DataFrame, models_dir: Path, db_path: Path, model_version: str) -> int:
     """Scores every game that survives feature assembly with the trained model
     and stores the result as a tracked prediction. Returns the number stored.
@@ -236,6 +348,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Ingest real NBA schedule/box-score data and refresh caches.")
     parser.add_argument("--start", default="2026-02-16")
     parser.add_argument("--end", default="2026-03-22")
+    parser.add_argument(
+        "--player-hub-days", type=int, default=21,
+        help="How many days (most recent, within --start/--end) to fetch per-player box scores for. "
+        "0 skips Player Hub entirely. Bounded by default since it's a second ESPN request per game.",
+    )
     args = parser.parse_args()
 
     print(f"Fetching schedule {args.start} to {args.end} from ESPN...")
@@ -255,7 +372,15 @@ def main() -> None:
     (hub_dir / "teams.json").write_text(json.dumps(compute_team_hub(games)))
     (hub_dir / "rankings.json").write_text(json.dumps(compute_power_rankings(games)))
     (hub_dir / "standings.json").write_text(json.dumps(compute_standings(games)))
-    (hub_dir / "players.json").write_text(json.dumps([]))
+
+    if args.player_hub_days > 0:
+        cutoff = (date.fromisoformat(args.end) - timedelta(days=args.player_hub_days)).isoformat()
+        recent_games = [g for g in games if g["game_date"] >= cutoff]
+        print(f"Fetching player box scores for {len(recent_games)} games since {cutoff}...")
+        player_boxscores = fetch_player_boxscores(recent_games)
+        (hub_dir / "players.json").write_text(json.dumps(compute_player_hub(recent_games, player_boxscores)))
+    else:
+        (hub_dir / "players.json").write_text(json.dumps([]))
     print(f"  wrote hub caches to {hub_dir}")
 
     training_df = to_training_frame(games)

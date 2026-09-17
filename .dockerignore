@@ -4,7 +4,11 @@ __pycache__/
 .pytest_cache/
 node_modules/
 frontend/dist/
-data/cache/
+data/cache/*
+!data/cache/schedule/
+!data/cache/schedule/games.json
+!data/cache/hub/
+!data/cache/hub/*.json
 data/tracking.db
 .git/
 .github/

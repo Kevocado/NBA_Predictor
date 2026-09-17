@@ -22,7 +22,7 @@ export default function GameCard({ game, onSelect }: GameCardProps) {
         {game.completed ? (
           <div className="shrink-0 text-right">
             <div className="stat-display text-2xl leading-none">
-              {game.home_pts} <span className="text-[var(--color-net-faint)]">–</span> {game.away_pts}
+              {game.away_pts} <span className="text-[var(--color-net-faint)]">–</span> {game.home_pts}
             </div>
             <div className="mt-1 text-xs text-[var(--color-net-faint)]">Final</div>
           </div>

@@ -21,7 +21,7 @@ describe("GameCard", () => {
     render(<GameCard game={finished} onSelect={() => {}} />);
 
     const scoreContainer = screen.getByText(/110/).parentElement;
-    expect(scoreContainer).toHaveTextContent("110 – 102");
+    expect(scoreContainer).toHaveTextContent("102 – 110");
     expect(screen.getByText(/final/i)).toBeInTheDocument();
     expect(screen.queryByText(/62%/)).not.toBeInTheDocument();
   });

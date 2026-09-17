@@ -16,3 +16,4 @@ frontend/*.tsbuildinfo
 *.egg-info/
 dist/
 build/
+.worktrees/

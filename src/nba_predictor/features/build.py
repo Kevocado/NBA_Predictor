@@ -40,7 +40,7 @@ def _long_format_box_scores(games: pd.DataFrame) -> pd.DataFrame:
     return pd.concat([home_rows, away_rows], ignore_index=True)
 
 
-def build_training_frame(games: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
+def build_feature_frame(games: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     games = games.copy()
 
     for col in _OPTIONAL_COLUMNS_DEFAULT_ZERO:
@@ -82,8 +82,9 @@ def build_training_frame(games: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
 
         home_last_game[home] = game_date
         away_last_game[away] = game_date
-        home_results.setdefault(home, []).append("W" if row["home_win"] == 1 else "L")
-        away_results.setdefault(away, []).append("L" if row["home_win"] == 1 else "W")
+        if pd.notna(row["home_win"]):
+            home_results.setdefault(home, []).append("W" if row["home_win"] == 1 else "L")
+            away_results.setdefault(away, []).append("L" if row["home_win"] == 1 else "W")
 
     games["home_rest_days"] = rest_days_home
     games["away_rest_days"] = rest_days_away
@@ -99,3 +100,7 @@ def build_training_frame(games: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
 
     games = games.dropna(subset=FEATURE_COLUMNS).reset_index(drop=True)
     return games, FEATURE_COLUMNS
+
+
+def build_training_frame(games: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
+    return build_feature_frame(games)

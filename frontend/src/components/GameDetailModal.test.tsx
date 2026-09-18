@@ -202,3 +202,44 @@ it("does not show a post-match verdict for an upcoming game", async () => {
   await screen.findByRole("heading", { name: /BOS/ });
   expect(screen.queryByTestId("post-match-verdict")).not.toBeInTheDocument();
 });
+
+const settledDetail = {
+  ...completedDetail,
+  markets: [
+    { market: "h2h", selection: "BOS", model_probability: 0.62, market_probability: 0.55, edge: 0.07, bookmaker: "DraftKings", american_odds: -130, point: null },
+    { market: "spread", selection: "MIA", model_probability: 0.4, market_probability: 0.45, edge: -0.05, bookmaker: "DraftKings", american_odds: 110, point: 4.5 },
+    { market: "total", selection: "over", model_probability: 0.5, market_probability: 0.5, edge: 0.0, bookmaker: "FanDuel", american_odds: -105, point: 224.5 },
+  ],
+};
+
+it("marks an h2h selection that matches the actual winner as a hit", async () => {
+  vi.mocked(api.getGameDetail).mockResolvedValue(settledDetail);
+  vi.mocked(api.getGamePlayers).mockResolvedValue([]);
+
+  render(<GameDetailModal gameId="g2" onClose={() => {}} />);
+
+  const rows = await screen.findAllByTestId("market-row");
+  expect(rows[0]).toHaveTextContent("✓");
+});
+
+it("marks a spread selection that failed to cover as a miss", async () => {
+  vi.mocked(api.getGameDetail).mockResolvedValue(settledDetail);
+  vi.mocked(api.getGamePlayers).mockResolvedValue([]);
+
+  render(<GameDetailModal gameId="g2" onClose={() => {}} />);
+
+  const rows = await screen.findAllByTestId("market-row");
+  const spreadRow = rows.find((r) => r.textContent?.includes("spread"));
+  expect(spreadRow).toHaveTextContent("✗");
+});
+
+it("shows no verdict for a market row without a point value on an unsettled market", async () => {
+  const noOddsDetail = { ...completedDetail, markets: [] };
+  vi.mocked(api.getGameDetail).mockResolvedValue(noOddsDetail);
+  vi.mocked(api.getGamePlayers).mockResolvedValue([]);
+
+  render(<GameDetailModal gameId="g2" onClose={() => {}} />);
+
+  await screen.findByRole("heading", { name: /BOS/ });
+  expect(screen.queryAllByTestId("market-row")).toHaveLength(0);
+});

@@ -42,6 +42,29 @@ export function computePostMatchVerdict(detail: GameDetail): PostMatchVerdict | 
   };
 }
 
+export function marketVerdict(market: MarketPrediction, detail: GameDetail): boolean | null {
+  if (!detail.completed || detail.home_pts === null || detail.away_pts === null) return null;
+
+  if (market.market === "h2h") {
+    const actualWinner = detail.home_pts > detail.away_pts ? detail.home_team : detail.away_team;
+    return market.selection === actualWinner;
+  }
+  if (market.market === "spread") {
+    if (market.point === null) return null;
+    const teamMargin =
+      market.selection === detail.home_team
+        ? detail.home_pts - detail.away_pts
+        : detail.away_pts - detail.home_pts;
+    return teamMargin > -market.point;
+  }
+  if (market.market === "total") {
+    if (market.point === null) return null;
+    const actualTotal = detail.home_pts + detail.away_pts;
+    return market.selection === "over" ? actualTotal > market.point : actualTotal < market.point;
+  }
+  return null;
+}
+
 function FormBadge({ result }: { result: string }) {
   return (
     <span
@@ -185,11 +208,14 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
                 <th>Model %</th>
                 <th>Market %</th>
                 <th>Edge</th>
+                <th>Result</th>
               </tr>
             </thead>
             <tbody>
-              {sortedMarkets.map((market, i) => (
-                <tr key={i} data-testid="market-row">
+              {sortedMarkets.map((market, i) => {
+                const verdict = detail ? marketVerdict(market, detail) : null;
+                return (
+                  <tr key={i} data-testid="market-row">
                   <td>{market.market}</td>
                   <td>{market.selection}</td>
                   <td>{market.point !== null ? market.point : "—"}</td>
@@ -208,8 +234,18 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
                   >
                     {market.edge !== null ? `${(market.edge * 100).toFixed(1)}pp` : "—"}
                   </td>
+                  <td>
+                    {verdict === null ? (
+                      "—"
+                    ) : verdict ? (
+                      <span className="text-[var(--color-win)]">✓</span>
+                    ) : (
+                      <span className="text-[var(--color-shotclock)]">✗</span>
+                    )}
+                  </td>
                 </tr>
-              ))}
+              );
+              })}
             </tbody>
           </table>
         )}

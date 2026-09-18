@@ -69,6 +69,33 @@ def train_player_prop_models(training_df: pd.DataFrame, models_dir: Path, model_
     return manifest
 
 
+def score_and_store_player_predictions(training_df: pd.DataFrame, models_dir: Path, db_path: Path, model_version: str) -> int:
+    """Backtest: scores every completed player-game row that survived
+    feature assembly with the trained per-stat models, stores each as a
+    tracked player prediction."""
+    frame, feature_cols = build_player_feature_frame(training_df)
+    if len(frame) == 0:
+        return 0
+
+    models = {stat: joblib.load(models_dir / f"player_{stat}_model.pkl") for stat in PLAYER_STAT_TARGET_COLUMNS}
+    predictions = {stat: predict_player_stat(model, frame[feature_cols]) for stat, model in models.items()}
+
+    created_at = datetime.now(timezone.utc).isoformat()
+    stored = 0
+    for i, row in frame.iterrows():
+        for stat in PLAYER_STAT_TARGET_COLUMNS:
+            store.insert_player_prediction(
+                db_path,
+                game_id=row["game_id"],
+                player_id=row["player_id"],
+                stat=stat,
+                predicted_value=float(predictions[stat][i]),
+                created_at=created_at,
+            )
+            stored += 1
+    return stored
+
+
 def fetch_schedule_range(start_date: str, end_date: str) -> list[dict]:
     """All games (completed and upcoming) for each date in the range, via ESPN."""
     games = []

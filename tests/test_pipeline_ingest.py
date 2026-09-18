@@ -327,6 +327,59 @@ def test_score_upcoming_games_returns_zero_when_nothing_upcoming(tmp_path):
     assert stored == 0
 
 
+def test_score_and_store_player_predictions_stores_real_model_output(tmp_path):
+    import numpy as np
+    import pandas as pd
+
+    from nba_predictor.pipeline.ingest import score_and_store_player_predictions, train_player_prop_models
+    from nba_predictor.tracking import store
+
+    rng = np.random.default_rng(11)
+    dates = pd.date_range("2026-02-01", periods=20).astype(str)
+    rows = []
+    for i, game_date in enumerate(dates):
+        rows.append(
+            {
+                "player_id": "p1", "player_name": "Jayson Tatum", "team": "BOS",
+                "game_id": f"g{i}", "game_date": game_date,
+                "points": float(rng.integers(15, 35)), "rebounds": float(rng.integers(3, 10)),
+                "assists": float(rng.integers(2, 8)), "fg3m": float(rng.integers(0, 6)),
+                "minutes": float(rng.integers(28, 38)),
+            }
+        )
+    training_df = pd.DataFrame(rows)
+
+    models_dir = tmp_path / "models"
+    train_player_prop_models(training_df, models_dir, model_version="v-test", trained_at="2026-03-01T00:00:00")
+
+    db_path = tmp_path / "tracking.db"
+    store.init_db(db_path)
+
+    stored = score_and_store_player_predictions(training_df, models_dir, db_path, model_version="v-test")
+
+    # 19 rows survive feature assembly (first game has no rolling history) x 4 stats
+    assert stored == 19 * 4
+    rows = store.get_player_predictions_for_game(db_path, "g5")
+    assert len(rows) == 4
+    stats = {r["stat"] for r in rows}
+    assert stats == {"points", "rebounds", "assists", "threes"}
+
+
+def test_score_and_store_player_predictions_returns_zero_for_empty_frame(tmp_path):
+    import pandas as pd
+
+    from nba_predictor.pipeline.ingest import score_and_store_player_predictions
+    from nba_predictor.tracking import store
+
+    db_path = tmp_path / "tracking.db"
+    store.init_db(db_path)
+    empty_df = pd.DataFrame(columns=["player_id", "player_name", "team", "game_id", "game_date", "points", "rebounds", "assists", "fg3m", "minutes"])
+
+    stored = score_and_store_player_predictions(empty_df, tmp_path / "models", db_path, model_version="v-test")
+
+    assert stored == 0
+
+
 def test_train_player_prop_models_writes_four_model_files_and_manifest(tmp_path):
     import numpy as np
     import pandas as pd

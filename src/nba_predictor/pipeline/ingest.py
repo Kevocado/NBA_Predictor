@@ -9,7 +9,7 @@ import pandas as pd
 from nba_predictor import config
 from nba_predictor.data import espn
 from nba_predictor.data.team_reference import get_team
-from nba_predictor.features.build import build_training_frame
+from nba_predictor.features.build import build_feature_frame, build_training_frame
 from nba_predictor.features.context import current_streak
 from nba_predictor.features.ratings import compute_possessions
 from nba_predictor.models.game_outcome import predict_win_probability
@@ -95,6 +95,72 @@ def to_training_frame(games: list[dict]) -> pd.DataFrame:
             row[f"away_{field}"] = g[f"away_{field}"]
         rows.append(row)
     return pd.DataFrame(rows)
+
+
+def to_scoring_frame(games: list[dict]) -> pd.DataFrame:
+    """All games (completed + upcoming), shaped for
+    features.build.build_feature_frame. Upcoming games (or completed games
+    missing a full box score) get None for home_win and every box-score
+    field — build_feature_frame computes their rolling features from real
+    prior games only, never touching a nonexistent result."""
+    rows = []
+    for g in games:
+        row = {
+            "game_id": g["game_id"],
+            "game_date": g["game_date"],
+            "home_team": g["home_team"],
+            "away_team": g["away_team"],
+        }
+        if g.get("completed") and f"home_{BOX_FIELDS[0]}" in g:
+            row["home_win"] = int(g["home_pts"] > g["away_pts"])
+            for field in BOX_FIELDS:
+                row[f"home_{field}"] = g[f"home_{field}"]
+                row[f"away_{field}"] = g[f"away_{field}"]
+        else:
+            row["home_win"] = None
+            for field in BOX_FIELDS:
+                row[f"home_{field}"] = None
+                row[f"away_{field}"] = None
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def score_upcoming_games(games: list[dict], models_dir: Path, db_path: Path, model_version: str) -> int:
+    """Scores every not-yet-completed game using real prior-game rolling
+    features (via to_scoring_frame + build_feature_frame) and stores the
+    result in the same predictions table score_and_store_predictions
+    writes to. Only rows for games that are not completed are scored —
+    a completed game already gets its backtest prediction from
+    score_and_store_predictions."""
+    scoring_df = to_scoring_frame(games)
+    frame, feature_cols = build_feature_frame(scoring_df)
+    upcoming_frame = frame[frame["home_win"].isna()].reset_index(drop=True)
+    if len(upcoming_frame) == 0:
+        return 0
+
+    # Trusted artifacts: these .pkl files are written by run_retrain_pipeline
+    # (via joblib.dump) in this same pipeline run — not from an external or
+    # user-uploaded source (same trust boundary as score_and_store_predictions).
+    win_model = joblib.load(models_dir / "win_probability_model.pkl")
+    margin_model = joblib.load(models_dir / "margin_model.pkl")
+    total_model = joblib.load(models_dir / "total_model.pkl")
+
+    win_probs = predict_win_probability(win_model, upcoming_frame[feature_cols])
+    margins = margin_model.predict(upcoming_frame[feature_cols])
+    totals = total_model.predict(upcoming_frame[feature_cols])
+
+    created_at = datetime.now(timezone.utc).isoformat()
+    for i, row in upcoming_frame.iterrows():
+        store.insert_prediction(
+            db_path,
+            game_id=row["game_id"],
+            created_at=created_at,
+            model_version=model_version,
+            home_win_prob=float(win_probs[i]),
+            predicted_margin=float(margins[i]),
+            predicted_total=float(totals[i]),
+        )
+    return len(upcoming_frame)
 
 
 def _completed_with_box(games: list[dict]) -> list[dict]:

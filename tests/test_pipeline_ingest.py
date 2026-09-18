@@ -1,5 +1,6 @@
 from unittest.mock import patch
 
+import pandas as pd
 import pytest
 
 
@@ -248,3 +249,79 @@ def test_compute_standings_assigns_seeds_by_win_pct():
     assert east[0]["win_pct"] == 1.0
     assert east[1]["abbreviation"] == "MIA"
     assert east[1]["games_back"] == 2.0
+
+
+def test_to_scoring_frame_includes_upcoming_games_with_null_fields():
+    from nba_predictor.pipeline.ingest import to_scoring_frame
+
+    games = _sample_completed_games() + [
+        {"game_id": "3", "game_date": "2026-03-05", "home_team": "LAL", "away_team": "GSW", "completed": False, "home_pts": None, "away_pts": None},
+    ]
+
+    df = to_scoring_frame(games)
+
+    assert len(df) == 3
+    upcoming_row = df[df["game_id"] == "3"].iloc[0]
+    assert pd.isna(upcoming_row["home_win"])
+    assert pd.isna(upcoming_row["home_fgm"])
+    completed_row = df[df["game_id"] == "1"].iloc[0]
+    assert completed_row["home_win"] == 1
+
+
+def test_score_upcoming_games_stores_predictions_for_not_yet_played_games(tmp_path):
+    import numpy as np
+    import pandas as pd
+
+    from nba_predictor.pipeline.ingest import score_upcoming_games
+    from nba_predictor.pipeline.retrain import run_retrain_pipeline
+    from nba_predictor.tracking import store
+
+    rng = np.random.default_rng(3)
+    teams = ["BOS", "MIA", "LAL", "GSW"]
+    dates = pd.date_range("2026-02-01", periods=50).astype(str)
+    completed_games = []
+    for i, game_date in enumerate(dates):
+        home, away = teams[i % 4], teams[(i + 1) % 4]
+        completed_games.append(
+            {
+                "game_id": f"g{i}", "game_date": game_date, "home_team": home, "away_team": away,
+                "completed": True, "home_pts": 110, "away_pts": 105,
+                "home_fgm": 40, "home_fga": 88, "home_fg3m": 12, "home_tov": 11, "home_oreb": 9, "home_dreb": 32, "home_fta": 20,
+                "away_fgm": 38, "away_fga": 90, "away_fg3m": 10, "away_tov": 13, "away_oreb": 10, "away_dreb": 30, "away_fta": 18,
+            }
+        )
+    upcoming_game = {
+        "game_id": "g-upcoming", "game_date": "2026-04-01", "home_team": "BOS", "away_team": "MIA",
+        "completed": False, "home_pts": None, "away_pts": None,
+    }
+    games = completed_games + [upcoming_game]
+
+    from nba_predictor.pipeline.ingest import to_training_frame
+    train_df = to_training_frame(completed_games)
+    for i, row in train_df.iterrows():
+        train_df.at[i, "home_win"] = int(rng.random() > 0.4)
+
+    models_dir = tmp_path / "models"
+    run_retrain_pipeline(train_df, models_dir, model_version="v-test", trained_at="2026-03-01T00:00:00")
+
+    db_path = tmp_path / "tracking.db"
+    store.init_db(db_path)
+
+    stored = score_upcoming_games(games, models_dir, db_path, model_version="v-test")
+
+    assert stored == 1
+    rows = store.get_predictions_for_game(db_path, "g-upcoming")
+    assert len(rows) == 1
+    assert 0.0 <= rows[0]["home_win_prob"] <= 1.0
+
+
+def test_score_upcoming_games_returns_zero_when_nothing_upcoming(tmp_path):
+    from nba_predictor.pipeline.ingest import score_upcoming_games
+    from nba_predictor.tracking import store
+
+    db_path = tmp_path / "tracking.db"
+    store.init_db(db_path)
+
+    stored = score_upcoming_games(_sample_completed_games(), tmp_path / "models", db_path, model_version="v-test")
+
+    assert stored == 0

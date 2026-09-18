@@ -58,3 +58,10 @@ describe("api client", () => {
     expect(records[0].hit_rate).toBe(0.6);
   });
 });
+  it("getGamePlayers response includes actual_value", async () => {
+    mockFetchOnce([{ player_id: "203999", player_name: "Nikola Jokic", stat: "points", predicted_value: 27.5, actual_value: 24.0 }]);
+
+    const players = await api.getGamePlayers("g1");
+
+    expect(players[0].actual_value).toBe(24.0);
+  });

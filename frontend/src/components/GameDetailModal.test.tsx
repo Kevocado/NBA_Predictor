@@ -28,7 +28,7 @@ const detail = {
   away_recent_form: ["L", "L", "W"],
 };
 
-const players = [{ player_id: "203999", player_name: "Nikola Jokic", stat: "points", predicted_value: 27.5 }];
+const players = [{ player_id: "203999", player_name: "Nikola Jokic", stat: "points", predicted_value: 27.5, actual_value: null }];
 
 describe("GameDetailModal", () => {
   it("shows a loading state before data arrives", () => {

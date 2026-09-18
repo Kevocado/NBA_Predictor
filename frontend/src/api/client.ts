@@ -60,6 +60,7 @@ export interface PlayerProp {
   player_name: string;
   stat: string;
   predicted_value: number;
+  actual_value: number | null;
 }
 
 export interface TrackRecord {

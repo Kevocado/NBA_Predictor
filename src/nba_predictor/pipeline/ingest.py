@@ -594,12 +594,14 @@ def score_and_store_predictions(games_df: pd.DataFrame, models_dir: Path, db_pat
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Ingest real NBA schedule/box-score data and refresh caches.")
-    parser.add_argument("--start", default="2026-02-16")
-    parser.add_argument("--end", default="2026-03-22")
+    parser.add_argument("--start", default="2025-10-01")
+    parser.add_argument("--end", default="2026-11-30")
     parser.add_argument(
         "--player-hub-days", type=int, default=21,
         help="How many days (most recent, within --start/--end) to fetch per-player box scores for. "
-        "0 skips Player Hub entirely. Bounded by default since it's a second ESPN request per game.",
+        "0 skips Player Hub and player-prop training/scoring entirely. Also bounds the player-prop "
+        "model's training window — pass a value covering the whole --start/--end range (e.g. 9999) "
+        "for a real full backfill. Bounded by default since it's a second ESPN request per game.",
     )
     parser.add_argument(
         "--skip-predictions", action="store_true",
@@ -635,6 +637,8 @@ def main() -> None:
         player_boxscores = fetch_player_boxscores(recent_games)
         (hub_dir / "players.json").write_text(json.dumps(compute_player_hub(recent_games, player_boxscores)))
     else:
+        recent_games = []
+        player_boxscores = {}
         (hub_dir / "players.json").write_text(json.dumps([]))
     print(f"  wrote hub caches to {hub_dir}")
 
@@ -643,17 +647,36 @@ def main() -> None:
 
     models_dir = config.PROJECT_ROOT / "models"
     model_version = datetime.now(timezone.utc).strftime("v%Y%m%d%H%M%S")
-    manifest = run_retrain_pipeline(
-        training_df, models_dir, model_version=model_version, trained_at=datetime.now(timezone.utc).isoformat()
-    )
+    trained_at = datetime.now(timezone.utc).isoformat()
+    manifest = run_retrain_pipeline(training_df, models_dir, model_version=model_version, trained_at=trained_at)
     print(f"  trained {model_version}: {manifest['metrics']}")
+
+    player_training_df = to_player_training_frame(recent_games, player_boxscores)
+    print(f"Training player prop models on {len(player_training_df)} real player-game rows...")
+    player_manifest = train_player_prop_models(player_training_df, models_dir, model_version=model_version, trained_at=trained_at)
+    print(f"  trained player props: {player_manifest['metrics']}")
 
     if args.skip_predictions:
         print("  --skip-predictions set: not scoring/storing predictions")
     else:
         store.init_db(config.TRACKING_DB_PATH)
+
         stored = score_and_store_predictions(training_df, models_dir, config.TRACKING_DB_PATH, model_version)
         print(f"  stored {stored} real predictions for browsing in the UI")
+
+        stored_upcoming = score_upcoming_games(games, models_dir, config.TRACKING_DB_PATH, model_version)
+        print(f"  stored {stored_upcoming} predictions for upcoming games")
+
+        player_stored = score_and_store_player_predictions(player_training_df, models_dir, config.TRACKING_DB_PATH, model_version)
+        print(f"  stored {player_stored} real player predictions")
+
+        player_stored_upcoming = score_upcoming_player_props(
+            recent_games, player_boxscores, models_dir, config.TRACKING_DB_PATH, model_version
+        )
+        print(f"  stored {player_stored_upcoming} player predictions for upcoming games")
+
+        outcomes_stored = store_player_outcomes(player_training_df, config.TRACKING_DB_PATH)
+        print(f"  stored {outcomes_stored} real player outcomes for settlement")
 
 
 if __name__ == "__main__":

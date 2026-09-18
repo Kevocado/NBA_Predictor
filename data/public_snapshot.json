@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-17T14:27:19.048098+00:00",
+  "generated_at": "2026-09-18T15:37:51.756124+00:00",
   "schedule": [
     {
       "game_id": "401812480",
@@ -16779,14 +16779,7 @@
       }
     ]
   },
-  "track_record": [
-    {
-      "market": "game_outcome",
-      "total_predictions": 1365,
-      "correct_predictions": 1171,
-      "hit_rate": 0.858
-    }
-  ],
+  "track_record": [],
   "manifest": {
     "model_version": "v20260917142656",
     "trained_at": "2026-09-17T14:26:56.625945+00:00",

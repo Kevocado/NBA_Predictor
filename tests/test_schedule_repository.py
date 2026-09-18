@@ -81,3 +81,137 @@ def test_monday_of_returns_preceding_monday():
 
     assert monday_of("2026-02-19") == "2026-02-16"  # Thursday -> that week's Monday
     assert monday_of("2026-02-22") == "2026-02-16"  # Sunday -> that week's Monday
+
+
+def _completed_game(game_id, date, home, away, home_pts, away_pts):
+    return {
+        "game_id": game_id, "game_date": date, "home_team": home, "away_team": away,
+        "completed": True, "home_pts": home_pts, "away_pts": away_pts,
+    }
+
+
+def test_get_head_to_head_returns_prior_meetings_sorted_most_recent_first():
+    from nba_predictor.services.schedule_repository import get_head_to_head
+
+    schedule = [
+        _completed_game("g1", "2026-01-01", "BOS", "MIA", 110, 100),
+        _completed_game("g2", "2026-02-01", "MIA", "BOS", 95, 105),
+        _completed_game("g3", "2026-03-01", "BOS", "LAL", 120, 100),
+        _completed_game("g4", "2026-04-01", "BOS", "MIA", 90, 92),
+    ]
+
+    result = get_head_to_head(schedule, "BOS", "MIA", before_date="2026-04-01", limit=5)
+
+    assert [g["game_id"] for g in result] == ["g2", "g1"]
+
+
+def test_get_head_to_head_only_counts_completed_games():
+    from nba_predictor.services.schedule_repository import get_head_to_head
+
+    schedule = [
+        {"game_id": "g1", "game_date": "2026-01-01", "home_team": "BOS", "away_team": "MIA", "completed": False, "home_pts": None, "away_pts": None},
+    ]
+
+    assert get_head_to_head(schedule, "BOS", "MIA", before_date="2026-02-01") == []
+
+
+def test_get_head_to_head_respects_limit():
+    from nba_predictor.services.schedule_repository import get_head_to_head
+
+    schedule = [_completed_game(f"g{i}", f"2026-0{i}-01", "BOS", "MIA", 100 + i, 90 + i) for i in range(1, 6)]
+
+    result = get_head_to_head(schedule, "BOS", "MIA", before_date="2026-06-01", limit=2)
+    assert len(result) == 2
+
+
+def test_get_recent_form_returns_win_loss_letters_most_recent_first():
+    from nba_predictor.services.schedule_repository import get_recent_form
+
+    schedule = [
+        _completed_game("g1", "2026-01-01", "BOS", "MIA", 110, 100),
+        _completed_game("g2", "2026-01-05", "LAL", "BOS", 100, 90),
+        _completed_game("g3", "2026-01-10", "BOS", "DEN", 88, 95),
+    ]
+
+    result = get_recent_form(schedule, "BOS", before_date="2026-01-15", limit=5)
+    assert result == ["L", "L", "W"]
+
+
+def test_get_recent_form_excludes_games_on_or_after_before_date():
+    from nba_predictor.services.schedule_repository import get_recent_form
+
+    schedule = [
+        _completed_game("g1", "2026-01-01", "BOS", "MIA", 110, 100),
+        _completed_game("g2", "2026-01-10", "BOS", "MIA", 90, 100),
+    ]
+
+    assert get_recent_form(schedule, "BOS", before_date="2026-01-10", limit=5) == ["W"]
+
+
+def test_default_week_start_empty_schedule_returns_none():
+    from nba_predictor.services.schedule_repository import default_week_start
+
+    assert default_week_start([], today="2026-09-17") is None
+
+
+def test_default_week_start_uses_earliest_game_when_far_from_next_upcoming():
+    from nba_predictor.services.schedule_repository import default_week_start, monday_of
+
+    schedule = [
+        _completed_game("g0", "2025-10-21", "BOS", "MIA", 110, 100),
+        {"game_id": "g1", "game_date": "2026-10-21", "home_team": "BOS", "away_team": "MIA", "completed": False, "home_pts": None, "away_pts": None},
+    ]
+
+    # More than 7 days before 2026-10-21 (the only upcoming game).
+    result = default_week_start(schedule, today="2026-09-17")
+
+    assert result == monday_of("2025-10-21")
+
+
+def test_default_week_start_switches_to_upcoming_week_exactly_seven_days_before():
+    from nba_predictor.services.schedule_repository import default_week_start, monday_of
+
+    schedule = [
+        _completed_game("g0", "2025-10-21", "BOS", "MIA", 110, 100),
+        {"game_id": "g1", "game_date": "2026-10-21", "home_team": "BOS", "away_team": "MIA", "completed": False, "home_pts": None, "away_pts": None},
+    ]
+
+    result = default_week_start(schedule, today="2026-10-14")  # exactly 7 days before
+
+    assert result == monday_of("2026-10-21")
+
+
+def test_default_week_start_stays_on_old_season_one_day_before_the_switch():
+    from nba_predictor.services.schedule_repository import default_week_start, monday_of
+
+    schedule = [
+        _completed_game("g0", "2025-10-21", "BOS", "MIA", 110, 100),
+        {"game_id": "g1", "game_date": "2026-10-21", "home_team": "BOS", "away_team": "MIA", "completed": False, "home_pts": None, "away_pts": None},
+    ]
+
+    result = default_week_start(schedule, today="2026-10-13")  # 8 days before
+
+    assert result == monday_of("2025-10-21")
+
+
+def test_default_week_start_uses_today_once_season_is_underway():
+    from nba_predictor.services.schedule_repository import default_week_start, monday_of
+
+    schedule = [
+        _completed_game("g0", "2025-10-21", "BOS", "MIA", 110, 100),
+        {"game_id": "g1", "game_date": "2026-10-21", "home_team": "BOS", "away_team": "MIA", "completed": False, "home_pts": None, "away_pts": None},
+    ]
+
+    result = default_week_start(schedule, today="2026-10-25")  # after the next game's date
+
+    assert result == monday_of("2026-10-25")
+
+
+def test_default_week_start_falls_back_to_earliest_when_nothing_upcoming():
+    from nba_predictor.services.schedule_repository import default_week_start, monday_of
+
+    schedule = [_completed_game("g0", "2025-10-21", "BOS", "MIA", 110, 100)]
+
+    result = default_week_start(schedule, today="2026-09-17")
+
+    assert result == monday_of("2025-10-21")

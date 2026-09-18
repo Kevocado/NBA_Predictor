@@ -31,12 +31,26 @@ def monday_of(iso_date: str) -> str:
     return (d - timedelta(days=d.weekday())).isoformat()
 
 
-def first_week_start(schedule: list[dict]) -> str | None:
-    """The Monday of the week containing the earliest game_date in the
-    schedule, or None if the schedule is empty."""
+def default_week_start(schedule: list[dict], today: str) -> str | None:
+    """Monday of the earliest game overall, UNLESS today >= (the next
+    not-yet-completed game's date - 7 days) — then Monday of the week
+    containing max(today, next_game_date), so once the season is
+    underway "today" naturally takes over rather than the boundary
+    freezing on opening night. Falls back to the earliest-game behavior
+    if there is no upcoming game at all. None only if the schedule is
+    completely empty."""
     if not schedule:
         return None
+
     earliest = min(game["game_date"] for game in schedule)
+    upcoming_dates = sorted(g["game_date"] for g in schedule if not g.get("completed"))
+    if not upcoming_dates:
+        return monday_of(earliest)
+
+    next_game_date = upcoming_dates[0]
+    threshold = (date.fromisoformat(next_game_date) - timedelta(days=7)).isoformat()
+    if today >= threshold:
+        return monday_of(max(today, next_game_date))
     return monday_of(earliest)
 
 

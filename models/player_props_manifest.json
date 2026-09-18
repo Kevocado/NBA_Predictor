@@ -1,0 +1,24 @@
+{
+  "model_version": "v20260918120240",
+  "trained_at": "2026-09-18T12:02:40.134071+00:00",
+  "models": [
+    "points",
+    "rebounds",
+    "assists",
+    "threes"
+  ],
+  "metrics": {
+    "points": {
+      "mae": 4.55730492533218
+    },
+    "rebounds": {
+      "mae": 1.8904872796858927
+    },
+    "assists": {
+      "mae": 1.3264503198972473
+    },
+    "threes": {
+      "mae": 0.8849121795403851
+    }
+  }
+}

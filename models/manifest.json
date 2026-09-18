@@ -1,6 +1,6 @@
 {
-  "model_version": "v20260917142656",
-  "trained_at": "2026-09-17T14:26:56.625945+00:00",
+  "model_version": "v20260918120240",
+  "trained_at": "2026-09-18T12:02:40.134071+00:00",
   "models": [
     "win_probability",
     "margin",

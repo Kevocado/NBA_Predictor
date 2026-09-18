@@ -37,6 +37,25 @@ def _parse_made_attempted(value: str) -> tuple[float, float]:
         return 0.0, 0.0
 
 
+def store_player_outcomes(training_df: pd.DataFrame, db_path: Path) -> int:
+    """Stores the real actual stat value for every completed player-game
+    row, for each of the four tracked stat targets — settlement data."""
+    recorded_at = datetime.now(timezone.utc).isoformat()
+    stored = 0
+    for _, row in training_df.iterrows():
+        for stat, column in PLAYER_STAT_TARGET_COLUMNS.items():
+            store.insert_player_outcome(
+                db_path,
+                game_id=row["game_id"],
+                player_id=row["player_id"],
+                stat=stat,
+                actual_value=float(row[column]),
+                recorded_at=recorded_at,
+            )
+            stored += 1
+    return stored
+
+
 PLAYER_STAT_TARGET_COLUMNS = {"points": "points", "rebounds": "rebounds", "assists": "assists", "threes": "fg3m"}
 
 

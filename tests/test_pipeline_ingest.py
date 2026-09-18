@@ -366,6 +366,31 @@ def test_to_player_scoring_frame_only_includes_players_from_the_named_team():
     assert "p2" not in upcoming_players
 
 
+def test_store_player_outcomes_stores_real_actual_values_for_all_four_stats(tmp_path):
+    import pandas as pd
+
+    from nba_predictor.pipeline.ingest import store_player_outcomes
+    from nba_predictor.tracking import store
+
+    training_df = pd.DataFrame([
+        {
+            "player_id": "p1", "player_name": "Jayson Tatum", "team": "BOS",
+            "game_id": "g1", "game_date": "2026-03-01",
+            "points": 28.0, "rebounds": 7.0, "assists": 5.0, "fg3m": 3.0, "minutes": 34.0,
+        }
+    ])
+
+    db_path = tmp_path / "tracking.db"
+    store.init_db(db_path)
+
+    stored = store_player_outcomes(training_df, db_path)
+
+    assert stored == 4
+    outcomes = store.get_player_outcomes_for_game(db_path, "g1")
+    by_stat = {row["stat"]: row["actual_value"] for row in outcomes}
+    assert by_stat == {"points": 28.0, "rebounds": 7.0, "assists": 5.0, "threes": 3.0}
+
+
 def test_score_upcoming_player_props_stores_predictions(tmp_path):
     import numpy as np
     import pandas as pd

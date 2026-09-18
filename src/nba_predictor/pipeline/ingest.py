@@ -40,6 +40,78 @@ def _parse_made_attempted(value: str) -> tuple[float, float]:
 PLAYER_STAT_TARGET_COLUMNS = {"points": "points", "rebounds": "rebounds", "assists": "assists", "threes": "fg3m"}
 
 
+def to_player_scoring_frame(games: list[dict], player_boxscores: dict[str, list[dict]], roster_window: int = 5) -> pd.DataFrame:
+    """Estimate upcoming roster from recent completed games; rows for
+    upcoming games have None stats (causal — never touches a future result)."""
+    # Gather recent completed games per team
+    team_recent: dict[str, list[dict]] = {}
+    for g in games:
+        if g.get("completed"):
+            for side in ["home_team", "away_team"]:
+                team = g.get(side)
+                if team:
+                    team_recent.setdefault(team, []).append({"game_id": g["game_id"], "game_date": g["game_date"]})
+    # For upcoming games, estimate roster from recent completed boxscores
+    upcoming = [g for g in games if not g.get("completed")]
+    rows = []
+    for g in upcoming:
+        for side in ["home_team", "away_team"]:
+            team = g.get(side)
+            if team:
+                # Find the latest completed game for this team from the games list
+                team_completed_ids = [g_["game_id"] for g_ in games if g_.get("completed") and (g_.get("home_team") == team or g_.get("away_team") == team)]
+                if team_completed_ids:
+                    last_id = team_completed_ids[-1]
+                    if last_id in player_boxscores:
+                        for box_row in player_boxscores[last_id]:
+                            if box_row.get("team") == team:
+                                rows.append({
+                                    "player_id": box_row["player_id"],
+                                    "player_name": box_row["player_name"],
+                                    "team": team,
+                                    "game_id": g["game_id"],
+                                    "game_date": g["game_date"],
+                                    "points": None,
+                                    "rebounds": None,
+                                    "assists": None,
+                                    "fg3m": None,
+                                    "minutes": None,
+                                })
+    # Also include completed player's real rows so feature frame can compute
+    completed_rows = to_player_training_frame(games, player_boxscores)
+    # Combine, drop duplicates for upcoming (keep first per player/game)
+    combined = pd.concat([completed_rows, pd.DataFrame(rows)], ignore_index=True)
+    combined = combined.drop_duplicates(subset=["player_id", "game_id"], keep="first").reset_index(drop=True)
+    return combined
+
+
+def score_upcoming_player_props(games: list[dict], player_boxscores: dict[str, list[dict]], models_dir: Path, db_path: Path, model_version: str) -> int:
+    """Score upcoming player props using roster estimate + causal rolling features."""
+    scoring_df = to_player_scoring_frame(games, player_boxscores)
+    frame, feature_cols = build_player_feature_frame(scoring_df)
+    upcoming_frame = frame[frame["points"].isna()].reset_index(drop=True)
+    if len(upcoming_frame) == 0:
+        return 0
+
+    models = {stat: joblib.load(models_dir / f"player_{stat}_model.pkl") for stat in PLAYER_STAT_TARGET_COLUMNS}
+    predictions = {stat: predict_player_stat(model, upcoming_frame[feature_cols]) for stat, model in models.items()}
+
+    created_at = datetime.now(timezone.utc).isoformat()
+    stored = 0
+    for i, row in upcoming_frame.iterrows():
+        for stat in PLAYER_STAT_TARGET_COLUMNS:
+            store.insert_player_prediction(
+                db_path,
+                game_id=row["game_id"],
+                player_id=row["player_id"],
+                stat=stat,
+                predicted_value=float(predictions[stat][i]),
+                created_at=created_at,
+            )
+            stored += 1
+    return stored
+
+
 def train_player_prop_models(training_df: pd.DataFrame, models_dir: Path, model_version: str, trained_at: str) -> dict:
     """Trains one XGBRegressor per stat target on real per-player rolling
     features. Metrics are in-sample (fit then scored on the same rows) —

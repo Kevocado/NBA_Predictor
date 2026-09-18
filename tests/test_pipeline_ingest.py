@@ -327,6 +327,86 @@ def test_score_upcoming_games_returns_zero_when_nothing_upcoming(tmp_path):
     assert stored == 0
 
 
+def test_to_player_scoring_frame_adds_a_row_per_estimated_roster_player():
+    from nba_predictor.pipeline.ingest import to_player_scoring_frame
+
+    games = [
+        {"game_id": "g1", "game_date": "2026-10-21", "home_team": "BOS", "away_team": "MIA", "completed": True, "home_pts": 110, "away_pts": 100},
+        {"game_id": "g2", "game_date": "2026-10-25", "home_team": "BOS", "away_team": "LAL", "completed": False, "home_pts": None, "away_pts": None},
+    ]
+    player_boxscores = {
+        "g1": [{"player_id": "p1", "player_name": "Jayson Tatum", "team": "BOS", "position": "F", "minutes": 34.0, "points": 28.0, "rebounds": 7.0, "assists": 5.0, "fg_made_attempted": "10-19", "three_made_attempted": "3-7", "ft_made_attempted": "5-6"}]
+    }
+
+    df = to_player_scoring_frame(games, player_boxscores)
+
+    upcoming_rows = df[df["game_id"] == "g2"]
+    assert len(upcoming_rows) == 1
+    assert upcoming_rows.iloc[0]["player_id"] == "p1"
+    assert pd.isna(upcoming_rows.iloc[0]["points"])
+
+
+def test_to_player_scoring_frame_only_includes_players_from_the_named_team():
+    from nba_predictor.pipeline.ingest import to_player_scoring_frame
+
+    games = [
+        {"game_id": "g1", "game_date": "2026-10-21", "home_team": "BOS", "away_team": "MIA", "completed": True, "home_pts": 110, "away_pts": 100},
+        {"game_id": "g2", "game_date": "2026-10-25", "home_team": "BOS", "away_team": "LAL", "completed": False, "home_pts": None, "away_pts": None},
+    ]
+    player_boxscores = {
+        "g1": [
+            {"player_id": "p1", "player_name": "BOS Player", "team": "BOS", "position": "F", "minutes": 34.0, "points": 28.0, "rebounds": 7.0, "assists": 5.0, "fg_made_attempted": "10-19", "three_made_attempted": "3-7", "ft_made_attempted": "5-6"},
+            {"player_id": "p2", "player_name": "MIA Player", "team": "MIA", "position": "G", "minutes": 30.0, "points": 18.0, "rebounds": 3.0, "assists": 6.0, "fg_made_attempted": "7-15", "three_made_attempted": "2-5", "ft_made_attempted": "2-2"},
+        ]
+    }
+
+    df = to_player_scoring_frame(games, player_boxscores)
+
+    upcoming_players = set(df[df["game_id"] == "g2"]["player_id"])
+    assert "p2" not in upcoming_players
+
+
+def test_score_upcoming_player_props_stores_predictions(tmp_path):
+    import numpy as np
+    import pandas as pd
+
+    from nba_predictor.pipeline.ingest import score_upcoming_player_props, train_player_prop_models
+    from nba_predictor.tracking import store
+
+    rng = np.random.default_rng(13)
+    dates = pd.date_range("2026-10-01", periods=20).astype(str)
+    games = []
+    player_boxscores = {}
+    for i, game_date in enumerate(dates):
+        game_id = f"g{i}"
+        games.append({"game_id": game_id, "game_date": game_date, "home_team": "BOS", "away_team": "MIA", "completed": True, "home_pts": 110, "away_pts": 105})
+        player_boxscores[game_id] = [
+            {
+                "player_id": "p1", "player_name": "Jayson Tatum", "team": "BOS", "position": "F",
+                "minutes": float(rng.integers(28, 38)), "points": float(rng.integers(15, 35)),
+                "rebounds": float(rng.integers(3, 10)), "assists": float(rng.integers(2, 8)),
+                "fg_made_attempted": "10-19", "three_made_attempted": "3-7", "ft_made_attempted": "5-6",
+            }
+        ]
+    upcoming_game = {"game_id": "g-upcoming", "game_date": "2026-10-25", "home_team": "BOS", "away_team": "MIA", "completed": False, "home_pts": None, "away_pts": None}
+    games.append(upcoming_game)
+
+    from nba_predictor.pipeline.ingest import to_player_training_frame
+    training_df = to_player_training_frame(games, player_boxscores)
+
+    models_dir = tmp_path / "models"
+    train_player_prop_models(training_df, models_dir, model_version="v-test", trained_at="2026-10-20T00:00:00")
+
+    db_path = tmp_path / "tracking.db"
+    store.init_db(db_path)
+
+    stored = score_upcoming_player_props(games, player_boxscores, models_dir, db_path, model_version="v-test")
+
+    assert stored == 4
+    rows = store.get_player_predictions_for_game(db_path, "g-upcoming")
+    assert len(rows) == 4
+
+
 def test_score_and_store_player_predictions_stores_real_model_output(tmp_path):
     import numpy as np
     import pandas as pd

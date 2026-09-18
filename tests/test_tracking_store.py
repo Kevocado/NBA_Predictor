@@ -4,6 +4,35 @@ import sqlite3
 import pytest
 
 
+def test_insert_and_get_player_outcomes_roundtrip(tmp_path):
+    from nba_predictor.tracking import store
+    import pytest
+
+    db_path = tmp_path / "tracking.db"
+    store.init_db(db_path)
+
+    row_id = store.insert_player_outcome(
+        db_path, game_id="g1", player_id="203999", stat="points",
+        actual_value=24.0, recorded_at="2026-11-01T22:00:00",
+    )
+    assert row_id == 1
+
+    rows = store.get_player_outcomes_for_game(db_path, "g1")
+    assert len(rows) == 1
+    assert rows[0]["player_id"] == "203999"
+    assert rows[0]["stat"] == "points"
+    assert rows[0]["actual_value"] == pytest.approx(24.0)
+
+
+def test_get_player_outcomes_for_game_returns_empty_for_unknown_game(tmp_path):
+    from nba_predictor.tracking import store
+
+    db_path = tmp_path / "tracking.db"
+    store.init_db(db_path)
+
+    assert store.get_player_outcomes_for_game(db_path, "does-not-exist") == []
+
+
 def test_init_db_creates_all_six_tables(tmp_path):
     from nba_predictor.tracking import store
 

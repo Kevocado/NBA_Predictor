@@ -198,6 +198,36 @@ def get_latest_prediction_for_game(db_path: Path, game_id: str) -> sqlite3.Row |
         return cur.fetchone()
 
 
+def insert_player_outcome(
+    db_path: Path,
+    *,
+    game_id: str,
+    player_id: str,
+    stat: str,
+    actual_value: float,
+    recorded_at: str,
+) -> int:
+    with get_connection(db_path) as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO game_player_outcomes (game_id, player_id, stat, actual_value, recorded_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (game_id, player_id, stat, actual_value, recorded_at),
+        )
+        conn.commit()
+        return cur.lastrowid
+
+
+def get_player_outcomes_for_game(db_path: Path, game_id: str) -> list[sqlite3.Row]:
+    with get_connection(db_path) as conn:
+        cur = conn.execute(
+            "SELECT * FROM game_player_outcomes WHERE game_id = ?",
+            (game_id,),
+        )
+        return cur.fetchall()
+
+
 def get_all_predictions(db_path: Path) -> list[sqlite3.Row]:
     """The latest prediction per game across the whole tracking DB (for settlement)."""
     with get_connection(db_path) as conn:

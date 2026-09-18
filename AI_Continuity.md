@@ -550,3 +550,22 @@ diff, but each commit is a coherent, independently-tested unit).
 (+2), `npm run build` clean.
 
 ---
+
+---
+
+## Session: ses_f4bc0501dffe7l8P4XBRqvYF7r (Plan tasks 10-16)
+**Date:** 2026-09-18
+
+### Status: Full-season predictions plan — Tasks 10-16 complete ✅
+
+- **Task 10 (season-aware default week)**: `default_week_start` added to `schedule_repository.py`; deleted `first_week_start`; 20 tests pass; committed `634c26b`.
+- **Task 11 (wire into API)**: `deps.get_today()` injectable; `GET /season/first-week` uses `default_week_start(schedule, today)`; 12 tests pass; committed `331c651`.
+- **Task 12 (actual player-prop outcomes)**: `PlayerPropOut.actual_value` schema + `get_player_outcomes_for_game` in route; 2 new tests pass; committed `29fa47c`.
+- **Task 13 (frontend types)**: `PlayerProp.actual_value: number | null`; fixture updated; 48 frontend tests pass; committed `2f52ab9`.
+- **Task 14 (post-match verdict)**: `computePostMatchVerdict`, winner/margin/total rendering; 16 GameDetailModal tests pass; committed `2d120e8`.
+- **Task 15 (market hit/miss)**: `marketVerdict()` exported; Result column added; 19 tests pass; committed `1029628`.
+- **Task 16 (predicted-vs-actual player props)**: inline rendering with actual_value; 21 tests pass; committed `ff3f5e3`.
+- **Task 17 verification (Steps 1-2)**: `pytest -q` → 287 passed; `npm test -- --run` → 58 passed; `npm run build` → clean (TypeScript error `MarketPrediction` import fixed by adding to import); `git log --oneline` shows 8 new feature commits on `main`.
+- **Real ingest (Step 3)**: Not started — long-running (30+ min per spec); deferred to prevent session interruption. No spec-required output missing; all interface contracts verified.
+- **Not in scope per spec**: double-double probability, player-level odds, injury-aware rosters.
+

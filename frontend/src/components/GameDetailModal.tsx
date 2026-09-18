@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, type GameDetail, type PlayerProp } from "../api/client";
+import { api, type GameDetail, type PlayerProp, type MarketPrediction } from "../api/client";
 
 interface GameDetailModalProps {
   gameId: string;
@@ -272,7 +272,15 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
               <li key={i} className="flex justify-between border-b border-[var(--color-line)] py-1">
                 <span>{player.player_name}</span>
                 <span>
-                  <span>{player.stat}</span>: <span>{player.predicted_value}</span>
+                  <span>{player.stat}</span>:{" "}
+                  {player.actual_value !== null ? (
+                    <>
+                      Predicted: {player.predicted_value} — Actual: {player.actual_value} (off by{" "}
+                      {Math.abs(player.predicted_value - player.actual_value).toFixed(1)})
+                    </>
+                  ) : (
+                    <span>{player.predicted_value}</span>
+                  )}
                 </span>
               </li>
             ))}

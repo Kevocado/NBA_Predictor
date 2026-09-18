@@ -243,3 +243,29 @@ it("shows no verdict for a market row without a point value on an unsettled mark
   await screen.findByRole("heading", { name: /BOS/ });
   expect(screen.queryAllByTestId("market-row")).toHaveLength(0);
 });
+
+it("shows predicted vs actual for a settled player prop", async () => {
+  vi.mocked(api.getGameDetail).mockResolvedValue(completedDetail);
+  vi.mocked(api.getGamePlayers).mockResolvedValue([
+    { player_id: "203999", player_name: "Nikola Jokic", stat: "points", predicted_value: 27.5, actual_value: 24.0 },
+  ]);
+
+  render(<GameDetailModal gameId="g2" onClose={() => {}} />);
+
+  expect(await screen.findByText(/predicted: 27.5/i)).toBeInTheDocument();
+  expect(screen.getByText(/actual: 24/i)).toBeInTheDocument();
+  expect(screen.getByText(/off by 3.5/i)).toBeInTheDocument();
+});
+
+it("shows only the predicted value for an unsettled player prop", async () => {
+  vi.mocked(api.getGameDetail).mockResolvedValue(detail);
+  vi.mocked(api.getGamePlayers).mockResolvedValue([
+    { player_id: "203999", player_name: "Nikola Jokic", stat: "points", predicted_value: 27.5, actual_value: null },
+  ]);
+
+  render(<GameDetailModal gameId="g1" onClose={() => {}} />);
+
+  expect(await screen.findByText("points")).toBeInTheDocument();
+  expect(screen.getByText("27.5")).toBeInTheDocument();
+  expect(screen.queryByText(/actual/i)).not.toBeInTheDocument();
+});

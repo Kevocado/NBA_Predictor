@@ -283,6 +283,34 @@ def fetch_player_boxscores(games: list[dict]) -> dict[str, list[dict]]:
     return result
 
 
+def to_player_training_frame(games: list[dict], player_boxscores: dict[str, list[dict]]) -> pd.DataFrame:
+    """One row per (player, completed game) with real box-score stats,
+    shaped for features.player_stats.build_player_feature_frame."""
+    games_by_id = {g["game_id"]: g for g in games}
+    rows = []
+    for game_id, boxscore_rows in player_boxscores.items():
+        game = games_by_id.get(game_id)
+        if game is None:
+            continue
+        for row in boxscore_rows:
+            fg3m, _ = _parse_made_attempted(row["three_made_attempted"])
+            rows.append(
+                {
+                    "player_id": row["player_id"],
+                    "player_name": row["player_name"],
+                    "team": row["team"],
+                    "game_id": game_id,
+                    "game_date": game["game_date"],
+                    "points": row["points"],
+                    "rebounds": row["rebounds"],
+                    "assists": row["assists"],
+                    "fg3m": fg3m,
+                    "minutes": row["minutes"],
+                }
+            )
+    return pd.DataFrame(rows)
+
+
 def compute_player_hub(games: list[dict], player_boxscores: dict[str, list[dict]]) -> list[dict]:
     """Real per-player aggregates from real box scores.
 

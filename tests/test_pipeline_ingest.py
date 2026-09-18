@@ -325,3 +325,41 @@ def test_score_upcoming_games_returns_zero_when_nothing_upcoming(tmp_path):
     stored = score_upcoming_games(_sample_completed_games(), tmp_path / "models", db_path, model_version="v-test")
 
     assert stored == 0
+
+
+def test_to_player_training_frame_builds_one_row_per_player_game():
+    from nba_predictor.pipeline.ingest import to_player_training_frame
+
+    games = [
+        {"game_id": "g1", "game_date": "2026-03-01", "home_team": "BOS", "away_team": "MIA"},
+    ]
+    player_boxscores = {
+        "g1": [
+            {
+                "player_id": "p1", "player_name": "Jayson Tatum", "team": "BOS", "position": "F",
+                "minutes": 34.0, "points": 28.0, "rebounds": 7.0, "assists": 5.0,
+                "fg_made_attempted": "10-19", "three_made_attempted": "3-7", "ft_made_attempted": "5-6",
+            }
+        ]
+    }
+
+    df = to_player_training_frame(games, player_boxscores)
+
+    assert len(df) == 1
+    row = df.iloc[0]
+    assert row["player_id"] == "p1"
+    assert row["game_id"] == "g1"
+    assert row["game_date"] == "2026-03-01"
+    assert row["points"] == 28.0
+    assert row["fg3m"] == 3.0
+    assert row["minutes"] == 34.0
+
+
+def test_to_player_training_frame_skips_games_missing_from_schedule():
+    from nba_predictor.pipeline.ingest import to_player_training_frame
+
+    player_boxscores = {"g-unknown": [{"player_id": "p1", "player_name": "X", "team": "BOS", "position": "F", "minutes": 30.0, "points": 10.0, "rebounds": 5.0, "assists": 2.0, "fg_made_attempted": "4-8", "three_made_attempted": "1-2", "ft_made_attempted": "1-1"}]}
+
+    df = to_player_training_frame([], player_boxscores)
+
+    assert len(df) == 0

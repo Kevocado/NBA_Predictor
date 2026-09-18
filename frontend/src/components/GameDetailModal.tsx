@@ -6,6 +6,42 @@ interface GameDetailModalProps {
   onClose: () => void;
 }
 
+interface FavoredTeam {
+  team: string;
+  value: number;
+}
+
+function favoredTeam(margin: number, homeTeam: string, awayTeam: string): FavoredTeam {
+  return margin >= 0 ? { team: homeTeam, value: margin } : { team: awayTeam, value: -margin };
+}
+
+interface PostMatchVerdict {
+  winnerCorrect: boolean;
+  predictedMargin: FavoredTeam;
+  actualMargin: FavoredTeam;
+  marginDiff: number;
+  predictedTotal: number;
+  actualTotal: number;
+  totalDiff: number;
+}
+
+export function computePostMatchVerdict(detail: GameDetail): PostMatchVerdict | null {
+  if (!detail.completed || !detail.prediction || detail.home_pts === null || detail.away_pts === null) {
+    return null;
+  }
+  const actualMarginValue = detail.home_pts - detail.away_pts;
+  const actualTotal = detail.home_pts + detail.away_pts;
+  return {
+    winnerCorrect: detail.prediction.home_win_probability >= 0.5 === actualMarginValue > 0,
+    predictedMargin: favoredTeam(detail.prediction.predicted_margin, detail.home_team, detail.away_team),
+    actualMargin: favoredTeam(actualMarginValue, detail.home_team, detail.away_team),
+    marginDiff: Math.abs(detail.prediction.predicted_margin - actualMarginValue),
+    predictedTotal: detail.prediction.predicted_total,
+    actualTotal,
+    totalDiff: Math.abs(detail.prediction.predicted_total - actualTotal),
+  };
+}
+
 function FormBadge({ result }: { result: string }) {
   return (
     <span
@@ -47,6 +83,7 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
   }, [onClose]);
 
   const sortedMarkets = detail ? [...detail.markets].sort((a, b) => (b.edge ?? 0) - (a.edge ?? 0)) : [];
+  const verdict = detail ? computePostMatchVerdict(detail) : null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70" onClick={onClose}>
@@ -95,6 +132,24 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
               </div>
             </div>
           )
+        )}
+
+        {verdict && (
+          <div className="mb-5 border-b border-[var(--color-line)] pb-5 text-sm" data-testid="post-match-verdict">
+            <div className="mb-2 flex items-center gap-2">
+              <span className={verdict.winnerCorrect ? "text-[var(--color-win)]" : "text-[var(--color-shotclock)]"}>
+                {verdict.winnerCorrect ? "✓ Correct" : "✗ Incorrect"}
+              </span>
+              <span className="text-[var(--color-net-faint)]">winner call</span>
+            </div>
+            <div className="text-[var(--color-net-faint)]">
+              Predicted margin: {verdict.predictedMargin.team} +{verdict.predictedMargin.value.toFixed(1)} —{" "}
+              Actual: {verdict.actualMargin.team} +{verdict.actualMargin.value.toFixed(1)} (off by {verdict.marginDiff.toFixed(1)})
+            </div>
+            <div className="text-[var(--color-net-faint)]">
+              Predicted total: {verdict.predictedTotal.toFixed(1)} — Actual: {verdict.actualTotal} (off by {verdict.totalDiff.toFixed(1)})
+            </div>
+          </div>
         )}
 
         {detail && (detail.home_recent_form.length > 0 || detail.away_recent_form.length > 0) && (

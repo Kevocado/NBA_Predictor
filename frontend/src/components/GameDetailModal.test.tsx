@@ -12,6 +12,13 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+const completedDetail = {
+  game_id: "g2", game_date: "2026-01-05", home_team: "BOS", away_team: "MIA",
+  completed: true, home_pts: 113, away_pts: 105,
+  prediction: { home_win_probability: 0.62, predicted_margin: 3.5, predicted_total: 224.5 },
+  markets: [], head_to_head: [], home_recent_form: [], away_recent_form: [],
+};
+
 const detail = {
   game_id: "g1", game_date: "2026-11-01", home_team: "BOS", away_team: "MIA",
   prediction: { home_win_probability: 0.62, predicted_margin: 3.5, predicted_total: 224.5 },
@@ -146,4 +153,52 @@ describe("GameDetailModal", () => {
     await userEvent.keyboard("{Escape}");
     expect(onClose).toHaveBeenCalled();
   });
+});
+
+it("shows a correct winner-call verdict when the favorite actually won", async () => {
+  vi.mocked(api.getGameDetail).mockResolvedValue(completedDetail);
+  vi.mocked(api.getGamePlayers).mockResolvedValue([]);
+
+  render(<GameDetailModal gameId="g2" onClose={() => {}} />);
+
+  expect(await screen.findByText(/correct/i)).toBeInTheDocument();
+});
+
+it("shows an incorrect winner-call verdict when the underdog actually won", async () => {
+  vi.mocked(api.getGameDetail).mockResolvedValue({ ...completedDetail, home_pts: 90, away_pts: 100 });
+  vi.mocked(api.getGamePlayers).mockResolvedValue([]);
+
+  render(<GameDetailModal gameId="g2" onClose={() => {}} />);
+
+  expect(await screen.findByText(/incorrect/i)).toBeInTheDocument();
+});
+
+it("shows predicted vs actual margin with the absolute difference", async () => {
+  vi.mocked(api.getGameDetail).mockResolvedValue(completedDetail);
+  vi.mocked(api.getGamePlayers).mockResolvedValue([]);
+
+  render(<GameDetailModal gameId="g2" onClose={() => {}} />);
+
+  expect(await screen.findByText(/predicted margin/i)).toBeInTheDocument();
+  expect(screen.getByText(/off by 4.5/i)).toBeInTheDocument();
+});
+
+it("shows predicted vs actual total with the absolute difference", async () => {
+  vi.mocked(api.getGameDetail).mockResolvedValue(completedDetail);
+  vi.mocked(api.getGamePlayers).mockResolvedValue([]);
+
+  render(<GameDetailModal gameId="g2" onClose={() => {}} />);
+
+  expect(await screen.findByText(/predicted total/i)).toBeInTheDocument();
+  expect(screen.getByText(/off by 6.5/i)).toBeInTheDocument();
+});
+
+it("does not show a post-match verdict for an upcoming game", async () => {
+  vi.mocked(api.getGameDetail).mockResolvedValue(detail);
+  vi.mocked(api.getGamePlayers).mockResolvedValue(players);
+
+  render(<GameDetailModal gameId="g1" onClose={() => {}} />);
+
+  await screen.findByRole("heading", { name: /BOS/ });
+  expect(screen.queryByTestId("post-match-verdict")).not.toBeInTheDocument();
 });

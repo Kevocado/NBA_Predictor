@@ -175,3 +175,26 @@ def test_list_games_for_week_returns_only_games_in_window(tmp_path, monkeypatch)
     assert response.status_code == 200
     body = response.json()
     assert [g["game_id"] for g in body] == ["g1", "g2"]
+
+
+def test_season_first_week_uses_the_injected_today(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    import json
+
+    from nba_predictor.api.app import app
+    from nba_predictor.api import deps
+
+    schedule_path = tmp_path / "games.json"
+    schedule_path.write_text(json.dumps([
+        {"game_id": "g0", "game_date": "2025-10-21", "home_team": "BOS", "away_team": "MIA", "completed": True, "home_pts": 110, "away_pts": 100},
+        {"game_id": "g1", "game_date": "2026-10-21", "home_team": "BOS", "away_team": "MIA", "completed": False, "home_pts": None, "away_pts": None},
+    ]))
+    app.dependency_overrides[deps.get_schedule_path] = lambda: schedule_path
+    app.dependency_overrides[deps.get_today] = lambda: "2026-10-25"
+
+    client = TestClient(app)
+    response = client.get("/season/first-week")
+
+    assert response.status_code == 200
+    from nba_predictor.services.schedule_repository import monday_of
+    assert response.json() == {"first_week_start": monday_of("2026-10-25")}

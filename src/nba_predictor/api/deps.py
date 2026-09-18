@@ -1,3 +1,4 @@
+from datetime import date
 from pathlib import Path
 
 from fastapi import Depends, HTTPException
@@ -29,3 +30,7 @@ def get_models_dir() -> Path:
 
 def get_training_games_path() -> Path:
     return config.DATA_DIR / "cache" / "training" / "games.json"
+
+
+def get_today() -> str:
+    return date.today().isoformat()

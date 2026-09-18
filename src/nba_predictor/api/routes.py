@@ -9,6 +9,7 @@ from nba_predictor.api.deps import (
     get_db_path,
     get_models_dir,
     get_schedule,
+    get_today,
     get_training_games_path,
     require_admin,
 )
@@ -30,7 +31,7 @@ from nba_predictor.pipeline.retrain import run_retrain_pipeline
 from nba_predictor.services.calibration_service import compute_model_calibration
 from nba_predictor.services.hub_service import compute_track_record, load_hub_cache, load_player_name_map
 from nba_predictor.services.schedule_repository import (
-    first_week_start,
+    default_week_start,
     get_game,
     get_games_for_date,
     get_games_for_week,
@@ -231,5 +232,5 @@ def refresh_odds(
 
 
 @router.get("/season/first-week", response_model=SeasonBoundsOut)
-def season_first_week(schedule: list[dict] = Depends(get_schedule)) -> SeasonBoundsOut:
-    return SeasonBoundsOut(first_week_start=first_week_start(schedule))
+def season_first_week(schedule: list[dict] = Depends(get_schedule), today: str = Depends(get_today)) -> SeasonBoundsOut:
+    return SeasonBoundsOut(first_week_start=default_week_start(schedule, today))

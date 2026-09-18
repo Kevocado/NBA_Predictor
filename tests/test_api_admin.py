@@ -94,3 +94,56 @@ def test_get_manifest_returns_file_contents(tmp_path, monkeypatch):
     response = client.get("/manifest")
     assert response.status_code == 200
     assert response.json()["model_version"] == "v1"
+
+
+def test_refresh_full_404_when_public_mode(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch, public_mode=True)
+    response = client.post("/admin/refresh-full")
+    assert response.status_code == 404
+
+
+def test_refresh_full_runs_ingest_in_background_and_reports_status(tmp_path, monkeypatch):
+    from unittest.mock import patch
+
+    from nba_predictor.api import deps, routes
+    from nba_predictor.tracking import store
+
+    client = _client(tmp_path, monkeypatch, public_mode=False)
+    db_path = tmp_path / "tracking.db"
+    store.init_db(db_path)
+    from nba_predictor.api.app import app
+    app.dependency_overrides[deps.get_db_path] = lambda: db_path
+
+    routes._ingest_status.update({"running": False, "last_result": None, "last_error": None})
+
+    with patch("nba_predictor.api.routes.run_ingest") as mock_run_ingest:
+        mock_run_ingest.return_value = {"games_found": 5, "upcoming_predictions_stored": 2}
+
+        response = client.post("/admin/refresh-full")
+        assert response.status_code == 202
+        assert response.json() == {"status": "started"}
+
+        mock_run_ingest.assert_called_once()
+        assert mock_run_ingest.call_args.kwargs["db_path"] == db_path
+
+    status = client.get("/admin/refresh-full/status").json()
+    assert status["running"] is False
+    assert status["last_result"] == {"games_found": 5, "upcoming_predictions_stored": 2}
+
+
+def test_refresh_full_returns_already_running_without_starting_a_second_ingest(tmp_path, monkeypatch):
+    from unittest.mock import patch
+
+    from nba_predictor.api import routes
+
+    client = _client(tmp_path, monkeypatch, public_mode=False)
+    routes._ingest_status.update({"running": True, "last_result": None, "last_error": None})
+
+    with patch("nba_predictor.api.routes.run_ingest") as mock_run_ingest:
+        response = client.post("/admin/refresh-full")
+
+        assert response.status_code == 202
+        assert response.json() == {"status": "already_running"}
+        mock_run_ingest.assert_not_called()
+
+    routes._ingest_status.update({"running": False, "last_result": None, "last_error": None})

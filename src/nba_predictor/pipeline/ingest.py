@@ -592,6 +592,101 @@ def score_and_store_predictions(games_df: pd.DataFrame, models_dir: Path, db_pat
     return len(frame)
 
 
+def run_ingest(
+    start: str,
+    end: str,
+    player_hub_days: int = 21,
+    skip_predictions: bool = False,
+    db_path: Path | None = None,
+    log=print,
+) -> dict:
+    """The full real-data pipeline: fetch schedule/box scores, refresh
+    schedule/hub caches, train the team-outcome and player-prop models,
+    and (unless skip_predictions) score + store predictions for every
+    completed and upcoming game. Returns a summary dict of what was done.
+
+    Used by both the CLI (`main`, below) and the admin HTTP trigger
+    (`api/routes.py::refresh_full`) so a live deployment with no shell
+    access can populate its own tracking DB the same way a local run does.
+    """
+    db_path = db_path or config.TRACKING_DB_PATH
+    summary: dict = {"start": start, "end": end, "player_hub_days": player_hub_days}
+
+    log(f"Fetching schedule {start} to {end} from ESPN...")
+    games = fetch_schedule_range(start, end)
+    summary["games_found"] = len(games)
+    log(f"  {len(games)} games found")
+
+    log("Fetching box scores for completed games...")
+    games = enrich_with_boxscores(games)
+
+    schedule_path = config.DATA_DIR / "cache" / "schedule" / "games.json"
+    schedule_path.parent.mkdir(parents=True, exist_ok=True)
+    schedule_path.write_text(json.dumps(to_schedule_cache(games)))
+    log(f"  wrote {schedule_path}")
+
+    hub_dir = config.DATA_DIR / "cache" / "hub"
+    hub_dir.mkdir(parents=True, exist_ok=True)
+    (hub_dir / "teams.json").write_text(json.dumps(compute_team_hub(games)))
+    (hub_dir / "rankings.json").write_text(json.dumps(compute_power_rankings(games)))
+    (hub_dir / "standings.json").write_text(json.dumps(compute_standings(games)))
+
+    if player_hub_days > 0:
+        cutoff = (date.fromisoformat(end) - timedelta(days=player_hub_days)).isoformat()
+        recent_games = [g for g in games if g["game_date"] >= cutoff]
+        log(f"Fetching player box scores for {len(recent_games)} games since {cutoff}...")
+        player_boxscores = fetch_player_boxscores(recent_games)
+        (hub_dir / "players.json").write_text(json.dumps(compute_player_hub(recent_games, player_boxscores)))
+    else:
+        recent_games = []
+        player_boxscores = {}
+        (hub_dir / "players.json").write_text(json.dumps([]))
+    log(f"  wrote hub caches to {hub_dir}")
+
+    training_df = to_training_frame(games)
+    log(f"Training on {len(training_df)} completed games with full box scores...")
+
+    models_dir = config.PROJECT_ROOT / "models"
+    model_version = datetime.now(timezone.utc).strftime("v%Y%m%d%H%M%S")
+    trained_at = datetime.now(timezone.utc).isoformat()
+    manifest = run_retrain_pipeline(training_df, models_dir, model_version=model_version, trained_at=trained_at)
+    summary["team_model_metrics"] = manifest["metrics"]
+    log(f"  trained {model_version}: {manifest['metrics']}")
+
+    player_training_df = to_player_training_frame(recent_games, player_boxscores)
+    log(f"Training player prop models on {len(player_training_df)} real player-game rows...")
+    player_manifest = train_player_prop_models(player_training_df, models_dir, model_version=model_version, trained_at=trained_at)
+    summary["player_model_metrics"] = player_manifest["metrics"]
+    log(f"  trained player props: {player_manifest['metrics']}")
+
+    if skip_predictions:
+        log("  skip_predictions set: not scoring/storing predictions")
+    else:
+        store.init_db(db_path)
+
+        stored = score_and_store_predictions(training_df, models_dir, db_path, model_version)
+        summary["completed_predictions_stored"] = stored
+        log(f"  stored {stored} real predictions for browsing in the UI")
+
+        stored_upcoming = score_upcoming_games(games, models_dir, db_path, model_version)
+        summary["upcoming_predictions_stored"] = stored_upcoming
+        log(f"  stored {stored_upcoming} predictions for upcoming games")
+
+        player_stored = score_and_store_player_predictions(player_training_df, models_dir, db_path, model_version)
+        summary["completed_player_predictions_stored"] = player_stored
+        log(f"  stored {player_stored} real player predictions")
+
+        player_stored_upcoming = score_upcoming_player_props(recent_games, player_boxscores, models_dir, db_path, model_version)
+        summary["upcoming_player_predictions_stored"] = player_stored_upcoming
+        log(f"  stored {player_stored_upcoming} player predictions for upcoming games")
+
+        outcomes_stored = store_player_outcomes(player_training_df, db_path)
+        summary["player_outcomes_stored"] = outcomes_stored
+        log(f"  stored {outcomes_stored} real player outcomes for settlement")
+
+    return summary
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Ingest real NBA schedule/box-score data and refresh caches.")
     parser.add_argument("--start", default="2025-10-01")
@@ -611,72 +706,7 @@ def main() -> None:
         "not a stateless CI runner's throwaway one.",
     )
     args = parser.parse_args()
-
-    print(f"Fetching schedule {args.start} to {args.end} from ESPN...")
-    games = fetch_schedule_range(args.start, args.end)
-    print(f"  {len(games)} games found")
-
-    print("Fetching box scores for completed games...")
-    games = enrich_with_boxscores(games)
-
-    schedule_path = config.DATA_DIR / "cache" / "schedule" / "games.json"
-    schedule_path.parent.mkdir(parents=True, exist_ok=True)
-    schedule_path.write_text(json.dumps(to_schedule_cache(games)))
-    print(f"  wrote {schedule_path}")
-
-    hub_dir = config.DATA_DIR / "cache" / "hub"
-    hub_dir.mkdir(parents=True, exist_ok=True)
-    (hub_dir / "teams.json").write_text(json.dumps(compute_team_hub(games)))
-    (hub_dir / "rankings.json").write_text(json.dumps(compute_power_rankings(games)))
-    (hub_dir / "standings.json").write_text(json.dumps(compute_standings(games)))
-
-    if args.player_hub_days > 0:
-        cutoff = (date.fromisoformat(args.end) - timedelta(days=args.player_hub_days)).isoformat()
-        recent_games = [g for g in games if g["game_date"] >= cutoff]
-        print(f"Fetching player box scores for {len(recent_games)} games since {cutoff}...")
-        player_boxscores = fetch_player_boxscores(recent_games)
-        (hub_dir / "players.json").write_text(json.dumps(compute_player_hub(recent_games, player_boxscores)))
-    else:
-        recent_games = []
-        player_boxscores = {}
-        (hub_dir / "players.json").write_text(json.dumps([]))
-    print(f"  wrote hub caches to {hub_dir}")
-
-    training_df = to_training_frame(games)
-    print(f"Training on {len(training_df)} completed games with full box scores...")
-
-    models_dir = config.PROJECT_ROOT / "models"
-    model_version = datetime.now(timezone.utc).strftime("v%Y%m%d%H%M%S")
-    trained_at = datetime.now(timezone.utc).isoformat()
-    manifest = run_retrain_pipeline(training_df, models_dir, model_version=model_version, trained_at=trained_at)
-    print(f"  trained {model_version}: {manifest['metrics']}")
-
-    player_training_df = to_player_training_frame(recent_games, player_boxscores)
-    print(f"Training player prop models on {len(player_training_df)} real player-game rows...")
-    player_manifest = train_player_prop_models(player_training_df, models_dir, model_version=model_version, trained_at=trained_at)
-    print(f"  trained player props: {player_manifest['metrics']}")
-
-    if args.skip_predictions:
-        print("  --skip-predictions set: not scoring/storing predictions")
-    else:
-        store.init_db(config.TRACKING_DB_PATH)
-
-        stored = score_and_store_predictions(training_df, models_dir, config.TRACKING_DB_PATH, model_version)
-        print(f"  stored {stored} real predictions for browsing in the UI")
-
-        stored_upcoming = score_upcoming_games(games, models_dir, config.TRACKING_DB_PATH, model_version)
-        print(f"  stored {stored_upcoming} predictions for upcoming games")
-
-        player_stored = score_and_store_player_predictions(player_training_df, models_dir, config.TRACKING_DB_PATH, model_version)
-        print(f"  stored {player_stored} real player predictions")
-
-        player_stored_upcoming = score_upcoming_player_props(
-            recent_games, player_boxscores, models_dir, config.TRACKING_DB_PATH, model_version
-        )
-        print(f"  stored {player_stored_upcoming} player predictions for upcoming games")
-
-        outcomes_stored = store_player_outcomes(player_training_df, config.TRACKING_DB_PATH)
-        print(f"  stored {outcomes_stored} real player outcomes for settlement")
+    run_ingest(args.start, args.end, player_hub_days=args.player_hub_days, skip_predictions=args.skip_predictions)
 
 
 if __name__ == "__main__":

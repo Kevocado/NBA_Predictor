@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 
 from nba_predictor.api.deps import (
     get_db_path,
@@ -26,6 +26,7 @@ from nba_predictor.api.schemas import (
 )
 from nba_predictor.data.team_reference import TEAMS, get_team
 from nba_predictor.odds.value_bets import std_from_mae
+from nba_predictor.pipeline.ingest import run_ingest
 from nba_predictor.pipeline.refresh_odds import refresh_market_predictions
 from nba_predictor.pipeline.retrain import run_retrain_pipeline
 from nba_predictor.services.calibration_service import compute_model_calibration
@@ -239,3 +240,40 @@ def refresh_odds(
 @router.get("/season/first-week", response_model=SeasonBoundsOut)
 def season_first_week(schedule: list[dict] = Depends(get_schedule), today: str = Depends(get_today)) -> SeasonBoundsOut:
     return SeasonBoundsOut(first_week_start=default_week_start(schedule, today))
+
+
+_ingest_status: dict = {"running": False, "last_result": None, "last_error": None}
+
+
+def _run_ingest_background(db_path: Path) -> None:
+    _ingest_status["running"] = True
+    _ingest_status["last_error"] = None
+    try:
+        summary = run_ingest(
+            "2025-10-01", "2026-11-30", player_hub_days=9999, db_path=db_path, log=lambda _msg: None
+        )
+        _ingest_status["last_result"] = summary
+    except Exception as exc:  # noqa: BLE001 - reported via status endpoint, not re-raised (background task)
+        _ingest_status["last_error"] = str(exc)
+    finally:
+        _ingest_status["running"] = False
+
+
+@router.post("/admin/refresh-full", dependencies=[Depends(require_admin)], status_code=202)
+def refresh_full(background_tasks: BackgroundTasks, db_path: Path = Depends(get_db_path)) -> dict:
+    """Runs the full real-data pipeline (schedule/box-score fetch, model
+    retraining, and scoring — including upcoming games and player props)
+    against this server's own live tracking DB. For a deployment with no
+    baked-in predictions and no interactive shell access — the same thing
+    `python -m nba_predictor.pipeline.ingest` does locally, triggered over
+    HTTP instead. Runs in the background; poll GET /admin/refresh-full/status
+    for progress, since a full run can take a long time."""
+    if _ingest_status["running"]:
+        return {"status": "already_running"}
+    background_tasks.add_task(_run_ingest_background, db_path)
+    return {"status": "started"}
+
+
+@router.get("/admin/refresh-full/status", dependencies=[Depends(require_admin)])
+def refresh_full_status() -> dict:
+    return _ingest_status

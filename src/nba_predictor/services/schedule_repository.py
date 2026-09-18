@@ -43,7 +43,18 @@ def default_week_start(schedule: list[dict], today: str) -> str | None:
         return None
 
     earliest = min(game["game_date"] for game in schedule)
-    upcoming_dates = sorted(g["game_date"] for g in schedule if not g.get("completed"))
+    # Real ESPN data can carry stale entries — a game whose completed flag
+    # never got set to true (e.g. postponed/orphaned), dated well before
+    # today, from a season that has already finished. A genuinely current
+    # not-completed game is never more than a few weeks stale relative to
+    # today (the season it belongs to is still being played); a 30-day
+    # cutoff is a deliberately generous, simple way to exclude leftover
+    # artifacts from an already-finished season without excluding a real
+    # game the schedule just hasn't marked completed yet.
+    stale_cutoff = (date.fromisoformat(today) - timedelta(days=30)).isoformat()
+    upcoming_dates = sorted(
+        g["game_date"] for g in schedule if not g.get("completed") and g["game_date"] >= stale_cutoff
+    )
     if not upcoming_dates:
         return monday_of(earliest)
 

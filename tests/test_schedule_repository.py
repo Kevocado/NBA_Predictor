@@ -215,3 +215,23 @@ def test_default_week_start_falls_back_to_earliest_when_nothing_upcoming():
     result = default_week_start(schedule, today="2026-09-17")
 
     assert result == monday_of("2025-10-21")
+
+
+def test_default_week_start_ignores_stale_not_completed_games_from_the_past():
+    """Real ESPN data can leave an already-finished season's postponed/
+    orphaned game stuck with completed=False forever. That must not be
+    mistaken for the next real upcoming game."""
+    from nba_predictor.services.schedule_repository import default_week_start, monday_of
+
+    schedule = [
+        _completed_game("g0", "2025-10-21", "BOS", "MIA", 110, 100),
+        # Stale: dated in the (real-world) past relative to `today` below,
+        # but never resolved to completed=True.
+        {"game_id": "g1", "game_date": "2026-01-08", "home_team": "CHI", "away_team": "MIA", "completed": False, "home_pts": None, "away_pts": None},
+        # The real next upcoming game.
+        {"game_id": "g2", "game_date": "2026-10-21", "home_team": "BOS", "away_team": "MIA", "completed": False, "home_pts": None, "away_pts": None},
+    ]
+
+    result = default_week_start(schedule, today="2026-09-18")
+
+    assert result == monday_of("2025-10-21")

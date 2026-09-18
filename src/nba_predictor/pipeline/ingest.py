@@ -4,15 +4,19 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import joblib
+import numpy as np
 import pandas as pd
 
 from nba_predictor import config
 from nba_predictor.data import espn
 from nba_predictor.data.team_reference import get_team
 from nba_predictor.features.build import build_feature_frame, build_training_frame
+from nba_predictor.features.player_stats import build_player_feature_frame
 from nba_predictor.features.context import current_streak
 from nba_predictor.features.ratings import compute_possessions
 from nba_predictor.models.game_outcome import predict_win_probability
+from nba_predictor.models.manifest import build_manifest, write_manifest
+from nba_predictor.models.player_props import predict_player_stat, train_player_stat_model
 from nba_predictor.pipeline.retrain import run_retrain_pipeline
 from nba_predictor.tracking import store
 
@@ -31,6 +35,38 @@ def _parse_made_attempted(value: str) -> tuple[float, float]:
         return float(made), float(attempted)
     except (ValueError, AttributeError):
         return 0.0, 0.0
+
+
+PLAYER_STAT_TARGET_COLUMNS = {"points": "points", "rebounds": "rebounds", "assists": "assists", "threes": "fg3m"}
+
+
+def train_player_prop_models(training_df: pd.DataFrame, models_dir: Path, model_version: str, trained_at: str) -> dict:
+    """Trains one XGBRegressor per stat target on real per-player rolling
+    features. Metrics are in-sample (fit then scored on the same rows) —
+    same honesty tradeoff score_and_store_predictions already accepts for
+    the team backtest, not a proper chronological holdout, stated here
+    rather than hidden."""
+    models_dir.mkdir(parents=True, exist_ok=True)
+    frame, feature_cols = build_player_feature_frame(training_df)
+
+    metrics: dict[str, dict] = {}
+    for stat, target_col in PLAYER_STAT_TARGET_COLUMNS.items():
+        if len(frame) == 0:
+            metrics[stat] = {"mae": None}
+            continue
+        model = train_player_stat_model(frame[feature_cols], frame[target_col])
+        joblib.dump(model, models_dir / f"player_{stat}_model.pkl")
+        preds = predict_player_stat(model, frame[feature_cols])
+        metrics[stat] = {"mae": float(np.mean(np.abs(preds - frame[target_col])))}
+
+    manifest = build_manifest(
+        model_names=list(PLAYER_STAT_TARGET_COLUMNS.keys()),
+        metrics=metrics,
+        model_version=model_version,
+        trained_at=trained_at,
+    )
+    write_manifest(manifest, models_dir / "player_props_manifest.json")
+    return manifest
 
 
 def fetch_schedule_range(start_date: str, end_date: str) -> list[dict]:

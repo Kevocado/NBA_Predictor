@@ -327,6 +327,54 @@ def test_score_upcoming_games_returns_zero_when_nothing_upcoming(tmp_path):
     assert stored == 0
 
 
+def test_train_player_prop_models_writes_four_model_files_and_manifest(tmp_path):
+    import numpy as np
+    import pandas as pd
+
+    from nba_predictor.pipeline.ingest import train_player_prop_models
+
+    rng = np.random.default_rng(7)
+    dates = pd.date_range("2026-02-01", periods=20).astype(str)
+    rows = []
+    for i, game_date in enumerate(dates):
+        rows.append(
+            {
+                "player_id": "p1", "player_name": "Jayson Tatum", "team": "BOS",
+                "game_id": f"g{i}", "game_date": game_date,
+                "points": float(rng.integers(15, 35)), "rebounds": float(rng.integers(3, 10)),
+                "assists": float(rng.integers(2, 8)), "fg3m": float(rng.integers(0, 6)),
+                "minutes": float(rng.integers(28, 38)),
+            }
+        )
+    training_df = pd.DataFrame(rows)
+
+    models_dir = tmp_path / "models"
+    manifest = train_player_prop_models(training_df, models_dir, model_version="v-test", trained_at="2026-03-01T00:00:00")
+
+    assert (models_dir / "player_points_model.pkl").exists()
+    assert (models_dir / "player_rebounds_model.pkl").exists()
+    assert (models_dir / "player_assists_model.pkl").exists()
+    assert (models_dir / "player_threes_model.pkl").exists()
+    assert (models_dir / "player_props_manifest.json").exists()
+    assert manifest["model_version"] == "v-test"
+    assert set(manifest["models"]) == {"points", "rebounds", "assists", "threes"}
+    assert manifest["metrics"]["points"]["mae"] is not None
+
+
+def test_train_player_prop_models_handles_empty_training_frame(tmp_path):
+    import pandas as pd
+
+    from nba_predictor.pipeline.ingest import train_player_prop_models
+
+    models_dir = tmp_path / "models"
+    empty_df = pd.DataFrame(columns=["player_id", "player_name", "team", "game_id", "game_date", "points", "rebounds", "assists", "fg3m", "minutes"])
+
+    manifest = train_player_prop_models(empty_df, models_dir, model_version="v-test", trained_at="2026-03-01T00:00:00")
+
+    assert manifest["metrics"]["points"]["mae"] is None
+    assert not (models_dir / "player_points_model.pkl").exists()
+
+
 def test_to_player_training_frame_builds_one_row_per_player_game():
     from nba_predictor.pipeline.ingest import to_player_training_frame
 

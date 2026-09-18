@@ -143,11 +143,16 @@ def get_game_players(
         raise HTTPException(status_code=404, detail=f"Unknown game: {game_id}")
 
     name_by_id = load_player_name_map(config.DATA_DIR / "cache" / "hub" / "players.json")
+    outcomes = store.get_player_outcomes_for_game(db_path, game_id)
+    actual_by_key = {(row["player_id"], row["stat"]): row["actual_value"] for row in outcomes}
 
     return [
         PlayerPropOut(
-            player_id=row["player_id"], player_name=name_by_id.get(row["player_id"], row["player_id"]),
-            stat=row["stat"], predicted_value=row["predicted_value"],
+            player_id=row["player_id"],
+            player_name=name_by_id.get(row["player_id"], row["player_id"]),
+            stat=row["stat"],
+            predicted_value=row["predicted_value"],
+            actual_value=actual_by_key.get((row["player_id"], row["stat"])),
         )
         for row in store.get_player_predictions_for_game(db_path, game_id)
     ]

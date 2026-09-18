@@ -57,6 +57,7 @@ class PlayerPropOut(BaseModel):
     player_name: str
     stat: str
     predicted_value: float
+    actual_value: float | None = None
 
 
 class TrackRecordOut(BaseModel):

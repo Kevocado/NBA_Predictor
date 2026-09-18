@@ -198,3 +198,34 @@ def test_season_first_week_uses_the_injected_today(tmp_path, monkeypatch):
     assert response.status_code == 200
     from nba_predictor.services.schedule_repository import monday_of
     assert response.json() == {"first_week_start": monday_of("2026-10-25")}
+
+
+def test_get_game_players_includes_actual_value_when_settled(tmp_path, monkeypatch):
+    from nba_predictor.tracking import store
+
+    client, db_path = _client_with_overrides(tmp_path, monkeypatch)
+    store.insert_player_prediction(
+        db_path, game_id="g1", player_id="203999", stat="points",
+        predicted_value=27.5, created_at="2026-11-01T12:00:00",
+    )
+    store.insert_player_outcome(
+        db_path, game_id="g1", player_id="203999", stat="points",
+        actual_value=24.0, recorded_at="2026-11-01T22:00:00",
+    )
+
+    response = client.get("/games/g1/players")
+    assert response.status_code == 200
+    assert response.json()[0]["actual_value"] == 24.0
+
+
+def test_get_game_players_actual_value_is_null_when_not_settled(tmp_path, monkeypatch):
+    from nba_predictor.tracking import store
+
+    client, db_path = _client_with_overrides(tmp_path, monkeypatch)
+    store.insert_player_prediction(
+        db_path, game_id="g1", player_id="203999", stat="points",
+        predicted_value=27.5, created_at="2026-11-01T12:00:00",
+    )
+
+    response = client.get("/games/g1/players")
+    assert response.json()[0]["actual_value"] is None

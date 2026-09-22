@@ -113,6 +113,10 @@ def test_refresh_full_runs_ingest_in_background_and_reports_status(tmp_path, mon
     store.init_db(db_path)
     from nba_predictor.api.app import app
     app.dependency_overrides[deps.get_db_path] = lambda: db_path
+    # No schedule file at this path -> load_schedule returns [], so the
+    # post-ingest odds refresh short-circuits with 0 stored instead of
+    # hitting the real sportsbook API.
+    app.dependency_overrides[deps.get_schedule_path] = lambda: tmp_path / "games.json"
 
     routes._ingest_status.update({"running": False, "last_result": None, "last_error": None})
 
@@ -128,7 +132,11 @@ def test_refresh_full_runs_ingest_in_background_and_reports_status(tmp_path, mon
 
     status = client.get("/admin/refresh-full/status").json()
     assert status["running"] is False
-    assert status["last_result"] == {"games_found": 5, "upcoming_predictions_stored": 2}
+    assert status["last_result"] == {
+        "games_found": 5,
+        "upcoming_predictions_stored": 2,
+        "market_predictions_stored": 0,
+    }
 
 
 def test_refresh_full_returns_already_running_without_starting_a_second_ingest(tmp_path, monkeypatch):

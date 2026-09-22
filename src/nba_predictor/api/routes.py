@@ -9,6 +9,7 @@ from nba_predictor.api.deps import (
     get_db_path,
     get_models_dir,
     get_schedule,
+    get_schedule_path,
     get_today,
     get_training_games_path,
     require_admin,
@@ -38,6 +39,7 @@ from nba_predictor.services.schedule_repository import (
     get_games_for_week,
     get_head_to_head,
     get_recent_form,
+    load_schedule,
 )
 from nba_predictor.tracking import store
 from nba_predictor import config
@@ -216,12 +218,7 @@ def retrain(
     return run_retrain_pipeline(games, models_dir, model_version=model_version, trained_at=trained_at)
 
 
-@router.post("/refresh-odds", dependencies=[Depends(require_admin)], status_code=202)
-def refresh_odds(
-    schedule: list[dict] = Depends(get_schedule),
-    db_path: Path = Depends(get_db_path),
-    models_dir: Path = Depends(get_models_dir),
-) -> dict:
+def _market_stds_from_manifest(models_dir: Path) -> tuple[float, float]:
     margin_std, total_std = 12.0, 15.0
     manifest_path = models_dir / "manifest.json"
     if manifest_path.exists():
@@ -232,7 +229,16 @@ def refresh_odds(
             margin_std = std_from_mae(margin_mae)
         if total_mae is not None:
             total_std = std_from_mae(total_mae)
+    return margin_std, total_std
 
+
+@router.post("/refresh-odds", dependencies=[Depends(require_admin)], status_code=202)
+def refresh_odds(
+    schedule: list[dict] = Depends(get_schedule),
+    db_path: Path = Depends(get_db_path),
+    models_dir: Path = Depends(get_models_dir),
+) -> dict:
+    margin_std, total_std = _market_stds_from_manifest(models_dir)
     stored = refresh_market_predictions(schedule, db_path, margin_std=margin_std, total_std=total_std)
     return {"status": "ok", "market_predictions_stored": stored}
 
@@ -245,12 +251,21 @@ def season_first_week(schedule: list[dict] = Depends(get_schedule), today: str =
 _ingest_status: dict = {"running": False, "last_result": None, "last_error": None}
 
 
-def _run_ingest_background(db_path: Path) -> None:
+def _run_ingest_background(db_path: Path, schedule_path: Path, models_dir: Path) -> None:
     _ingest_status["running"] = True
     _ingest_status["last_error"] = None
     try:
         summary = run_ingest(
             "2025-10-01", "2026-11-30", player_hub_days=9999, db_path=db_path, log=lambda _msg: None
+        )
+        # Team win/margin/total predictions are scored by run_ingest above;
+        # the odds-derived markets (spread/total lines, bookmaker, edge)
+        # need a separate pass against the sportsbook API, keyed off the
+        # schedule and model MAE that ingest just refreshed.
+        schedule = load_schedule(schedule_path)
+        margin_std, total_std = _market_stds_from_manifest(models_dir)
+        summary["market_predictions_stored"] = refresh_market_predictions(
+            schedule, db_path, margin_std=margin_std, total_std=total_std
         )
         _ingest_status["last_result"] = summary
     except Exception as exc:  # noqa: BLE001 - reported via status endpoint, not re-raised (background task)
@@ -260,7 +275,12 @@ def _run_ingest_background(db_path: Path) -> None:
 
 
 @router.post("/admin/refresh-full", dependencies=[Depends(require_admin)], status_code=202)
-def refresh_full(background_tasks: BackgroundTasks, db_path: Path = Depends(get_db_path)) -> dict:
+def refresh_full(
+    background_tasks: BackgroundTasks,
+    db_path: Path = Depends(get_db_path),
+    schedule_path: Path = Depends(get_schedule_path),
+    models_dir: Path = Depends(get_models_dir),
+) -> dict:
     """Runs the full real-data pipeline (schedule/box-score fetch, model
     retraining, and scoring — including upcoming games and player props)
     against this server's own live tracking DB. For a deployment with no
@@ -270,7 +290,7 @@ def refresh_full(background_tasks: BackgroundTasks, db_path: Path = Depends(get_
     for progress, since a full run can take a long time."""
     if _ingest_status["running"]:
         return {"status": "already_running"}
-    background_tasks.add_task(_run_ingest_background, db_path)
+    background_tasks.add_task(_run_ingest_background, db_path, schedule_path, models_dir)
     return {"status": "started"}
 
 

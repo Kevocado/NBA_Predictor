@@ -2,6 +2,13 @@ import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 
+# The tracking DB can live on network-attached storage (Azure Files, for
+# persistence across container restarts), where a lock briefly held by a
+# just-restarted process takes longer to clear than sqlite3's 5s default
+# timeout. 30s gives that lock time to release instead of failing fast
+# with "database is locked".
+_CONNECT_TIMEOUT_SECONDS = 30
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS predictions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -65,7 +72,7 @@ CREATE TABLE IF NOT EXISTS game_player_outcomes (
 
 def init_db(db_path: Path) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(db_path) as conn:
+    with sqlite3.connect(db_path, timeout=_CONNECT_TIMEOUT_SECONDS) as conn:
         conn.executescript(SCHEMA)
         _ensure_point_column(conn)
 
@@ -83,7 +90,7 @@ def _ensure_point_column(conn: sqlite3.Connection) -> None:
 
 @contextmanager
 def get_connection(db_path: Path):
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=_CONNECT_TIMEOUT_SECONDS)
     conn.row_factory = sqlite3.Row
     try:
         yield conn

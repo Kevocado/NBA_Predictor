@@ -154,7 +154,7 @@ def test_default_week_start_empty_schedule_returns_none():
     assert default_week_start([], today="2026-09-17") is None
 
 
-def test_default_week_start_uses_earliest_game_when_far_from_next_upcoming():
+def test_default_week_start_uses_upcoming_week_even_when_far_away():
     from nba_predictor.services.schedule_repository import default_week_start, monday_of
 
     schedule = [
@@ -162,26 +162,14 @@ def test_default_week_start_uses_earliest_game_when_far_from_next_upcoming():
         {"game_id": "g1", "game_date": "2026-10-21", "home_team": "BOS", "away_team": "MIA", "completed": False, "home_pts": None, "away_pts": None},
     ]
 
-    # More than 7 days before 2026-10-21 (the only upcoming game).
+    # Far in advance of 2026-10-21 (the only upcoming game) — the page
+    # should still land on the upcoming week, not the long-completed one.
     result = default_week_start(schedule, today="2026-09-17")
-
-    assert result == monday_of("2025-10-21")
-
-
-def test_default_week_start_switches_to_upcoming_week_exactly_seven_days_before():
-    from nba_predictor.services.schedule_repository import default_week_start, monday_of
-
-    schedule = [
-        _completed_game("g0", "2025-10-21", "BOS", "MIA", 110, 100),
-        {"game_id": "g1", "game_date": "2026-10-21", "home_team": "BOS", "away_team": "MIA", "completed": False, "home_pts": None, "away_pts": None},
-    ]
-
-    result = default_week_start(schedule, today="2026-10-14")  # exactly 7 days before
 
     assert result == monday_of("2026-10-21")
 
 
-def test_default_week_start_stays_on_old_season_one_day_before_the_switch():
+def test_default_week_start_uses_upcoming_week_regardless_of_lead_time():
     from nba_predictor.services.schedule_repository import default_week_start, monday_of
 
     schedule = [
@@ -189,9 +177,9 @@ def test_default_week_start_stays_on_old_season_one_day_before_the_switch():
         {"game_id": "g1", "game_date": "2026-10-21", "home_team": "BOS", "away_team": "MIA", "completed": False, "home_pts": None, "away_pts": None},
     ]
 
-    result = default_week_start(schedule, today="2026-10-13")  # 8 days before
+    result = default_week_start(schedule, today="2026-10-14")
 
-    assert result == monday_of("2025-10-21")
+    assert result == monday_of("2026-10-21")
 
 
 def test_default_week_start_uses_today_once_season_is_underway():
@@ -207,14 +195,19 @@ def test_default_week_start_uses_today_once_season_is_underway():
     assert result == monday_of("2026-10-25")
 
 
-def test_default_week_start_falls_back_to_earliest_when_nothing_upcoming():
+def test_default_week_start_falls_back_to_latest_game_when_nothing_upcoming():
     from nba_predictor.services.schedule_repository import default_week_start, monday_of
 
-    schedule = [_completed_game("g0", "2025-10-21", "BOS", "MIA", 110, 100)]
+    schedule = [
+        _completed_game("g0", "2025-10-21", "BOS", "MIA", 110, 100),
+        _completed_game("g1", "2026-04-10", "LAL", "GSW", 120, 115),
+    ]
 
     result = default_week_start(schedule, today="2026-09-17")
 
-    assert result == monday_of("2025-10-21")
+    # The most recently played week ("newest prediction"), not the
+    # earliest game the schedule ever contained.
+    assert result == monday_of("2026-04-10")
 
 
 def test_default_week_start_ignores_stale_not_completed_games_from_the_past():
@@ -234,4 +227,4 @@ def test_default_week_start_ignores_stale_not_completed_games_from_the_past():
 
     result = default_week_start(schedule, today="2026-09-18")
 
-    assert result == monday_of("2025-10-21")
+    assert result == monday_of("2026-10-21")

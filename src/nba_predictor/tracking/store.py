@@ -1,13 +1,23 @@
 import sqlite3
+import threading
 from contextlib import contextmanager
 from pathlib import Path
 
-# The tracking DB can live on network-attached storage (Azure Files, for
-# persistence across container restarts), where a lock briefly held by a
-# just-restarted process takes longer to clear than sqlite3's 5s default
-# timeout. 30s gives that lock time to release instead of failing fast
-# with "database is locked".
 _CONNECT_TIMEOUT_SECONDS = 30
+# The tracking DB can live on an Azure Files (SMB) mount for persistence
+# across container restarts. SQLite's OS-level file locking (fcntl-based)
+# isn't honored reliably over that network filesystem -- CREATE TABLE on
+# an empty file fails immediately with "database is locked" even with no
+# real contention and a generous timeout. Every connection below opens
+# with nolock=1 to bypass that broken locking, and _DB_LOCK is what
+# actually serializes access instead -- safe only because the container
+# app is pinned to exactly one replica, making this process the sole
+# writer.
+_DB_LOCK = threading.Lock()
+
+
+def _connect(db_path: Path) -> sqlite3.Connection:
+    return sqlite3.connect(f"file:{db_path}?nolock=1", uri=True, timeout=_CONNECT_TIMEOUT_SECONDS)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS predictions (
@@ -72,7 +82,7 @@ CREATE TABLE IF NOT EXISTS game_player_outcomes (
 
 def init_db(db_path: Path) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(db_path, timeout=_CONNECT_TIMEOUT_SECONDS) as conn:
+    with _DB_LOCK, _connect(db_path) as conn:
         conn.executescript(SCHEMA)
         _ensure_point_column(conn)
 
@@ -90,12 +100,13 @@ def _ensure_point_column(conn: sqlite3.Connection) -> None:
 
 @contextmanager
 def get_connection(db_path: Path):
-    conn = sqlite3.connect(db_path, timeout=_CONNECT_TIMEOUT_SECONDS)
-    conn.row_factory = sqlite3.Row
-    try:
-        yield conn
-    finally:
-        conn.close()
+    with _DB_LOCK:
+        conn = _connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            yield conn
+        finally:
+            conn.close()
 
 
 def insert_prediction(

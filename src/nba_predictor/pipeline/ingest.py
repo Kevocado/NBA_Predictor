@@ -1,11 +1,14 @@
 import argparse
 import json
+import logging
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import joblib
 import numpy as np
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 from nba_predictor import config
 from nba_predictor.data import espn
@@ -113,7 +116,13 @@ def score_upcoming_player_props(games: list[dict], player_boxscores: dict[str, l
     if len(upcoming_frame) == 0:
         return 0
 
-    models = {stat: joblib.load(models_dir / f"player_{stat}_model.pkl") for stat in PLAYER_STAT_TARGET_COLUMNS}
+    models: dict[str, object] = {}
+    for stat in PLAYER_STAT_TARGET_COLUMNS:
+        path = models_dir / f"player_{stat}_model.pkl"
+        try:
+            models[stat] = joblib.load(path)
+        except FileNotFoundError:
+            logger.warning("player model missing, skipping market: %s", path)
     predictions = {stat: predict_player_stat(model, upcoming_frame[feature_cols]) for stat, model in models.items()}
 
     created_at = datetime.now(timezone.utc).isoformat()
@@ -170,7 +179,13 @@ def score_and_store_player_predictions(training_df: pd.DataFrame, models_dir: Pa
     if len(frame) == 0:
         return 0
 
-    models = {stat: joblib.load(models_dir / f"player_{stat}_model.pkl") for stat in PLAYER_STAT_TARGET_COLUMNS}
+    models: dict[str, object] = {}
+    for stat in PLAYER_STAT_TARGET_COLUMNS:
+        path = models_dir / f"player_{stat}_model.pkl"
+        try:
+            models[stat] = joblib.load(path)
+        except FileNotFoundError:
+            logger.warning("player model missing, skipping market: %s", path)
     predictions = {stat: predict_player_stat(model, frame[feature_cols]) for stat, model in models.items()}
 
     created_at = datetime.now(timezone.utc).isoformat()
@@ -298,9 +313,13 @@ def score_upcoming_games(games: list[dict], models_dir: Path, db_path: Path, mod
     # Trusted artifacts: these .pkl files are written by run_retrain_pipeline
     # (via joblib.dump) in this same pipeline run — not from an external or
     # user-uploaded source (same trust boundary as score_and_store_predictions).
-    win_model = joblib.load(models_dir / "win_probability_model.pkl")
-    margin_model = joblib.load(models_dir / "margin_model.pkl")
-    total_model = joblib.load(models_dir / "total_model.pkl")
+    try:
+        win_model = joblib.load(models_dir / "win_probability_model.pkl")
+        margin_model = joblib.load(models_dir / "margin_model.pkl")
+        total_model = joblib.load(models_dir / "total_model.pkl")
+    except FileNotFoundError as exc:
+        logger.warning("game model missing, skipping game scoring: %s", exc.filename)
+        return 0
 
     win_probs = predict_win_probability(win_model, upcoming_frame[feature_cols])
     margins = margin_model.predict(upcoming_frame[feature_cols])
@@ -570,9 +589,13 @@ def score_and_store_predictions(games_df: pd.DataFrame, models_dir: Path, db_pat
     # Trusted artifacts: these .pkl files are written by run_retrain_pipeline
     # (via joblib.dump) in this same pipeline run — not from an external or
     # user-uploaded source.
-    win_model = joblib.load(models_dir / "win_probability_model.pkl")
-    margin_model = joblib.load(models_dir / "margin_model.pkl")
-    total_model = joblib.load(models_dir / "total_model.pkl")
+    try:
+        win_model = joblib.load(models_dir / "win_probability_model.pkl")
+        margin_model = joblib.load(models_dir / "margin_model.pkl")
+        total_model = joblib.load(models_dir / "total_model.pkl")
+    except FileNotFoundError as exc:
+        logger.warning("game model missing, skipping game scoring: %s", exc.filename)
+        return 0
 
     frame, feature_cols = build_training_frame(games_df)
     if len(frame) == 0:

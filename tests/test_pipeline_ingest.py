@@ -662,3 +662,64 @@ def test_score_and_store_player_predictions_stores_position(tmp_path):
     rows = store.get_player_predictions_for_game(db_path, "done2")
     by_player = {r["player_id"]: r["position"] for r in rows}
     assert by_player == {"p1": "G", "p2": "C"}
+
+
+def test_missing_player_model_skips_stat(tmp_path, caplog):
+    import joblib
+    from nba_predictor.pipeline import ingest
+    from nba_predictor.tracking import store
+    from nba_predictor.models.player_props import train_player_stat_model
+
+    # Two completed games: one yields an empty feature frame (rolling
+    # features need a prior game), so the skip path would never be reached.
+    games = _player_games_two_completed()
+    box = _player_boxscores()
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    # Train every stat EXCEPT threes — its .pkl is missing.
+    train_df = ingest.to_player_training_frame(games, box)
+    frame, feature_cols = ingest.build_player_feature_frame(train_df)
+    for stat, target_col in ingest.PLAYER_STAT_TARGET_COLUMNS.items():
+        if stat == "threes" or not len(frame):
+            continue
+        m = train_player_stat_model(frame[feature_cols], frame[target_col])
+        joblib.dump(m, models_dir / f"player_{stat}_model.pkl")
+    db_path = tmp_path / "t.db"
+    store.init_db(db_path)
+    with caplog.at_level("WARNING", logger="nba_predictor.pipeline.ingest"):
+        n = ingest.score_upcoming_player_props(games, box, models_dir, db_path, "v1")
+    assert n > 0  # other three markets still scored
+    rows = store.get_player_predictions_for_game(db_path, "next1")
+    assert {r["stat"] for r in rows} == {"points", "rebounds", "assists"}
+    assert any("player_threes_model.pkl" in r.message for r in caplog.records)
+
+
+def test_missing_game_model_skips_scoring(tmp_path, caplog):
+    from nba_predictor.pipeline import ingest
+    from nba_predictor.tracking import store
+
+    def completed(i, game_date):
+        home, away = ("BOS", "MIA") if i % 2 == 0 else ("MIA", "BOS")
+        return {
+            "game_id": f"g{i}", "game_date": game_date, "home_team": home, "away_team": away,
+            "completed": True, "home_pts": 110, "away_pts": 105,
+            "home_fgm": 40, "home_fga": 88, "home_fg3m": 12, "home_tov": 11,
+            "home_oreb": 9, "home_dreb": 32, "home_fta": 20,
+            "away_fgm": 38, "away_fga": 90, "away_fg3m": 10, "away_tov": 13,
+            "away_oreb": 10, "away_dreb": 30, "away_fta": 18,
+        }
+
+    import pandas as pd
+    dates = pd.date_range("2026-02-01", periods=12).astype(str)
+    games = [completed(i, d) for i, d in enumerate(dates)] + [
+        {"game_id": "next1", "game_date": "2026-03-01", "completed": False,
+         "home_team": "BOS", "away_team": "MIA"},
+    ]
+    db_path = tmp_path / "t.db"
+    store.init_db(db_path)
+    models_dir = tmp_path / "models"  # empty: no .pkl files at all
+    models_dir.mkdir()
+    with caplog.at_level("WARNING", logger="nba_predictor.pipeline.ingest"):
+        n = ingest.score_upcoming_games(games, models_dir, db_path, "v1")
+    assert n == 0
+    assert any("win_probability_model.pkl" in r.message for r in caplog.records)

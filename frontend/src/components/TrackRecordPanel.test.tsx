@@ -30,6 +30,18 @@ describe("TrackRecordPanel", () => {
     expect(screen.getAllByText("50%")).toHaveLength(2);
   });
 
+  it("renders a dash instead of a misleading 0% for the player-props row", async () => {
+    vi.mocked(api.getTrackRecord).mockResolvedValue([
+      { market: "player_props", total_predictions: 200, correct_predictions: 0, hit_rate: 0.0 },
+    ]);
+
+    render(<TrackRecordPanel />);
+
+    await waitFor(() => expect(screen.getByText("player_props")).toBeInTheDocument());
+    expect(screen.getByText("—")).toBeInTheDocument();
+    expect(screen.queryByText("0%")).not.toBeInTheDocument();
+  });
+
   it("shows an empty state when no predictions are tracked yet", async () => {
     vi.mocked(api.getTrackRecord).mockResolvedValue([]);
     render(<TrackRecordPanel />);

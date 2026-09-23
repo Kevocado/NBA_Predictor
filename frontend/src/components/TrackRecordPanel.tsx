@@ -31,31 +31,35 @@ export default function TrackRecordPanel() {
               <td>{row.market}</td>
               <td>{row.total_predictions}</td>
               <td>{row.correct_predictions}</td>
-              <td>
-                <div className="flex items-center gap-2">
-                  <div
-                    className="relative h-2 w-24 rounded bg-[var(--color-net)]"
-                    role="img"
-                    aria-label={`${row.market} hit rate ${pct} percent`}
-                  >
+              {row.market === "player_props" ? (
+                <td title="Hit rate doesn't apply to continuous prop errors — see MAE instead">—</td>
+              ) : (
+                <td>
+                  <div className="flex items-center gap-2">
                     <div
-                      className="h-full rounded bg-[var(--color-win)]"
-                      style={{ width: `${Math.min(100, Math.max(0, pct))}%` }}
-                    />
-                    <div
-                      data-testid="break-even-50"
-                      title="Break-even (50%)"
-                      aria-hidden="true"
-                      className="absolute inset-y-0 w-px -translate-x-1/2 bg-[var(--color-shotclock)]"
-                      style={{ left: "50%" }}
-                    />
+                      className="relative h-2 w-24 rounded bg-[var(--color-net)]"
+                      role="img"
+                      aria-label={`${row.market} hit rate ${pct} percent`}
+                    >
+                      <div
+                        className="h-full rounded bg-[var(--color-win)]"
+                        style={{ width: `${Math.min(100, Math.max(0, pct))}%` }}
+                      />
+                      <div
+                        data-testid="break-even-50"
+                        title="Break-even (50%)"
+                        aria-hidden="true"
+                        className="absolute inset-y-0 w-px -translate-x-1/2 bg-[var(--color-shotclock)]"
+                        style={{ left: "50%" }}
+                      />
+                    </div>
+                    <span>{pct}%</span>
+                    <span className="text-xs text-[var(--color-net-faint)]" title="Break-even (50%)">
+                      50%
+                    </span>
                   </div>
-                  <span>{pct}%</span>
-                  <span className="text-xs text-[var(--color-net-faint)]" title="Break-even (50%)">
-                    50%
-                  </span>
-                </div>
-              </td>
+                </td>
+              )}
             </tr>
           );
         })}

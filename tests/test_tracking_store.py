@@ -155,3 +155,50 @@ def test_insert_market_prediction_stores_point_line_value(tmp_path):
 
     rows = store.get_market_predictions_for_game(db_path, "g1")
     assert rows[0]["point"] == pytest.approx(-4.5)
+
+
+def test_position_column_migration_preserves_rows(tmp_path):
+    from nba_predictor.tracking import store
+
+    db_path = tmp_path / "tracking.db"
+    # Build an old-schema DB by hand (no position column).
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """CREATE TABLE player_prediction_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, game_id TEXT NOT NULL,
+            player_id TEXT NOT NULL, stat TEXT NOT NULL,
+            predicted_value REAL NOT NULL, created_at TEXT NOT NULL)"""
+    )
+    conn.execute(
+        "INSERT INTO player_prediction_snapshots (game_id, player_id, stat, predicted_value, created_at)"
+        " VALUES ('g1', 'p1', 'points', 20.5, '2026-01-01T00:00:00+00:00')"
+    )
+    conn.commit()
+    conn.close()
+    store.init_db(db_path)
+    with store.get_connection(db_path) as c:
+        cols = {r[1] for r in c.execute("PRAGMA table_info(player_prediction_snapshots)")}
+        assert "position" in cols
+        rows = c.execute(
+            "SELECT game_id, player_id, predicted_value, position FROM player_prediction_snapshots"
+        ).fetchall()
+    assert len(rows) == 1
+    assert rows[0]["game_id"] == "g1" and rows[0]["position"] is None
+
+
+def test_insert_player_prediction_stores_position(tmp_path):
+    from nba_predictor.tracking import store
+
+    db_path = tmp_path / "tracking.db"
+    store.init_db(db_path)
+    store.insert_player_prediction(
+        db_path, game_id="g1", player_id="p1", stat="points",
+        predicted_value=20.5, created_at="2026-01-01T00:00:00+00:00", position="G",
+    )
+    store.insert_player_prediction(
+        db_path, game_id="g1", player_id="p2", stat="points",
+        predicted_value=10.0, created_at="2026-01-01T00:00:00+00:00",
+    )
+    rows = store.get_player_predictions_for_game(db_path, "g1")
+    by_player = {r["player_id"]: r["position"] for r in rows}
+    assert by_player == {"p1": "G", "p2": None}

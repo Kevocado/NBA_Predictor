@@ -50,3 +50,18 @@ def test_run_retrain_pipeline_appends_history_across_calls(tmp_path):
 
     lines = (models_dir / "manifest_history.jsonl").read_text().strip().split("\n")
     assert len(lines) == 2
+
+
+def test_retrain_manifest_has_training_counts(tmp_path):
+    import json
+    from nba_predictor.pipeline.retrain import run_retrain_pipeline
+    games = _synthetic_games()  # 60 games starting 2026-10-21: one NBA season
+    models_dir = tmp_path / "models"
+    manifest = run_retrain_pipeline(games, models_dir, "v9", "2026-09-23T00:00:00+00:00")
+    training = manifest["training"]
+    assert training["n_train_games"] > 0
+    assert training["n_holdout_games"] > 0
+    assert training["n_train_games"] + training["n_holdout_games"] == len(games)
+    assert training["n_current_season_games"] <= training["n_train_games"]
+    on_disk = json.loads((models_dir / "manifest.json").read_text())
+    assert on_disk["training"] == training

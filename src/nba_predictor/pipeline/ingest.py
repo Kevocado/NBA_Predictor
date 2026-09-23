@@ -166,6 +166,7 @@ def train_player_prop_models(training_df: pd.DataFrame, models_dir: Path, model_
         metrics=metrics,
         model_version=model_version,
         trained_at=trained_at,
+        training={"n_train_player_games": int(len(frame)), "in_sample_metrics": True},
     )
     write_manifest(manifest, models_dir / "player_props_manifest.json")
     return manifest

@@ -43,3 +43,21 @@ def test_append_manifest_history_adds_one_line_per_call(tmp_path):
     assert len(lines) == 2
     assert json.loads(lines[0])["model_version"] == "v1"
     assert json.loads(lines[1])["model_version"] == "v2"
+
+
+def test_build_manifest_includes_training():
+    from nba_predictor.models.manifest import build_manifest
+    m = build_manifest(
+        model_names=["win_probability"], metrics={},
+        model_version="v1", trained_at="2026-01-01T00:00:00+00:00",
+        training={"n_train_games": 1000, "n_holdout_games": 250, "n_current_season_games": 300},
+    )
+    assert m["training"]["n_train_games"] == 1000
+    assert m["training"]["n_holdout_games"] == 250
+    assert m["training"]["n_current_season_games"] == 300
+
+
+def test_build_manifest_training_defaults_empty():
+    from nba_predictor.models.manifest import build_manifest
+    m = build_manifest(model_names=[], metrics={}, model_version="v1", trained_at="t")
+    assert m["training"] == {}

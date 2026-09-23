@@ -1,3 +1,4 @@
+from datetime import datetime
 from pathlib import Path
 
 import joblib
@@ -15,10 +16,22 @@ from nba_predictor.models.game_outcome import (
 from nba_predictor.models.manifest import append_manifest_history, build_manifest, write_manifest
 
 
+def _nba_season_start_year(game_date: str) -> int:
+    """NBA season starting year: Oct-Dec belongs to the season starting that
+    calendar year, Jan-Sep to the season that started the prior year."""
+    dt = datetime.fromisoformat(str(game_date).replace("Z", "+00:00"))
+    return dt.year if dt.month >= 10 else dt.year - 1
+
+
 def run_retrain_pipeline(games: pd.DataFrame, models_dir: Path, model_version: str, trained_at: str) -> dict:
     models_dir.mkdir(parents=True, exist_ok=True)
 
     train_games, holdout_games = chronological_split(games, date_col="game_date", holdout_fraction=0.2)
+
+    latest_season = _nba_season_start_year(games["game_date"].max())
+    n_current_season_games = int(
+        (train_games["game_date"].apply(_nba_season_start_year) == latest_season).sum()
+    )
 
     train_df, feature_cols = build_training_frame(train_games)
     holdout_df, _ = build_training_frame(pd.concat([train_games, holdout_games], ignore_index=True))
@@ -53,6 +66,11 @@ def run_retrain_pipeline(games: pd.DataFrame, models_dir: Path, model_version: s
         metrics=metrics,
         model_version=model_version,
         trained_at=trained_at,
+        training={
+            "n_train_games": int(len(train_games)),
+            "n_holdout_games": int(len(holdout_games)),
+            "n_current_season_games": n_current_season_games,
+        },
     )
     write_manifest(manifest, models_dir / "manifest.json")
     append_manifest_history(manifest, models_dir / "manifest_history.jsonl")

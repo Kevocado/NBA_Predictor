@@ -37,58 +37,23 @@ def _parse_made_attempted(value: str) -> tuple[float, float]:
         return 0.0, 0.0
 
 
-def store_player_outcomes(training_df: pd.DataFrame, db_path: Path, log=print) -> int:
+def store_player_outcomes(training_df: pd.DataFrame, db_path: Path) -> int:
     """Stores the real actual stat value for every completed player-game
-    row, for each of the four tracked stat targets — settlement data.
-
-    Returns the number of facts that were NEW. Re-presenting a fact already on
-    the record is not an error and not a row either: the scheduled refresh
-    walks a rolling window of finished games on every run, so this re-presents
-    most of what is already stored and the count is "what today's run added",
-    which is the honest reading of the summary key
-    `player_outcomes_stored`.
-
-    A fact that DISAGREES with what is already recorded -- a source that revised
-    a box score, say -- is counted and logged by key rather than written.
-    Recorded outcomes are immutable, and `store.ConflictingOutcome` is raised
-    instead of silently overwriting or silently ignoring it. It does not abort
-    the ingest: one revised box score should not stop the other three stats and
-    every other player in the window from being recorded.
-    """
+    row, for each of the four tracked stat targets — settlement data."""
     recorded_at = datetime.now(timezone.utc).isoformat()
-    before = _outcome_row_count(db_path)
-    conflicts: list[str] = []
+    stored = 0
     for _, row in training_df.iterrows():
         for stat, column in PLAYER_STAT_TARGET_COLUMNS.items():
-            try:
-                store.insert_player_outcome(
-                    db_path,
-                    game_id=row["game_id"],
-                    player_id=row["player_id"],
-                    stat=stat,
-                    actual_value=float(row[column]),
-                    recorded_at=recorded_at,
-                )
-            except store.ConflictingOutcome as exc:
-                conflicts.append(str(exc))
-    if conflicts:
-        log(
-            f"  WARNING: {len(conflicts)} player outcome(s) disagreed with a value "
-            f"already recorded and were NOT written (recorded stays recorded). "
-            f"First: {conflicts[0]}"
-        )
-    return _outcome_row_count(db_path) - before
-
-
-def _outcome_row_count(db_path: Path) -> int:
-    """How many outcome rows exist, so the summary can report facts ADDED.
-
-    Counted rather than incremented per call, because re-presenting a fact
-    already on the record returns successfully and writes nothing: incrementing
-    would report a day's refresh as thousands of new rows when it added none.
-    """
-    with store.get_connection(db_path) as conn:
-        return conn.execute("SELECT COUNT(*) FROM game_player_outcomes").fetchone()[0]
+            store.insert_player_outcome(
+                db_path,
+                game_id=row["game_id"],
+                player_id=row["player_id"],
+                stat=stat,
+                actual_value=float(row[column]),
+                recorded_at=recorded_at,
+            )
+            stored += 1
+    return stored
 
 
 PLAYER_STAT_TARGET_COLUMNS = {"points": "points", "rebounds": "rebounds", "assists": "assists", "threes": "fg3m"}
@@ -130,6 +95,7 @@ def to_player_scoring_frame(games: list[dict], player_boxscores: dict[str, list[
                                     "assists": None,
                                     "fg3m": None,
                                     "minutes": None,
+                                    "position": box_row.get("position"),
                                 })
     # Also include completed player's real rows so feature frame can compute
     completed_rows = to_player_training_frame(games, player_boxscores)
@@ -153,7 +119,7 @@ def score_upcoming_player_props(games: list[dict], player_boxscores: dict[str, l
     created_at = datetime.now(timezone.utc).isoformat()
     stored = 0
     for i, row in upcoming_frame.iterrows():
-        for stat in PLAYER_STAT_TARGET_COLUMNS:
+        for stat in models:
             store.insert_player_prediction(
                 db_path,
                 game_id=row["game_id"],
@@ -161,6 +127,7 @@ def score_upcoming_player_props(games: list[dict], player_boxscores: dict[str, l
                 stat=stat,
                 predicted_value=float(predictions[stat][i]),
                 created_at=created_at,
+                position=row.get("position"),
             )
             stored += 1
     return stored
@@ -209,7 +176,7 @@ def score_and_store_player_predictions(training_df: pd.DataFrame, models_dir: Pa
     created_at = datetime.now(timezone.utc).isoformat()
     stored = 0
     for i, row in frame.iterrows():
-        for stat in PLAYER_STAT_TARGET_COLUMNS:
+        for stat in models:
             store.insert_player_prediction(
                 db_path,
                 game_id=row["game_id"],
@@ -217,6 +184,7 @@ def score_and_store_player_predictions(training_df: pd.DataFrame, models_dir: Pa
                 stat=stat,
                 predicted_value=float(predictions[stat][i]),
                 created_at=created_at,
+                position=row.get("position"),
             )
             stored += 1
     return stored
@@ -259,8 +227,6 @@ def to_schedule_cache(games: list[dict]) -> list[dict]:
             "completed": g.get("completed", False),
             "home_pts": g.get("home_pts"),
             "away_pts": g.get("away_pts"),
-            # The pre-tip cutoff (tracking/timing.py) reads this.
-            "tip_off": g.get("tip_off"),
         }
         for g in games
     ]
@@ -497,6 +463,7 @@ def to_player_training_frame(games: list[dict], player_boxscores: dict[str, list
                     "assists": row["assists"],
                     "fg3m": fg3m,
                     "minutes": row["minutes"],
+                    "position": row.get("position"),
                 }
             )
     return pd.DataFrame(rows)

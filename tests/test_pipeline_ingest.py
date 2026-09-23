@@ -76,19 +76,9 @@ def test_to_schedule_cache_includes_scores_and_completion():
     assert cache == [
         {
             "game_id": "1", "game_date": "2026-03-01", "home_team": "BOS", "away_team": "MIA",
-            "completed": True, "home_pts": 110, "away_pts": 100, "tip_off": None,
+            "completed": True, "home_pts": 110, "away_pts": 100,
         }
     ]
-
-
-def test_to_schedule_cache_keeps_the_tip_off_time():
-    """The pre-tip cutoff reads tip_off from this cache; dropping it here
-    would silently fall back to noon Eastern for every game."""
-    from nba_predictor.pipeline.ingest import to_schedule_cache
-
-    games = [{"game_id": "1", "game_date": "2026-03-01", "tip_off": "2026-03-02T00:30Z", "home_team": "BOS", "away_team": "MIA"}]
-
-    assert to_schedule_cache(games)[0]["tip_off"] == "2026-03-02T00:30Z"
 
 
 def test_to_schedule_cache_handles_upcoming_games_without_scores():
@@ -579,3 +569,96 @@ def test_to_player_training_frame_skips_games_missing_from_schedule():
     df = to_player_training_frame([], player_boxscores)
 
     assert len(df) == 0
+
+
+def _player_games_two_completed():
+    return [
+        {"game_id": "done1", "game_date": "2026-01-01", "completed": True,
+         "home_team": "LAL", "away_team": "BOS"},
+        {"game_id": "done2", "game_date": "2026-01-02", "completed": True,
+         "home_team": "BOS", "away_team": "LAL"},
+        {"game_id": "next1", "game_date": "2026-01-03", "completed": False,
+         "home_team": "LAL", "away_team": "BOS"},
+    ]
+
+
+def _player_boxscores():
+    def row(pid, name, team, pos, pts, reb, ast):
+        return {"player_id": pid, "player_name": name, "team": team, "position": pos,
+                "minutes": 30, "points": pts, "rebounds": reb, "assists": ast,
+                "fg_made_attempted": "8-15", "three_made_attempted": "2-5",
+                "ft_made_attempted": "2-2"}
+    return {
+        "done1": [row("p1", "A", "LAL", "G", 20, 5, 6),
+                  row("p2", "B", "BOS", "C", 12, 11, 2)],
+        "done2": [row("p1", "A", "LAL", "G", 22, 4, 7),
+                  row("p2", "B", "BOS", "C", 14, 10, 3)],
+    }
+
+
+def _train_player_models(tmp_path, frame, feature_cols):
+    import joblib
+    from nba_predictor.models.player_props import train_player_stat_model
+    from nba_predictor.pipeline import ingest
+
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    for stat, target_col in ingest.PLAYER_STAT_TARGET_COLUMNS.items():
+        m = train_player_stat_model(frame[feature_cols], frame[target_col])
+        joblib.dump(m, models_dir / f"player_{stat}_model.pkl")
+    return models_dir
+
+
+def test_player_frames_carry_position():
+    from nba_predictor.pipeline import ingest
+
+    games = _player_games_two_completed()
+    box = _player_boxscores()
+    train_df = ingest.to_player_training_frame(games, box)
+    assert "position" in train_df.columns
+    assert set(train_df["position"]) == {"G", "C"}
+
+    scoring_df = ingest.to_player_scoring_frame(games, box)
+    upcoming = scoring_df[scoring_df["game_id"] == "next1"]
+    assert len(upcoming) == 2
+    assert set(upcoming["position"]) == {"G", "C"}
+
+
+def test_score_upcoming_player_props_stores_position(tmp_path):
+    from nba_predictor.pipeline import ingest
+    from nba_predictor.tracking import store
+
+    games = _player_games_two_completed()
+    box = _player_boxscores()
+    train_df = ingest.to_player_training_frame(games, box)
+    frame, feature_cols = ingest.build_player_feature_frame(train_df)
+    assert len(frame) > 0
+    models_dir = _train_player_models(tmp_path, frame, feature_cols)
+
+    db_path = tmp_path / "t.db"
+    store.init_db(db_path)
+    n = ingest.score_upcoming_player_props(games, box, models_dir, db_path, "v1")
+    assert n > 0
+    rows = store.get_player_predictions_for_game(db_path, "next1")
+    by_player = {r["player_id"]: r["position"] for r in rows}
+    assert by_player == {"p1": "G", "p2": "C"}
+
+
+def test_score_and_store_player_predictions_stores_position(tmp_path):
+    from nba_predictor.pipeline import ingest
+    from nba_predictor.tracking import store
+
+    games = [g for g in _player_games_two_completed() if g["completed"]]
+    box = _player_boxscores()
+    train_df = ingest.to_player_training_frame(games, box)
+    frame, feature_cols = ingest.build_player_feature_frame(train_df)
+    assert len(frame) > 0
+    models_dir = _train_player_models(tmp_path, frame, feature_cols)
+
+    db_path = tmp_path / "t.db"
+    store.init_db(db_path)
+    n = ingest.score_and_store_player_predictions(train_df, models_dir, db_path, "v1")
+    assert n > 0
+    rows = store.get_player_predictions_for_game(db_path, "done2")
+    by_player = {r["player_id"]: r["position"] for r in rows}
+    assert by_player == {"p1": "G", "p2": "C"}

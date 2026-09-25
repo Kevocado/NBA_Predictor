@@ -42,6 +42,7 @@ from nba_predictor.services.schedule_repository import (
     load_schedule,
 )
 from nba_predictor.tracking import store
+from nba_predictor.tracking.timing import latest_pre_tip
 from nba_predictor import config
 
 router = APIRouter()
@@ -69,21 +70,32 @@ def get_team_detail(abbreviation: str) -> TeamOut:
     return TeamOut(abbreviation=team.abbreviation, name=team.name, conference=team.conference, division=team.division)
 
 
-def _prediction_out(db_path: Path, game_id: str) -> PredictionOut | None:
-    row = store.get_latest_prediction_for_game(db_path, game_id)
-    if row is None:
-        return None
-    return PredictionOut(
-        home_win_probability=row["home_win_prob"],
-        predicted_margin=row["predicted_margin"],
-        predicted_total=row["predicted_total"],
+def _prediction_out(db_path: Path, game: dict) -> tuple[PredictionOut | None, bool]:
+    """The pick to show and whether it was rebuilt after tip-off. The latest
+    pick made before tip-off wins; a later backtest row only shows (labelled
+    rebuilt) when no pre-tip pick exists."""
+    rows = store.get_predictions_for_game(db_path, game["game_id"])
+    if not rows:
+        return None, False
+    row = latest_pre_tip(rows, game)
+    rebuilt = row is None
+    row = row if row is not None else rows[-1]
+    return (
+        PredictionOut(
+            home_win_probability=row["home_win_prob"],
+            predicted_margin=row["predicted_margin"],
+            predicted_total=row["predicted_total"],
+        ),
+        rebuilt,
     )
 
 
 def _game_out(g: dict, db_path: Path) -> GameOut:
+    prediction, rebuilt = _prediction_out(db_path, g)
     return GameOut(
-        game_id=g["game_id"], game_date=g["game_date"], home_team=g["home_team"], away_team=g["away_team"],
-        prediction=_prediction_out(db_path, g["game_id"]),
+        game_id=g["game_id"], game_date=g["game_date"], tip_off=g.get("tip_off"),
+        home_team=g["home_team"], away_team=g["away_team"],
+        prediction=prediction, rebuilt=rebuilt,
         completed=g.get("completed", False), home_pts=g.get("home_pts"), away_pts=g.get("away_pts"),
     )
 

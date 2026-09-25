@@ -105,6 +105,8 @@ def get_scoreboard(date: str) -> list[dict]:
             {
                 "game_id": event["id"],
                 "game_date": date,
+                # UTC start time; tracking uses it to tell pre-tip picks apart.
+                "tip_off": event.get("date"),
                 "home_team": home_abbr,
                 "away_team": away_abbr,
                 "completed": completed,

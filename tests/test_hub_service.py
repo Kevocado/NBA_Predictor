@@ -148,3 +148,54 @@ def test_compute_track_record_settles_h2h_market_predictions(tmp_path):
     assert h2h.total_predictions == 1
     assert h2h.correct_predictions == 1
     assert h2h.hit_rate == 1.0
+
+
+def test_track_record_counts_only_picks_made_before_tip_off(tmp_path):
+    from nba_predictor.services.hub_service import compute_track_record
+    from nba_predictor.tracking import store
+
+    db_path = tmp_path / "tracking.db"
+    store.init_db(db_path)
+    # g1: a real pre-tip pick (right), later overwritten by a backtest (wrong).
+    store.insert_prediction(
+        db_path, game_id="g1", created_at="2026-03-01T10:00:00+00:00", model_version="v1",
+        home_win_prob=0.7, predicted_margin=5.0, predicted_total=220.0,
+    )
+    store.insert_prediction(
+        db_path, game_id="g1", created_at="2026-09-20T08:00:00+00:00", model_version="v2",
+        home_win_prob=0.3, predicted_margin=-2.0, predicted_total=220.0,
+    )
+    # g2: only a backtest row, rebuilt after the game. Never counted.
+    store.insert_prediction(
+        db_path, game_id="g2", created_at="2026-09-20T08:00:00+00:00", model_version="v2",
+        home_win_prob=0.4, predicted_margin=-3.0, predicted_total=215.0,
+    )
+    schedule = [
+        _completed_game("g1", "BOS", "MIA", 110, 100),
+        _completed_game("g2", "LAL", "GSW", 95, 105),
+    ]
+
+    game_outcome = next(r for r in compute_track_record(db_path, schedule) if r.market == "game_outcome")
+
+    assert game_outcome.total_predictions == 1
+    assert game_outcome.correct_predictions == 1
+    assert game_outcome.n_rebuilt == 1
+
+
+def test_track_record_h2h_ignores_market_rows_made_after_tip_off(tmp_path):
+    from nba_predictor.services.hub_service import compute_track_record
+    from nba_predictor.tracking import store
+
+    db_path = tmp_path / "tracking.db"
+    store.init_db(db_path)
+    store.insert_market_prediction(
+        db_path, game_id="g1", market="h2h", selection="MIA", model_probability=0.6,
+        market_probability=0.5, edge=0.1, bookmaker="DraftKings", american_odds=120,
+        created_at="2026-03-02T03:00:00+00:00",
+    )
+    schedule = [_completed_game("g1", "BOS", "MIA", 110, 100)]
+
+    h2h = next(r for r in compute_track_record(db_path, schedule) if r.market == "h2h")
+
+    assert h2h.total_predictions == 0
+    assert h2h.correct_predictions == 0

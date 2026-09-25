@@ -33,6 +33,7 @@ def test_get_scoreboard_parses_completed_game(mock_fetch, clear_cache):
         "events": [
             {
                 "id": "401810448",
+                "date": "2026-01-18T01:30Z",
                 "competitions": [
                     {
                         "status": {"type": {"completed": True}},
@@ -56,6 +57,7 @@ def test_get_scoreboard_parses_completed_game(mock_fetch, clear_cache):
     assert game["completed"] is True
     assert game["home_pts"] == 138
     assert game["away_pts"] == 120
+    assert game["tip_off"] == "2026-01-18T01:30Z"
 
 
 @patch("nba_predictor.data.espn._fetch_json")

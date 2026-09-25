@@ -30,7 +30,11 @@ class GameOut(BaseModel):
     game_date: str
     home_team: str
     away_team: str
+    tip_off: str | None = None
     prediction: PredictionOut | None = None
+    # True when the pick shown was made at or after tip-off (a backtest). It
+    # is labelled on the site and never counted.
+    rebuilt: bool = False
     completed: bool = False
     home_pts: int | None = None
     away_pts: int | None = None
@@ -65,6 +69,8 @@ class TrackRecordOut(BaseModel):
     total_predictions: int
     correct_predictions: int
     hit_rate: float
+    # Final games whose only picks were made after tip-off: left out above.
+    n_rebuilt: int = 0
 
 
 class SeasonBoundsOut(BaseModel):

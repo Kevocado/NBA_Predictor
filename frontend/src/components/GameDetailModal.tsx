@@ -110,6 +110,12 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
   const verdict = detail ? computePostMatchVerdict(detail) : null;
   const pickFav = detail?.prediction ? favourite(detail.prediction, detail.home_team, detail.away_team) : null;
   const marginFav = detail?.prediction ? favoredTeam(detail.prediction.predicted_margin, detail.home_team, detail.away_team) : null;
+  // The win and margin numbers come from separate models. When they point at
+  // different teams, or the margin rounds to nothing, don't print a
+  // contradiction ("BOS to win" beside "MIA by 0.6") or "BOS by 0.0".
+  const marginLabel = marginFav && pickFav && marginFav.team === pickFav.team && marginFav.value >= 0.5
+    ? `${marginFav.team} by ${marginFav.value.toFixed(1)}`
+    : "Toss-up";
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70" onClick={onClose}>
@@ -150,7 +156,7 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
               </div>
               <div>
                 <div className="stat-display text-2xl leading-none">
-                  {marginFav?.team} by {marginFav?.value.toFixed(1)}
+                  {marginLabel}
                 </div>
                 <div className="mt-1 text-xs text-[var(--color-net-dim)]">Projected margin</div>
               </div>

@@ -269,3 +269,26 @@ it("shows only the predicted value for an unsettled player prop", async () => {
   expect(screen.getByText("27.5")).toBeInTheDocument();
   expect(screen.queryByText(/actual/i)).not.toBeInTheDocument();
 });
+
+it("names the favoured side for the margin when both models agree", async () => {
+  vi.mocked(api.getGameDetail).mockResolvedValue({ ...detail, prediction: { home_win_probability: 0.47, predicted_margin: -4.8, predicted_total: 221.3 } });
+  vi.mocked(api.getGamePlayers).mockResolvedValue([]);
+  render(<GameDetailModal gameId="g1" onClose={() => {}} />);
+  expect(await screen.findByText("MIA to win")).toBeInTheDocument();
+  expect(screen.getByText("MIA by 4.8")).toBeInTheDocument();
+});
+
+it("calls the margin a toss-up when it disagrees with the win pick or is under half a point", async () => {
+  vi.mocked(api.getGameDetail).mockResolvedValue({ ...detail, prediction: { home_win_probability: 0.52, predicted_margin: -0.6, predicted_total: 221.3 } });
+  vi.mocked(api.getGamePlayers).mockResolvedValue([]);
+  const { unmount } = render(<GameDetailModal gameId="g1" onClose={() => {}} />);
+  expect(await screen.findByText("BOS to win")).toBeInTheDocument();
+  expect(screen.getByText("Toss-up")).toBeInTheDocument();
+  expect(screen.queryByText(/MIA by/)).not.toBeInTheDocument();
+  unmount();
+
+  vi.mocked(api.getGameDetail).mockResolvedValue({ ...detail, prediction: { home_win_probability: 0.6, predicted_margin: 0.03, predicted_total: 221.3 } });
+  render(<GameDetailModal gameId="g1" onClose={() => {}} />);
+  expect(await screen.findByText("Toss-up")).toBeInTheDocument();
+  expect(screen.queryByText(/by 0\.0/)).not.toBeInTheDocument();
+});

@@ -133,8 +133,18 @@ export interface CalibrationBin {
   count: number;
 }
 
+// A backend that accepts the connection but never answers must still end in
+// the page's error state (with Try again), never an endless "Loading…".
+export const REQUEST_TIMEOUT_MS = 15_000;
+
+function fetchWithTimeout(url: string, init: RequestInit = {}): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  return fetch(url, { ...init, signal: controller.signal }).finally(() => clearTimeout(timer));
+}
+
 async function fetchJson<T>(path: string): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`);
+  const response = await fetchWithTimeout(`${API_BASE}${path}`);
   if (!response.ok) {
     throw new Error(`Request to ${path} failed with status ${response.status}`);
   }

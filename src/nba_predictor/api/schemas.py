@@ -23,6 +23,8 @@ class MarketPredictionOut(BaseModel):
     bookmaker: str | None = None
     american_odds: int | None = None
     point: float | None = None
+    # Priced after tip-off (e.g. a refresh during the game): shown, never judged.
+    rebuilt: bool = False
 
 
 class GameOut(BaseModel):
@@ -62,6 +64,8 @@ class PlayerPropOut(BaseModel):
     stat: str
     predicted_value: float
     actual_value: float | None = None
+    # Built after tip-off (the retrain backtest): shown, never judged.
+    rebuilt: bool = False
 
 
 class TrackRecordOut(BaseModel):

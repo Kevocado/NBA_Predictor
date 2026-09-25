@@ -224,6 +224,8 @@ def to_schedule_cache(games: list[dict]) -> list[dict]:
             "completed": g.get("completed", False),
             "home_pts": g.get("home_pts"),
             "away_pts": g.get("away_pts"),
+            # The pre-tip cutoff (tracking/timing.py) reads this.
+            "tip_off": g.get("tip_off"),
         }
         for g in games
     ]

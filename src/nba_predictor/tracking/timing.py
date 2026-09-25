@@ -40,3 +40,14 @@ def latest_pre_tip(rows: list, game: dict):
     """The newest row made before tip-off, or None."""
     eligible = [r for r in rows if made_before_tip(r["created_at"], game)]
     return max(eligible, key=lambda r: _parse_utc(r["created_at"]), default=None)
+
+
+def latest_by_instant(rows: list):
+    """The newest row by parsed time, not by string order (zoneless and
+    '+00:00' timestamps don't sort together as text). None when empty."""
+    def key(r):
+        try:
+            return _parse_utc(r["created_at"])
+        except (TypeError, ValueError):
+            return datetime.min.replace(tzinfo=timezone.utc)
+    return max(rows, key=key, default=None)

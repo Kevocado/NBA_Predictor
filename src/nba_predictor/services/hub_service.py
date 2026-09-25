@@ -4,7 +4,7 @@ from pathlib import Path
 from nba_predictor.api.schemas import TrackRecordOut
 from nba_predictor.tracking import store
 from nba_predictor.tracking.store import get_connection
-from nba_predictor.tracking.timing import latest_pre_tip, made_before_tip
+from nba_predictor.tracking.timing import latest_pre_tip
 
 
 def load_hub_cache(path: Path) -> list[dict]:
@@ -66,32 +66,39 @@ def _settle_game_outcome(db_path: Path, schedule: list[dict]) -> TrackRecordOut 
 
 
 def _settle_h2h_market_predictions(db_path: Path, schedule: list[dict]) -> TrackRecordOut | None:
-    """Settles game_market_predictions rows for market="h2h" (selection is a
-    team abbreviation) against actual results. Spread/total market rows
-    aren't settled here — the stored row has no point/line value, so
-    "did it cover" isn't computable from what's tracked; those markets
-    still show total_predictions with hit_rate 0.0 rather than a fabricated
-    result (see the market-count fallback below)."""
+    """Settles the model's moneyline side against actual results, once per
+    game. Odds refresh stores both selections for every bookmaker on every
+    run, so judging every row would pin the rate near 50%: per game, take the
+    latest run made before tip-off and its selection with the higher model
+    probability. Spread/total rows aren't settled here — see the market-count
+    fallback below."""
     schedule_by_id = {g["game_id"]: g for g in schedule}
     with get_connection(db_path) as conn:
         rows = conn.execute("SELECT * FROM game_market_predictions WHERE market = 'h2h'").fetchall()
 
-    completed_rows = 0
+    by_game: dict[str, list] = {}
+    for row in rows:
+        by_game.setdefault(row["game_id"], []).append(row)
+
+    completed_games = 0
     total = 0
     correct = 0
-    for row in rows:
-        game = schedule_by_id.get(row["game_id"])
+    for game_id, game_rows in by_game.items():
+        game = schedule_by_id.get(game_id)
         if game is None or not game.get("completed") or game.get("home_pts") is None:
             continue
-        completed_rows += 1
-        if not made_before_tip(row["created_at"], game):
+        completed_games += 1
+        latest = latest_pre_tip(game_rows, game)
+        if latest is None:
             continue
+        run = [r for r in game_rows if r["created_at"] == latest["created_at"]]
+        pick = max(run, key=lambda r: r["model_probability"])
         total += 1
         actual_winner = game["home_team"] if game["home_pts"] > game["away_pts"] else game["away_team"]
-        if row["selection"] == actual_winner:
+        if pick["selection"] == actual_winner:
             correct += 1
 
-    if completed_rows == 0:
+    if completed_games == 0:
         return None
     return TrackRecordOut(
         market="h2h", total_predictions=total, correct_predictions=correct,

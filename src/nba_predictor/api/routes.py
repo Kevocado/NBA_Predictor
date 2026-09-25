@@ -42,7 +42,7 @@ from nba_predictor.services.schedule_repository import (
     load_schedule,
 )
 from nba_predictor.tracking import store
-from nba_predictor.tracking.timing import latest_pre_tip
+from nba_predictor.tracking.timing import latest_by_instant, latest_pre_tip, made_before_tip
 from nba_predictor import config
 
 router = APIRouter()
@@ -79,7 +79,7 @@ def _prediction_out(db_path: Path, game: dict) -> tuple[PredictionOut | None, bo
         return None, False
     row = latest_pre_tip(rows, game)
     rebuilt = row is None
-    row = row if row is not None else rows[-1]
+    row = row if row is not None else latest_by_instant(rows)
     return (
         PredictionOut(
             home_win_probability=row["home_win_prob"],
@@ -127,6 +127,7 @@ def get_game_detail(
             market=row["market"], selection=row["selection"], model_probability=row["model_probability"],
             market_probability=row["market_probability"], edge=row["edge"], bookmaker=row["bookmaker"],
             american_odds=row["american_odds"], point=row["point"],
+            rebuilt=not made_before_tip(row["created_at"], game),
         )
         for row in store.get_market_predictions_for_game(db_path, game_id)
     ]
@@ -161,16 +162,28 @@ def get_game_players(
     outcomes = store.get_player_outcomes_for_game(db_path, game_id)
     actual_by_key = {(row["player_id"], row["stat"]): row["actual_value"] for row in outcomes}
 
-    return [
-        PlayerPropOut(
-            player_id=row["player_id"],
-            player_name=name_by_id.get(row["player_id"], row["player_id"]),
-            stat=row["stat"],
-            predicted_value=row["predicted_value"],
-            actual_value=actual_by_key.get((row["player_id"], row["stat"])),
+    # One prop per player and stat: the latest made before tip-off, else the
+    # latest (a retrain backtest), flagged rebuilt so it is never judged.
+    by_key: dict[tuple[str, str], list] = {}
+    for row in store.get_player_predictions_for_game(db_path, game_id):
+        by_key.setdefault((row["player_id"], row["stat"]), []).append(row)
+
+    props = []
+    for (player_id, stat), rows in by_key.items():
+        pick = latest_pre_tip(rows, game)
+        rebuilt = pick is None
+        pick = pick if pick is not None else latest_by_instant(rows)
+        props.append(
+            PlayerPropOut(
+                player_id=player_id,
+                player_name=name_by_id.get(player_id, player_id),
+                stat=stat,
+                predicted_value=pick["predicted_value"],
+                actual_value=actual_by_key.get((player_id, stat)),
+                rebuilt=rebuilt,
+            )
         )
-        for row in store.get_player_predictions_for_game(db_path, game_id)
-    ]
+    return props
 
 
 @router.get("/hub/teams")

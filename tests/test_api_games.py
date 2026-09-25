@@ -285,3 +285,39 @@ def test_final_game_with_only_a_backtest_pick_is_marked_rebuilt(tmp_path):
     assert game["rebuilt"] is True
     assert game["prediction"]["home_win_probability"] == 0.3
     assert detail["rebuilt"] is True
+
+
+def test_player_props_are_one_per_player_stat_and_flag_rebuilt_rows(tmp_path):
+    from nba_predictor.tracking import store
+
+    client, db_path = _client_with_final(tmp_path)
+    store.insert_player_prediction(
+        db_path, game_id="g1", player_id="p1", stat="points", predicted_value=20.0, created_at="2026-03-01T10:00:00+00:00",
+    )
+    store.insert_player_prediction(
+        db_path, game_id="g1", player_id="p1", stat="points", predicted_value=31.0, created_at="2026-09-20T08:00:00+00:00",
+    )
+    store.insert_player_prediction(
+        db_path, game_id="g1", player_id="p2", stat="points", predicted_value=12.0, created_at="2026-09-20T08:00:00+00:00",
+    )
+
+    props = {p["player_id"]: p for p in client.get("/games/g1/players").json()}
+
+    assert len(props) == 2
+    assert props["p1"]["predicted_value"] == 20.0 and props["p1"]["rebuilt"] is False
+    assert props["p2"]["rebuilt"] is True
+
+
+def test_market_rows_made_after_tip_off_are_flagged_rebuilt(tmp_path):
+    from nba_predictor.tracking import store
+
+    client, db_path = _client_with_final(tmp_path)
+    for created_at in ("2026-03-01T10:00:00+00:00", "2026-03-02T01:00:00+00:00"):
+        store.insert_market_prediction(
+            db_path, game_id="g1", market="h2h", selection="BOS", model_probability=0.6,
+            market_probability=0.5, edge=0.1, bookmaker="DraftKings", american_odds=-120, created_at=created_at,
+        )
+
+    markets = client.get("/games/g1").json()["markets"]
+
+    assert sorted(m["rebuilt"] for m in markets) == [False, True]

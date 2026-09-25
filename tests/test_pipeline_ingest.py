@@ -76,9 +76,19 @@ def test_to_schedule_cache_includes_scores_and_completion():
     assert cache == [
         {
             "game_id": "1", "game_date": "2026-03-01", "home_team": "BOS", "away_team": "MIA",
-            "completed": True, "home_pts": 110, "away_pts": 100,
+            "completed": True, "home_pts": 110, "away_pts": 100, "tip_off": None,
         }
     ]
+
+
+def test_to_schedule_cache_keeps_the_tip_off_time():
+    """The pre-tip cutoff reads tip_off from this cache; dropping it here
+    would silently fall back to noon Eastern for every game."""
+    from nba_predictor.pipeline.ingest import to_schedule_cache
+
+    games = [{"game_id": "1", "game_date": "2026-03-01", "tip_off": "2026-03-02T00:30Z", "home_team": "BOS", "away_team": "MIA"}]
+
+    assert to_schedule_cache(games)[0]["tip_off"] == "2026-03-02T00:30Z"
 
 
 def test_to_schedule_cache_handles_upcoming_games_without_scores():

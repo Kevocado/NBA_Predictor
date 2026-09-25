@@ -199,3 +199,33 @@ def test_track_record_h2h_ignores_market_rows_made_after_tip_off(tmp_path):
 
     assert h2h.total_predictions == 0
     assert h2h.correct_predictions == 0
+
+
+def test_track_record_h2h_settles_one_model_pick_per_game(tmp_path):
+    """Odds refresh stores both sides for every bookmaker on every run; the
+    record judges only the model's side, once per game, from the latest
+    pre-tip run."""
+    from nba_predictor.services.hub_service import compute_track_record
+    from nba_predictor.tracking import store
+
+    db_path = tmp_path / "tracking.db"
+    store.init_db(db_path)
+    for created_at in ("2026-03-01T09:00:00+00:00", "2026-03-01T10:00:00+00:00"):
+        for book in ("DraftKings", "FanDuel"):
+            for selection, prob in (("BOS", 0.65), ("MIA", 0.35)):
+                store.insert_market_prediction(
+                    db_path, game_id="g1", market="h2h", selection=selection, model_probability=prob,
+                    market_probability=0.5, edge=prob - 0.5, bookmaker=book, american_odds=-110,
+                    created_at=created_at,
+                )
+    # A post-tip run that flips the pick must be ignored.
+    store.insert_market_prediction(
+        db_path, game_id="g1", market="h2h", selection="MIA", model_probability=0.9,
+        market_probability=0.5, edge=0.4, bookmaker="DraftKings", american_odds=-110,
+        created_at="2026-03-02T03:00:00+00:00",
+    )
+    schedule = [_completed_game("g1", "BOS", "MIA", 110, 100)]
+
+    h2h = next(r for r in compute_track_record(db_path, schedule) if r.market == "h2h")
+
+    assert (h2h.total_predictions, h2h.correct_predictions) == (1, 1)

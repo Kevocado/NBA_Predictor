@@ -25,9 +25,13 @@ export interface HeadToHeadMeeting {
 export interface Game {
   game_id: string;
   game_date: string;
+  /** UTC start time; missing for games cached before it was recorded. */
+  tip_off?: string | null;
   home_team: string;
   away_team: string;
   prediction: Prediction | null;
+  /** The pick shown was made after tip-off: labelled, never counted. */
+  rebuilt?: boolean;
   completed: boolean;
   home_pts: number | null;
   away_pts: number | null;
@@ -68,6 +72,8 @@ export interface TrackRecord {
   total_predictions: number;
   correct_predictions: number;
   hit_rate: number;
+  /** Finals whose only picks were made after tip-off (left out of the counts). */
+  n_rebuilt?: number;
 }
 
 export interface TeamHubRow {

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, type GameDetail, type PlayerProp, type MarketPrediction } from "../api/client";
-import { favourite } from "./GameCard";
+import { favourite } from "../lib/pick";
 
 interface GameDetailModalProps {
   gameId: string;

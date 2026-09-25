@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import GameCard from "../components/GameCard";
 import GameDetailModal from "../components/GameDetailModal";
 import { api, type Game } from "../api/client";
+import { EmptyState, ErrorState, MatchCard, RoundNavigator, Skeleton } from "../predictor-ui";
+import { dayHeading, nextUpIds, tipZones, toCardModel, weekLabel, weekTally } from "../lib/nightCards";
 
 function toISODate(d: Date): string {
   return d.toISOString().slice(0, 10);
@@ -21,19 +22,11 @@ function addDays(isoDate: string, days: number): string {
   return toISODate(d);
 }
 
-function formatWeekRange(weekStart: string): string {
-  const start = new Date(weekStart + "T00:00:00");
-  const end = new Date(addDays(weekStart, 6) + "T00:00:00");
-  const fmt = (d: Date) => d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-  return `${fmt(start)} – ${fmt(end)}`;
-}
-
-function formatDayHeader(isoDate: string): string {
-  const d = new Date(isoDate + "T00:00:00");
-  return d.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
-}
+const byTip = (a: Game, b: Game) => (a.tip_off ?? "").localeCompare(b.tip_off ?? "") || a.game_id.localeCompare(b.game_id);
 
 export default function GamesPage() {
+  // The week the API lands on (the one with the next games), for "Jump to current week".
+  const [currentWeek, setCurrentWeek] = useState<string | null>(null);
   const [weekStart, setWeekStart] = useState<string | null>(null);
   const [games, setGames] = useState<Game[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -41,10 +34,14 @@ export default function GamesPage() {
   const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
+    const land = (week: string) => {
+      setCurrentWeek(week);
+      setWeekStart(week);
+    };
     api
       .getSeasonFirstWeek()
-      .then((bounds) => setWeekStart(bounds.first_week_start ?? mondayOf(new Date())))
-      .catch(() => setWeekStart(mondayOf(new Date())));
+      .then((bounds) => land(bounds.first_week_start ?? mondayOf(new Date())))
+      .catch(() => land(mondayOf(new Date())));
   }, []);
 
   useEffect(() => {
@@ -57,63 +54,58 @@ export default function GamesPage() {
       .catch(() => setError("games"));
   }, [weekStart, reloadKey]);
 
+  const step = (days: number) => setWeekStart((w) => addDays(w ?? mondayOf(new Date()), days));
+
   const gamesByDay = new Map<string, Game[]>();
-  for (const game of games ?? []) {
+  for (const game of [...(games ?? [])].sort(byTip)) {
     const existing = gamesByDay.get(game.game_date) ?? [];
     existing.push(game);
     gamesByDay.set(game.game_date, existing);
   }
+  const days = [...gamesByDay.entries()].sort(([a], [b]) => a.localeCompare(b));
+  const isCurrentWeek = weekStart !== null && weekStart === currentWeek;
+  const nextUp = nextUpIds(games ?? [], isCurrentWeek);
+  const zones = tipZones(games ?? []);
 
   return (
     <div>
-      <div className="mb-6 flex items-center justify-between">
-        <button
-          aria-label="Previous week"
-          onClick={() => setWeekStart((w) => addDays(w ?? mondayOf(new Date()), -7))}
-          className="text-[var(--color-net-dim)] hover:text-[var(--color-net)]"
-        >
-          ←
-        </button>
-        <span className="stat-display text-lg">{weekStart ? formatWeekRange(weekStart) : ""}</span>
-        <button
-          aria-label="Next week"
-          onClick={() => setWeekStart((w) => addDays(w ?? mondayOf(new Date()), 7))}
-          className="text-[var(--color-net-dim)] hover:text-[var(--color-net)]"
-        >
-          →
-        </button>
-      </div>
+      <RoundNavigator
+        label={weekStart ? weekLabel(weekStart) : "This week"}
+        unit="week"
+        moment="tip-off"
+        canPrev={weekStart !== null}
+        canNext={weekStart !== null}
+        onPrev={() => step(-7)}
+        onNext={() => step(7)}
+        onJumpToCurrent={!isCurrentWeek && currentWeek ? () => setWeekStart(currentWeek) : undefined}
+        record={games ? weekTally(games) : undefined}
+      />
 
-      {error && (
-        <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded border border-[var(--color-line)] p-3 text-sm">
-          <span>We couldn't load this week's games. Check your connection and try again.</span>
-          <button onClick={() => setReloadKey((k) => k + 1)} className="rounded border border-[var(--color-line)] px-3 py-1 text-xs font-semibold hover:border-[var(--color-hardwood)]">Try again</button>
-        </div>
-      )}
-      {!error && games === null && <p role="status" aria-live="polite">Loading games…</p>}
+      {error && <ErrorState message="We couldn't load this week's games. Check your connection and try again." onRetry={() => setReloadKey((k) => k + 1)} />}
+      {!error && games === null && <Skeleton label="Loading games…" />}
       {!error && games !== null && games.length === 0 && (
-        <div className="flex items-center gap-3 text-sm">
-          <span>No games this week.</span>
-          <button onClick={() => setWeekStart((w) => addDays(w ?? mondayOf(new Date()), 7))} className="rounded border border-[var(--color-line)] px-3 py-1 text-xs font-semibold hover:border-[var(--color-hardwood)]">Go to next week</button>
-        </div>
+        <EmptyState message="No games this week." action={{ label: "Go to next week", onClick: () => step(7) }} />
       )}
+      {zones && <p className="mb-4 text-xs text-pr-text-dim">Tip-off times in {zones}</p>}
 
       <div className="space-y-6">
-        {Array.from(gamesByDay.entries()).map(([day, dayGames]) => (
-          <div key={day}>
-            <h3 className="mb-2 text-sm text-[var(--color-net-faint)]">{formatDayHeader(day)}</h3>
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {days.map(([day, dayGames]) => (
+          <section key={day} aria-labelledby={`day-${day}`}>
+            <h3 id={`day-${day}`} className="mb-2 font-pr-display text-base font-semibold uppercase tracking-wide text-pr-text-dim">
+              {dayHeading(day)}
+            </h3>
+            <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
               {dayGames.map((game) => (
-                <GameCard key={game.game_id} game={game} onSelect={setSelectedGameId} />
+                <li key={game.game_id} data-testid={`game-card-${game.game_id}`}>
+                  <MatchCard {...toCardModel(game, nextUp.has(game.game_id))} moment="tip-off" compact onOpen={() => setSelectedGameId(game.game_id)} />
+                </li>
               ))}
-            </div>
-          </div>
+            </ul>
+          </section>
         ))}
       </div>
 
-      {selectedGameId && (
-        <GameDetailModal gameId={selectedGameId} onClose={() => setSelectedGameId(null)} />
-      )}
+      {selectedGameId && <GameDetailModal gameId={selectedGameId} onClose={() => setSelectedGameId(null)} />}
     </div>
   );
 }

@@ -38,6 +38,7 @@ export default function GamesPage() {
   const [games, setGames] = useState<Game[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedGameId, setSelectedGameId] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     api
@@ -53,8 +54,8 @@ export default function GamesPage() {
     api
       .getGamesWeek(weekStart)
       .then(setGames)
-      .catch(() => setError("Couldn't load games."));
-  }, [weekStart]);
+      .catch(() => setError("games"));
+  }, [weekStart, reloadKey]);
 
   const gamesByDay = new Map<string, Game[]>();
   for (const game of games ?? []) {
@@ -83,9 +84,19 @@ export default function GamesPage() {
         </button>
       </div>
 
-      {error && <p className="text-[var(--color-shotclock)]">{error}</p>}
-      {!error && games === null && <p>Loading games…</p>}
-      {!error && games !== null && games.length === 0 && <p>No games scheduled this week.</p>}
+      {error && (
+        <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded border border-[var(--color-line)] p-3 text-sm">
+          <span>We couldn't load this week's games. Check your connection and try again.</span>
+          <button onClick={() => setReloadKey((k) => k + 1)} className="rounded border border-[var(--color-line)] px-3 py-1 text-xs font-semibold hover:border-[var(--color-hardwood)]">Try again</button>
+        </div>
+      )}
+      {!error && games === null && <p role="status" aria-live="polite">Loading games…</p>}
+      {!error && games !== null && games.length === 0 && (
+        <div className="flex items-center gap-3 text-sm">
+          <span>No games this week.</span>
+          <button onClick={() => setWeekStart((w) => addDays(w ?? mondayOf(new Date()), 7))} className="rounded border border-[var(--color-line)] px-3 py-1 text-xs font-semibold hover:border-[var(--color-hardwood)]">Go to next week</button>
+        </div>
+      )}
 
       <div className="space-y-6">
         {Array.from(gamesByDay.entries()).map(([day, dayGames]) => (

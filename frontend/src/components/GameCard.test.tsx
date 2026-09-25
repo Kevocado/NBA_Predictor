@@ -33,4 +33,24 @@ describe("GameCard", () => {
     await userEvent.click(screen.getByTestId("game-card-g1"));
     expect(onSelect).toHaveBeenCalledWith("g1");
   });
+
+  it("leads with the favourite, even when that is the away team", () => {
+    const awayFav: Game = { ...baseGame, prediction: { home_win_probability: 0.47, predicted_margin: -4.8, predicted_total: 220 } };
+    render(<GameCard game={awayFav} onSelect={() => {}} />);
+    expect(screen.getByText("53%")).toBeInTheDocument();
+    expect(screen.getByText("MIA to win")).toBeInTheDocument();
+  });
+
+  it("picks home at exactly 50%", () => {
+    const even: Game = { ...baseGame, prediction: { home_win_probability: 0.5, predicted_margin: 0, predicted_total: 220 } };
+    render(<GameCard game={even} onSelect={() => {}} />);
+    expect(screen.getByText("BOS to win")).toBeInTheDocument();
+  });
+
+  it("says 'No pick yet' rather than 'Pending' and drops the raw date", () => {
+    render(<GameCard game={{ ...baseGame, prediction: null }} onSelect={() => {}} />);
+    expect(screen.getByText("No pick yet")).toBeInTheDocument();
+    expect(screen.queryByText("Pending")).not.toBeInTheDocument();
+    expect(screen.queryByText("2026-11-01")).not.toBeInTheDocument();
+  });
 });

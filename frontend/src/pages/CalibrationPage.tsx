@@ -4,17 +4,26 @@ import { api, type CalibrationBin } from "../api/client";
 export default function CalibrationPage() {
   const [bins, setBins] = useState<CalibrationBin[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
+    setError(null);
+    setBins(null);
     api
       .getCalibration()
       .then(setBins)
-      .catch(() => setError("Couldn't load calibration data."));
-  }, []);
+      .catch(() => setError("calibration"));
+  }, [reloadKey]);
 
-  if (error) return <p className="text-[var(--color-shotclock)]">{error}</p>;
-  if (bins === null) return <p>Loading calibration…</p>;
-  if (bins.length === 0) return <p>No settled predictions yet to calibrate against.</p>;
+  if (error)
+    return (
+      <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded border border-[var(--color-line)] p-3 text-sm">
+        <span>We couldn't load calibration data. Check your connection and try again.</span>
+        <button onClick={() => setReloadKey((k) => k + 1)} className="rounded border border-[var(--color-line)] px-3 py-1 text-xs font-semibold hover:border-[var(--color-hardwood)]">Try again</button>
+      </div>
+    );
+  if (bins === null) return <p role="status" aria-live="polite">Loading calibration…</p>;
+  if (bins.length === 0) return <p>Not enough finished games to check calibration yet. This fills in as the season is played.</p>;
 
   return (
     <div>

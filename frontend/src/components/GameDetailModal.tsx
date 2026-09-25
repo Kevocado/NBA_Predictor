@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, type GameDetail, type PlayerProp, type MarketPrediction } from "../api/client";
+import { favourite } from "./GameCard";
 
 interface GameDetailModalProps {
   gameId: string;
@@ -107,6 +108,8 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
 
   const sortedMarkets = detail ? [...detail.markets].sort((a, b) => (b.edge ?? 0) - (a.edge ?? 0)) : [];
   const verdict = detail ? computePostMatchVerdict(detail) : null;
+  const pickFav = detail?.prediction ? favourite(detail.prediction, detail.home_team, detail.away_team) : null;
+  const marginFav = detail?.prediction ? favoredTeam(detail.prediction.predicted_margin, detail.home_team, detail.away_team) : null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70" onClick={onClose}>
@@ -141,17 +144,19 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
             <div className="mb-5 grid grid-cols-3 gap-4 border-b border-[var(--color-line)] pb-5">
               <div>
                 <div className="stat-display text-2xl leading-none text-[var(--color-hardwood-bright)]">
-                  {Math.round(detail.prediction.home_win_probability * 100)}%
+                  {Math.round((pickFav?.prob ?? 0) * 100)}%
                 </div>
-                <div className="mt-1 text-xs text-[var(--color-net-faint)]">{detail.home_team} win probability</div>
+                <div className="mt-1 text-xs text-[var(--color-net-dim)]">{pickFav?.team} to win</div>
               </div>
               <div>
-                <div className="stat-display text-2xl leading-none">{detail.prediction.predicted_margin.toFixed(1)}</div>
-                <div className="mt-1 text-xs text-[var(--color-net-faint)]">Predicted margin</div>
+                <div className="stat-display text-2xl leading-none">
+                  {marginFav?.team} by {marginFav?.value.toFixed(1)}
+                </div>
+                <div className="mt-1 text-xs text-[var(--color-net-dim)]">Projected margin</div>
               </div>
               <div>
                 <div className="stat-display text-2xl leading-none">{detail.prediction.predicted_total.toFixed(1)}</div>
-                <div className="mt-1 text-xs text-[var(--color-net-faint)]">Predicted total</div>
+                <div className="mt-1 text-xs text-[var(--color-net-dim)]">Projected total points</div>
               </div>
             </div>
           )

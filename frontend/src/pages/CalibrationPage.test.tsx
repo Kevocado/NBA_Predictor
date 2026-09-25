@@ -19,6 +19,7 @@ describe("CalibrationPage", () => {
     expect(screen.getByText("85%")).toBeInTheDocument();
     expect(screen.getByText("82%")).toBeInTheDocument();
     expect(screen.getByText("40")).toBeInTheDocument();
+    expect(screen.getByText(/only picks made before tip-off/i)).toBeInTheDocument();
   });
 
   it("shows an empty state when no settled predictions exist", async () => {

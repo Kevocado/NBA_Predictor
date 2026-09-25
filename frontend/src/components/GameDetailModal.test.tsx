@@ -96,7 +96,7 @@ describe("GameDetailModal", () => {
 
     render(<GameDetailModal gameId="g1" onClose={() => {}} />);
 
-    expect(await screen.findByText(/2026-01-01/)).toBeInTheDocument();
+    expect(await screen.findByText("Thu 1 Jan")).toBeInTheDocument();
     expect(screen.getByText(/MIA 100 – 110 BOS/)).toBeInTheDocument();
   });
 
@@ -128,7 +128,7 @@ describe("GameDetailModal", () => {
     const onClose = vi.fn();
 
     render(<GameDetailModal gameId="g1" onClose={onClose} />);
-    await screen.findByRole("heading", { name: /BOS/ });
+    await screen.findByRole("heading", { name: /Celtics/ });
 
     await userEvent.click(screen.getByRole("button", { name: /close/i }));
     expect(onClose).toHaveBeenCalled();
@@ -148,7 +148,7 @@ describe("GameDetailModal", () => {
     const onClose = vi.fn();
 
     render(<GameDetailModal gameId="g1" onClose={onClose} />);
-    await screen.findByRole("heading", { name: /BOS/ });
+    await screen.findByRole("heading", { name: /Celtics/ });
 
     await userEvent.keyboard("{Escape}");
     expect(onClose).toHaveBeenCalled();
@@ -161,7 +161,8 @@ it("shows a correct winner-call verdict when the favorite actually won", async (
 
   render(<GameDetailModal gameId="g2" onClose={() => {}} />);
 
-  expect(await screen.findByText(/correct/i)).toBeInTheDocument();
+  expect(await screen.findByText("Called it ✓")).toBeInTheDocument();
+  expect(screen.getByText("Pick before tip-off: BOS · 62%")).toBeInTheDocument();
 });
 
 it("shows an incorrect winner-call verdict when the underdog actually won", async () => {
@@ -170,7 +171,7 @@ it("shows an incorrect winner-call verdict when the underdog actually won", asyn
 
   render(<GameDetailModal gameId="g2" onClose={() => {}} />);
 
-  expect(await screen.findByText(/incorrect/i)).toBeInTheDocument();
+  expect(await screen.findByText("Missed ✗")).toBeInTheDocument();
 });
 
 it("shows predicted vs actual margin with the absolute difference", async () => {
@@ -199,7 +200,7 @@ it("does not show a post-match verdict for an upcoming game", async () => {
 
   render(<GameDetailModal gameId="g1" onClose={() => {}} />);
 
-  await screen.findByRole("heading", { name: /BOS/ });
+  await screen.findByRole("heading", { name: /Celtics/ });
   expect(screen.queryByTestId("post-match-verdict")).not.toBeInTheDocument();
 });
 
@@ -240,7 +241,7 @@ it("shows no verdict for a market row without a point value on an unsettled mark
 
   render(<GameDetailModal gameId="g2" onClose={() => {}} />);
 
-  await screen.findByRole("heading", { name: /BOS/ });
+  await screen.findByRole("heading", { name: /Celtics/ });
   expect(screen.queryAllByTestId("market-row")).toHaveLength(0);
 });
 
@@ -291,4 +292,36 @@ it("calls the margin a toss-up when it disagrees with the win pick or is under h
   render(<GameDetailModal gameId="g1" onClose={() => {}} />);
   expect(await screen.findByText("Toss-up")).toBeInTheDocument();
   expect(screen.queryByText(/by 0\.0/)).not.toBeInTheDocument();
+});
+
+it("labels a pick rebuilt after tip-off and never judges it", async () => {
+  vi.mocked(api.getGameDetail).mockResolvedValue({ ...completedDetail, rebuilt: true });
+  vi.mocked(api.getGamePlayers).mockResolvedValue([]);
+
+  render(<GameDetailModal gameId="g2" onClose={() => {}} />);
+
+  expect(await screen.findByText(/Rebuilt after tip-off: BOS · 62%/)).toBeInTheDocument();
+  expect(screen.getByText(/not counted/i)).toBeInTheDocument();
+  expect(screen.queryByText("Called it ✓")).not.toBeInTheDocument();
+  expect(screen.queryByTestId("post-match-verdict")).not.toBeInTheDocument();
+});
+
+it("says so when no pick was made before a final", async () => {
+  vi.mocked(api.getGameDetail).mockResolvedValue({ ...completedDetail, prediction: null });
+  vi.mocked(api.getGamePlayers).mockResolvedValue([]);
+
+  render(<GameDetailModal gameId="g2" onClose={() => {}} />);
+
+  expect(await screen.findByText("No pick was made before tip-off.")).toBeInTheDocument();
+});
+
+it("names the teams and writes dates in words", async () => {
+  vi.mocked(api.getGameDetail).mockResolvedValue(detail);
+  vi.mocked(api.getGamePlayers).mockResolvedValue(players);
+
+  render(<GameDetailModal gameId="g1" onClose={() => {}} />);
+
+  expect(await screen.findByRole("heading", { name: "Heat at Celtics" })).toBeInTheDocument();
+  expect(screen.getByText("Thu 1 Jan")).toBeInTheDocument();
+  expect(screen.queryByText("2026-01-01")).not.toBeInTheDocument();
 });

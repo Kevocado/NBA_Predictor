@@ -18,6 +18,10 @@ describe("StandingsPanel", () => {
     await waitFor(() => expect(screen.getByText("BOS")).toBeInTheDocument());
     expect(screen.getByText("East")).toBeInTheDocument();
     expect(screen.getByText("West")).toBeInTheDocument();
+    // Status in words, and a leader is not "0.0" games back.
+    expect(screen.getAllByText("Clinched")).toHaveLength(2);
+    expect(screen.queryByText("clinched")).not.toBeInTheDocument();
+    expect(screen.queryByText("0.0")).not.toBeInTheDocument();
   });
 
   it("shows an empty state when no standings are cached yet", async () => {

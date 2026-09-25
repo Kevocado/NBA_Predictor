@@ -23,6 +23,8 @@ describe("DataHubPage", () => {
     render(<DataHubPage />);
     await userEvent.click(screen.getByTestId("hub-tab-player-hub"));
     await waitFor(() => expect(screen.getByText(/no player data/i)).toBeInTheDocument());
+    expect(screen.getByTestId("hub-tab-player-hub")).toHaveAttribute("aria-current", "true");
+    expect(screen.getByTestId("hub-tab-team-hub")).not.toHaveAttribute("aria-current");
   });
 
   it("switches to the Track Record panel when its tab is clicked", async () => {

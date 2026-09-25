@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { api, type GameDetail, type PlayerProp, type MarketPrediction } from "../api/client";
 import { favourite } from "../lib/pick";
+import { teamName } from "../lib/teams";
+import { kickoff, pct, statusWords } from "../predictor-ui";
 
 interface GameDetailModalProps {
   gameId: string;
@@ -27,7 +29,8 @@ interface PostMatchVerdict {
 }
 
 export function computePostMatchVerdict(detail: GameDetail): PostMatchVerdict | null {
-  if (!detail.completed || !detail.prediction || detail.home_pts === null || detail.away_pts === null) {
+  // A pick rebuilt after tip-off is shown for reference but never judged.
+  if (!detail.completed || !detail.prediction || detail.rebuilt || detail.home_pts === null || detail.away_pts === null) {
     return null;
   }
   const actualMarginValue = detail.home_pts - detail.away_pts;
@@ -64,6 +67,20 @@ export function marketVerdict(market: MarketPrediction, detail: GameDetail): boo
     return market.selection === "over" ? actualTotal > market.point : actualTotal < market.point;
   }
   return null;
+}
+
+/** What the model said before tip-off, and whether it counts. */
+function PregamePick({ detail }: { detail: GameDetail }) {
+  const p = detail.prediction;
+  const line = !p
+    ? "No pick was made before tip-off."
+    : (() => {
+        const fav = favourite(p, detail.home_team, detail.away_team);
+        return detail.rebuilt
+          ? `Rebuilt after tip-off: ${fav.team} · ${pct(fav.prob)}. Not counted in the record.`
+          : `Pick before tip-off: ${fav.team} · ${pct(fav.prob)}`;
+      })();
+  return <p className="mb-3 text-sm font-semibold text-pr-text">{line}</p>;
 }
 
 function FormBadge({ result }: { result: string }) {
@@ -124,7 +141,12 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-lg font-bold">{detail ? `${detail.away_team} at ${detail.home_team}` : "Game detail"}</h2>
+          <div>
+            <h2 className="text-xl font-bold uppercase tracking-wide">
+              {detail ? `${teamName(detail.away_team)} at ${teamName(detail.home_team)}` : "Game detail"}
+            </h2>
+            {detail && <p className="text-xs text-pr-text-dim">{kickoff(detail.tip_off ?? detail.game_date)}</p>}
+          </div>
           <button aria-label="Close" onClick={onClose} className="text-xl leading-none text-[var(--color-net-dim)]">
             ×
           </button>
@@ -168,13 +190,15 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
           )
         )}
 
+        {detail?.completed && <PregamePick detail={detail} />}
+
         {verdict && (
           <div className="mb-5 border-b border-[var(--color-line)] pb-5 text-sm" data-testid="post-match-verdict">
             <div className="mb-2 flex items-center gap-2">
-              <span className={verdict.winnerCorrect ? "text-[var(--color-win)]" : "text-[var(--color-shotclock)]"}>
-                {verdict.winnerCorrect ? "✓ Correct" : "✗ Incorrect"}
+              <span className={`font-pr-display font-semibold uppercase tracking-wide ${verdict.winnerCorrect ? "text-pr-win" : "text-pr-loss"}`}>
+                {statusWords(verdict.winnerCorrect ? "called" : "missed")}
               </span>
-              <span className="text-[var(--color-net-faint)]">winner call</span>
+              <span className="text-pr-text-dim">winner pick</span>
             </div>
             <div className="text-[var(--color-net-faint)]">
               Predicted margin: {verdict.predictedMargin.team} +{verdict.predictedMargin.value.toFixed(1)} —{" "}
@@ -232,8 +256,8 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
                   <td>{market.point !== null ? market.point : "—"}</td>
                   <td>{market.bookmaker ?? "—"}</td>
                   <td>{market.american_odds !== null ? market.american_odds : "—"}</td>
-                  <td>{Math.round(market.model_probability * 100)}%</td>
-                  <td>{market.market_probability !== null ? `${Math.round(market.market_probability * 100)}%` : "—"}</td>
+                  <td>{pct(market.model_probability)}</td>
+                  <td>{market.market_probability !== null ? pct(market.market_probability) : "—"}</td>
                   <td
                     className={
                       market.edge === null
@@ -267,7 +291,7 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
             <ul className="text-sm">
               {detail.head_to_head.map((meeting) => (
                 <li key={meeting.game_id} className="flex justify-between border-b border-[var(--color-line)] py-1">
-                  <span>{meeting.game_date}</span>
+                  <span>{kickoff(meeting.game_date)}</span>
                   <span>
                     {meeting.away_team} {meeting.away_pts} – {meeting.home_pts} {meeting.home_team}
                   </span>

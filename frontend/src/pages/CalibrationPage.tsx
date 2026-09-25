@@ -27,9 +27,10 @@ export default function CalibrationPage() {
 
   return (
     <div>
-      <p className="mb-4 max-w-prose text-sm text-[var(--color-net-dim)]">
+      <p className="mb-4 max-w-prose text-sm text-pr-text-dim">
         For each probability range the model has predicted, how often the home team actually won. A
-        well-calibrated model's predicted rate and actual rate should track closely.
+        well-calibrated model's predicted rate and actual rate should track closely. Uses only picks
+        made before tip-off.
       </p>
       <table className="w-full text-sm">
         <thead>

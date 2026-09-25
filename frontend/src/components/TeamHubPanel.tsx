@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, type TeamHubRow } from "../api/client";
+import { signed, streak } from "../predictor-ui";
 
 export default function TeamHubPanel() {
   const [rows, setRows] = useState<TeamHubRow[] | null>(null);
@@ -44,9 +45,9 @@ export default function TeamHubPanel() {
                     </td>
                     <td>{row.points_per_game.toFixed(1)}</td>
                     <td>{row.opp_points_per_game.toFixed(1)}</td>
-                    <td>{row.net_rating.toFixed(1)}</td>
+                    <td>{signed(row.net_rating)}</td>
                     <td>{row.pace.toFixed(1)}</td>
-                    <td>{row.streak}</td>
+                    <td>{streak(row.streak)}</td>
                   </tr>
                 ))}
             </tbody>

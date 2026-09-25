@@ -1,6 +1,13 @@
 import { useEffect, useState } from "react";
 import { api, type StandingsRow } from "../api/client";
 
+const STATUS: Record<StandingsRow["playoff_status"], string> = {
+  clinched: "Clinched",
+  "play-in": "Play-in",
+  eliminated: "Out",
+  "in-hunt": "In the hunt",
+};
+
 export default function StandingsPanel() {
   const [rows, setRows] = useState<StandingsRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -41,8 +48,8 @@ export default function StandingsPanel() {
                     <td>
                       {row.wins}-{row.losses}
                     </td>
-                    <td>{row.games_back.toFixed(1)}</td>
-                    <td>{row.playoff_status}</td>
+                    <td>{row.games_back === 0 ? "—" : row.games_back.toFixed(1)}</td>
+                    <td>{STATUS[row.playoff_status] ?? row.playoff_status}</td>
                   </tr>
                 ))}
             </tbody>

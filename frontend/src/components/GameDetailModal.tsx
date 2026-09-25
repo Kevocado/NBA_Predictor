@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { api, type GameDetail, type PlayerProp, type MarketPrediction } from "../api/client";
 import { favourite } from "../lib/pick";
 import { teamName } from "../lib/teams";
-import { kickoff, pct, statusWords } from "../predictor-ui";
+import { ErrorState, Skeleton, kickoff, pct, stat, statusWords } from "../predictor-ui";
 
 interface GameDetailModalProps {
   gameId: string;
@@ -49,6 +49,8 @@ export function computePostMatchVerdict(detail: GameDetail): PostMatchVerdict | 
 export function marketVerdict(market: MarketPrediction, detail: GameDetail): boolean | null {
   if (!detail.completed || detail.home_pts === null || detail.away_pts === null) return null;
 
+  // Priced after tip-off: shown for reference, never judged.
+  if (market.rebuilt) return null;
   if (market.market === "h2h") {
     const actualWinner = detail.home_pts > detail.away_pts ? detail.home_team : detail.away_team;
     return market.selection === actualWinner;
@@ -102,6 +104,9 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
   const [detail, setDetail] = useState<GameDetail | null>(null);
   const [players, setPlayers] = useState<PlayerProp[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
+  const titleId = useId();
+  const closeRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     setDetail(null);
@@ -112,8 +117,15 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
         setDetail(detailResult);
         setPlayers(playersResult);
       })
-      .catch(() => setError("Couldn't load game details."));
-  }, [gameId]);
+      .catch(() => setError("We couldn't load this game. Check your connection and try again."));
+  }, [gameId, reloadKey]);
+
+  // Focus moves into the dialog on open, and back to the card on close.
+  useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null;
+    closeRef.current?.focus();
+    return () => opener?.focus?.();
+  }, []);
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -137,23 +149,26 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70" onClick={onClose}>
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
         className="max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded border border-[var(--color-line)] bg-[var(--color-court-900)] p-6"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-4 flex items-center justify-between">
           <div>
-            <h2 className="text-xl font-bold uppercase tracking-wide">
+            <h2 id={titleId} className="text-xl font-bold uppercase tracking-wide">
               {detail ? `${teamName(detail.away_team)} at ${teamName(detail.home_team)}` : "Game detail"}
             </h2>
             {detail && <p className="text-xs text-pr-text-dim">{kickoff(detail.tip_off ?? detail.game_date)}</p>}
           </div>
-          <button aria-label="Close" onClick={onClose} className="text-xl leading-none text-[var(--color-net-dim)]">
+          <button ref={closeRef} aria-label="Close" onClick={onClose} className="text-xl leading-none text-[var(--color-net-dim)]">
             ×
           </button>
         </div>
 
-        {error && <p className="text-[var(--color-shotclock)]">{error}</p>}
-        {!error && !detail && <p>Loading…</p>}
+        {error && <ErrorState message={error} onRetry={() => setReloadKey((k) => k + 1)} />}
+        {!error && !detail && <Skeleton label="Loading…" />}
 
         {detail?.completed ? (
           <div className="mb-5 flex items-center justify-center gap-6 border-b border-[var(--color-line)] pb-5">
@@ -190,7 +205,7 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
           )
         )}
 
-        {detail?.completed && <PregamePick detail={detail} />}
+        {detail && (detail.completed || detail.rebuilt) && <PregamePick detail={detail} />}
 
         {verdict && (
           <div className="mb-5 border-b border-[var(--color-line)] pb-5 text-sm" data-testid="post-match-verdict">
@@ -271,7 +286,9 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
                       {market.edge !== null ? `${(market.edge * 100).toFixed(1)}pp` : "—"}
                     </td>
                     <td>
-                      {verdict === null ? (
+                      {market.rebuilt ? (
+                        <span className="text-pr-text-dim">Rebuilt</span>
+                      ) : verdict === null ? (
                         "—"
                       ) : verdict ? (
                         <span className="text-[var(--color-win)]">✓</span>
@@ -304,24 +321,34 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
         )}
 
         {players && players.length > 0 && (
-          <ul className="text-sm">
-            {players.map((player, i) => (
-              <li key={i} className="flex justify-between border-b border-[var(--color-line)] py-1">
-                <span>{player.player_name}</span>
-                <span>
-                  <span>{player.stat}</span>:{" "}
-                  {player.actual_value !== null ? (
-                    <>
-                      Predicted: {player.predicted_value} — Actual: {player.actual_value} (off by{" "}
-                      {Math.abs(player.predicted_value - player.actual_value).toFixed(1)})
-                    </>
-                  ) : (
-                    <span>{player.predicted_value}</span>
-                  )}
-                </span>
-              </li>
-            ))}
-          </ul>
+          <div>
+            {players.some((p) => p.rebuilt) && (
+              <p className="mb-2 text-xs text-pr-text-dim">
+                Projections marked Rebuilt were built after tip-off, by a later retrain. They are shown for reference and never judged.
+              </p>
+            )}
+            <ul className="text-sm">
+              {players.map((player, i) => (
+                <li key={i} className="flex justify-between gap-3 border-b border-[var(--color-line)] py-1">
+                  <span>
+                    {player.player_name}
+                    {player.rebuilt && <span className="ml-2 text-xs uppercase text-pr-text-dim">Rebuilt</span>}
+                  </span>
+                  <span>
+                    <span>{player.stat}</span>:{" "}
+                    {player.actual_value !== null ? (
+                      <>
+                        Predicted: {stat(player.predicted_value)} — Actual: {player.actual_value}
+                        {!player.rebuilt && ` (off by ${stat(Math.abs(player.predicted_value - player.actual_value))})`}
+                      </>
+                    ) : (
+                      <span>{stat(player.predicted_value)}</span>
+                    )}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
         )}
       </div>
     </div>

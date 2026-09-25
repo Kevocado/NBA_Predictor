@@ -46,6 +46,8 @@ export interface MarketPrediction {
   bookmaker: string | null;
   american_odds: number | null;
   point: number | null;
+  /** Priced after tip-off: shown, never judged. */
+  rebuilt?: boolean;
 }
 
 export interface GameDetail extends Game {
@@ -65,6 +67,8 @@ export interface PlayerProp {
   stat: string;
   predicted_value: number;
   actual_value: number | null;
+  /** Built after tip-off (a retrain backtest): shown, never judged. */
+  rebuilt?: boolean;
 }
 
 export interface TrackRecord {

@@ -60,12 +60,14 @@ export default function ModelSummaryPage() {
           {manifest.models.map((modelName) => (
             <tr key={modelName}>
               <td>{MODEL_NAMES[modelName] ?? modelName}</td>
-              <td className="flex flex-wrap gap-x-4 gap-y-1">
-                {Object.entries(manifest.metrics?.[modelName] ?? {}).map(([key, value]) => (
-                  <span key={key}>
-                    <span className="text-pr-text-dim">{METRIC_NAMES[key] ?? key}</span> <span>{metric(value)}</span>
-                  </span>
-                ))}
+              <td>
+                <div className="flex flex-wrap gap-x-4 gap-y-1">
+                  {Object.entries(manifest.metrics?.[modelName] ?? {}).map(([key, value]) => (
+                    <span key={key}>
+                      <span className="text-pr-text-dim">{METRIC_NAMES[key] ?? key}</span> <span>{metric(value)}</span>
+                    </span>
+                  ))}
+                </div>
               </td>
             </tr>
           ))}

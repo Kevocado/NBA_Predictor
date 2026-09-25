@@ -69,6 +69,18 @@ describe("toCardModel", () => {
     expect(card.status).toBe("rebuilt");
   });
 
+  it("labels a rebuilt pick before the final too, never as a normal pick", () => {
+    expect(toCardModel(game({ rebuilt: true }), true, TZ, TIP_MS - 60_000).status).toBe("rebuilt");
+    expect(toCardModel(game({ rebuilt: true }), true, TZ, TIP_MS + 60_000).status).toBe("rebuilt");
+  });
+
+  it("dates the card by the game's own (Eastern) date, matching its day heading, wherever the viewer is", () => {
+    // 7:30 PM EDT is already Wednesday in Nairobi.
+    const card = toCardModel(game(), false, "Africa/Nairobi", 0);
+    expect(card.when).toBe("Tue 21 Oct");
+    expect(card.centre).toBe("2:30 AM");
+  });
+
   it("says there was no pick on a final without one", () => {
     const card = toCardModel(game({ completed: true, home_pts: 110, away_pts: 102, prediction: null }), false, TZ, TIP_MS + 86_400_000);
     expect(card.status).toBe("nopick");

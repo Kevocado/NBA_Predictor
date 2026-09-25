@@ -45,7 +45,9 @@ function barColours(away: string, home: string): [string | undefined, string | u
 export function toCardModel(game: Game, isNext: boolean, timeZone?: string, now: number = Date.now()): CardModel {
   const final = isFinal(game);
   const tip = tipMs(game);
-  const day = kickoff(game.tip_off ?? game.game_date, timeZone).split(" · ")[0];
+  // The day is the game's own (Eastern) date, so it always matches the day
+  // heading it sits under; only the tip time moves to the viewer's zone.
+  const day = kickoff(game.game_date);
   const model: CardModel = {
     left: { code: game.away_team, name: teamName(game.away_team), color: teamColor(game.away_team) },
     right: { code: game.home_team, name: teamName(game.home_team), color: teamColor(game.home_team) },
@@ -65,9 +67,12 @@ export function toCardModel(game: Game, isNext: boolean, timeZone?: string, now:
     model.meta = `${marginLine(p, game.home_team, game.away_team)} · Total ${stat(p.predicted_total)}`;
   }
 
-  if (final) {
+  if (p && game.rebuilt) {
+    // Built after tip-off: labelled from the moment it exists, never judged.
+    model.status = "rebuilt";
+    if (!final && tip !== null && now - tip >= LIVE_WINDOW_MS) model.when = `${day} · Awaiting result`;
+  } else if (final) {
     if (!p) model.status = "nopick";
-    else if (game.rebuilt) model.status = "rebuilt";
     else model.status = pickWon(p, game.home_pts!, game.away_pts!) ? "called" : "missed";
   } else if (tip !== null && tip <= now) {
     if (now - tip < LIVE_WINDOW_MS) model.status = "live";

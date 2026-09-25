@@ -2,25 +2,8 @@ import { useEffect, useState } from "react";
 import GameDetailModal from "../components/GameDetailModal";
 import { api, type Game } from "../api/client";
 import { EmptyState, ErrorState, MatchCard, RoundNavigator, Skeleton } from "../predictor-ui";
+import { addDays, mondayOf } from "../lib/weeks";
 import { dayHeading, nextUpIds, tipZones, toCardModel, weekLabel, weekTally } from "../lib/nightCards";
-
-function toISODate(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
-
-function mondayOf(d: Date): string {
-  const day = d.getDay(); // 0 = Sunday, 1 = Monday, ...
-  const diffToMonday = day === 0 ? -6 : 1 - day;
-  const monday = new Date(d);
-  monday.setDate(d.getDate() + diffToMonday);
-  return toISODate(monday);
-}
-
-function addDays(isoDate: string, days: number): string {
-  const d = new Date(isoDate + "T00:00:00");
-  d.setDate(d.getDate() + days);
-  return toISODate(d);
-}
 
 const byTip = (a: Game, b: Game) => (a.tip_off ?? "").localeCompare(b.tip_off ?? "") || a.game_id.localeCompare(b.game_id);
 

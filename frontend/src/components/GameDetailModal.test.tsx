@@ -139,7 +139,7 @@ describe("GameDetailModal", () => {
     vi.mocked(api.getGamePlayers).mockResolvedValue([]);
 
     render(<GameDetailModal gameId="g1" onClose={() => {}} />);
-    expect(await screen.findByText(/couldn't load game details/i)).toBeInTheDocument();
+    expect(await screen.findByText(/couldn.t load this game/i)).toBeInTheDocument();
   });
 
   it("closes when Escape is pressed", async () => {
@@ -324,4 +324,44 @@ it("names the teams and writes dates in words", async () => {
   expect(await screen.findByRole("heading", { name: "Heat at Celtics" })).toBeInTheDocument();
   expect(screen.getByText("Thu 1 Jan")).toBeInTheDocument();
   expect(screen.queryByText("2026-01-01")).not.toBeInTheDocument();
+});
+
+it("is a labelled dialog, and a failed load offers Try again", async () => {
+  vi.mocked(api.getGameDetail).mockRejectedValueOnce(new Error("x")).mockResolvedValue(detail);
+  vi.mocked(api.getGamePlayers).mockResolvedValue(players);
+
+  render(<GameDetailModal gameId="g1" onClose={() => {}} />);
+
+  expect(await screen.findByRole("alert")).toHaveTextContent("We couldn't load this game.");
+  await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+  expect(await screen.findByRole("dialog", { name: "Heat at Celtics" })).toHaveAttribute("aria-modal", "true");
+});
+
+it("labels rebuilt player props and market rows, and never judges them", async () => {
+  vi.mocked(api.getGameDetail).mockResolvedValue({
+    ...completedDetail,
+    markets: [{ market: "h2h", selection: "BOS", model_probability: 0.6, market_probability: 0.5, edge: 0.1, bookmaker: "DraftKings", american_odds: -120, point: null, rebuilt: true }],
+  });
+  vi.mocked(api.getGamePlayers).mockResolvedValue([
+    { player_id: "p1", player_name: "Jayson Tatum", stat: "points", predicted_value: 27.456, actual_value: 31, rebuilt: true },
+  ]);
+
+  render(<GameDetailModal gameId="g2" onClose={() => {}} />);
+
+  const row = await screen.findByTestId("market-row");
+  expect(row).toHaveTextContent("Rebuilt");
+  expect(row).not.toHaveTextContent("✓");
+  const prop = screen.getByText("Jayson Tatum").closest("li")!;
+  expect(prop).toHaveTextContent("Predicted: 27.5 — Actual: 31");
+  expect(prop).not.toHaveTextContent(/off by/);
+  expect(screen.getByText(/built after tip-off/i)).toBeInTheDocument();
+});
+
+it("labels a rebuilt pick on a game that has not finished", async () => {
+  vi.mocked(api.getGameDetail).mockResolvedValue({ ...detail, rebuilt: true });
+  vi.mocked(api.getGamePlayers).mockResolvedValue([]);
+
+  render(<GameDetailModal gameId="g1" onClose={() => {}} />);
+
+  expect(await screen.findByText(/Rebuilt after tip-off: BOS · 62%/)).toBeInTheDocument();
 });

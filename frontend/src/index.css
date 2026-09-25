@@ -1,44 +1,53 @@
+@import "./predictor-ui/fonts.css";
 @import "tailwindcss";
+@import "./predictor-ui/tokens.css";
 
-:root {
-  --color-court-950: #15120d;
-  --color-court-900: #1d1811;
-  --color-court-850: #241d15;
-  --color-court-800: #2b231a;
-  --color-line: #3a2f22;
-  --color-hardwood: #c98a3f;
-  --color-hardwood-bright: #e6a656;
-  --color-shotclock: #ef5b45;
-  --color-win: #6fae6a;
-  --color-net: #f2ece0;
-  --color-net-dim: #b9ab98;
-  --color-net-faint: #8a7c6a;
-
-  --font-display: "Big Shoulders Display", ui-sans-serif, system-ui, sans-serif;
-  --font-body: "Manrope", ui-sans-serif, system-ui, sans-serif;
+@theme {
+  /* The family faces (see predictor-ui/tokens.css): Barlow for text, Barlow
+     Condensed for scores and headers. */
+  --font-sans: var(--font-pr-body);
+  --font-display: var(--font-pr-display);
 }
 
-* {
-  box-sizing: border-box;
-}
-
-html, body {
-  margin: 0;
-  min-height: 100vh;
-  color-scheme: dark;
+/* Legacy court names, kept so components not yet rebuilt on predictor-ui
+   adopt the family palette. Declared on [data-sport] as well as :root: a
+   custom property resolves its var() where it is declared, so at :root alone
+   the accent would be the Hub's white instead of NBA orange. New code uses
+   the pr-* tokens. */
+:root,
+[data-sport] {
+  --color-court-950: var(--color-pr-stage);
+  --color-court-900: var(--color-pr-panel);
+  --color-court-850: var(--color-pr-panel);
+  --color-court-800: var(--color-pr-panel-2);
+  --color-line: var(--color-pr-rule);
+  --color-hardwood: var(--color-pr-accent);
+  --color-hardwood-bright: var(--color-pr-accent);
+  --color-shotclock: var(--color-pr-loss);
+  --color-win: var(--color-pr-win);
+  --color-net: var(--color-pr-text);
+  --color-net-dim: var(--color-pr-text-dim);
+  --color-net-faint: var(--color-pr-text-faint);
 }
 
 body {
-  background: var(--color-court-950);
-  color: var(--color-net);
-  font-family: var(--font-body);
+  margin: 0;
+  min-height: 100vh;
+  background: var(--color-pr-stage);
+  color: var(--color-pr-text);
+  font-family: var(--font-pr-body);
   -webkit-font-smoothing: antialiased;
 }
 
 h1, h2, h3, .stat-display {
-  font-family: var(--font-display);
+  font-family: var(--font-pr-display);
   font-weight: 700;
-  letter-spacing: 0.01em;
+  letter-spacing: 0.02em;
+}
+
+.stat-display,
+td {
+  font-variant-numeric: tabular-nums;
 }
 
 table {
@@ -46,22 +55,13 @@ table {
 }
 
 th {
-  font-weight: 500;
+  font-weight: 600;
   padding-bottom: 0.5rem;
 }
 
 td {
   padding: 0.375rem 0;
-  border-top: 1px solid var(--color-line);
-}
-
-a, button {
-  font-family: inherit;
-}
-
-:focus-visible {
-  outline: 2px solid var(--color-hardwood-bright);
-  outline-offset: 2px;
+  border-top: 1px solid var(--color-pr-rule);
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -1,7 +1,8 @@
-// Synced from predictor-ui@1f82eb476955. Do not edit here: change predictor-hub/packages/predictor-ui and re-run scripts/sync-ui.mjs.
+// Synced from predictor-ui@797bbd0ef9a8. Do not edit here: change predictor-hub/packages/predictor-ui and re-run scripts/sync-ui.mjs.
 export type Status = "next" | "live" | "called" | "missed" | "nopick" | "rebuilt";
-/** The moment a pick must beat: "kickoff" for football, "tip-off" for basketball. */
-export type Moment = "kickoff" | "tip-off";
+/** The moment a pick must beat: "kickoff" for football, "tip-off" for
+ *  basketball, "the session" for F1 (qualifying and races alike). */
+export type Moment = "kickoff" | "tip-off" | "the session";
 
 // Status always carries words; colour only reinforces them.
 const LOOK: Record<Status, { words: string; tone: string }> = {

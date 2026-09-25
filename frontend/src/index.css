@@ -56,12 +56,19 @@ table {
 
 th {
   font-weight: 600;
-  padding-bottom: 0.5rem;
+  padding: 0 0.75rem 0.5rem 0;
+  white-space: nowrap;
 }
 
 td {
-  padding: 0.375rem 0;
+  padding: 0.375rem 0.75rem 0.375rem 0;
   border-top: 1px solid var(--color-pr-rule);
+}
+
+/* Numbers never run into each other: cells keep a gutter, stats stay on
+   one line, and wide tables scroll in their own box (overflow-x-auto). */
+td:not(:first-child) {
+  white-space: nowrap;
 }
 
 @media (prefers-reduced-motion: reduce) {

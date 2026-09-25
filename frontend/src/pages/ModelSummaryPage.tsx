@@ -22,7 +22,9 @@ const metric = (v: number | null) => (v === null || !Number.isFinite(v) ? "—" 
 
 function trainedOn(iso: string): string | null {
   const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? null : d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+  if (Number.isNaN(d.getTime())) return null;
+  const part = (o: Intl.DateTimeFormatOptions) => d.toLocaleDateString("en-US", o);
+  return `${part({ day: "numeric" })} ${part({ month: "short" })} ${part({ year: "numeric" })}`;
 }
 
 export default function ModelSummaryPage() {
@@ -45,7 +47,9 @@ export default function ModelSummaryPage() {
       <h2 className="font-pr-display text-2xl font-bold uppercase tracking-wide">{modelDate(manifest.model_version)}</h2>
       {trained && <p className="mb-4 text-sm text-pr-text-dim">Trained {trained}</p>}
 
-      <table className="w-full text-sm">
+      <div className="overflow-x-auto">
+
+        <table className="w-full text-sm">
         <thead>
           <tr className="text-left text-pr-text-dim">
             <th>Model</th>
@@ -66,7 +70,8 @@ export default function ModelSummaryPage() {
             </tr>
           ))}
         </tbody>
-      </table>
+        </table>
+      </div>
     </div>
   );
 }

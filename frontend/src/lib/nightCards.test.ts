@@ -122,5 +122,7 @@ describe("labels", () => {
     expect(weekLabel("2025-10-20")).toBe("20–26 Oct");
     expect(weekLabel("2025-10-27")).toBe("27 Oct – 2 Nov");
     expect(dayHeading("2025-10-21")).toBe("Tuesday 21 Oct");
+    // Three-letter months, like the rest of the family ("Sep", never "Sept").
+    expect(weekLabel("2026-09-28")).toBe("28 Sep – 4 Oct");
   });
 });

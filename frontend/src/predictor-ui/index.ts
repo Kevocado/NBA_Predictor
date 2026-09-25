@@ -1,4 +1,4 @@
-// Synced from predictor-ui@928b074a3322. Do not edit here: change predictor-hub/packages/predictor-ui and re-run scripts/sync-ui.mjs.
+// Synced from predictor-ui@1f82eb476955. Do not edit here: change predictor-hub/packages/predictor-ui and re-run scripts/sync-ui.mjs.
 export * from "./fmt";
 export { contrast, inkFor, luminance } from "./contrast";
 export { AppFrame, type SiteLink, type Sport, type Tab } from "./components/AppFrame";

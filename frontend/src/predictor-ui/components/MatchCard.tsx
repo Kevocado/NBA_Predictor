@@ -1,4 +1,4 @@
-// Synced from predictor-ui@928b074a3322. Do not edit here: change predictor-hub/packages/predictor-ui and re-run scripts/sync-ui.mjs.
+// Synced from predictor-ui@1f82eb476955. Do not edit here: change predictor-hub/packages/predictor-ui and re-run scripts/sync-ui.mjs.
 import type { ReactNode } from "react";
 import { pct } from "../fmt";
 import { ProbabilityBar, type Segment } from "./ProbabilityBar";
@@ -58,7 +58,7 @@ export function MatchCard({ left, right, centre, status, pick, when, meta, bar, 
         compact ? "gap-2 p-3" : "gap-3 p-4"
       }`}
     >
-      <span className="flex w-full items-center justify-between gap-2">
+      <span className="flex w-full flex-wrap items-center justify-between gap-x-2 gap-y-1">
         <span className="text-xs uppercase tracking-wide text-pr-text-dim">{when}</span>
         {status && (
           <>

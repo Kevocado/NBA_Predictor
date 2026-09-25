@@ -232,57 +232,59 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
         )}
 
         {sortedMarkets.length > 0 && (
-          <table className="mb-4 w-full text-sm">
-            <thead>
-              <tr className="text-left text-[var(--color-net-faint)]">
-                <th>Market</th>
-                <th>Selection</th>
-                <th>Line</th>
-                <th>Bookmaker</th>
-                <th>Odds</th>
-                <th>Model %</th>
-                <th>Market %</th>
-                <th>Edge</th>
-                <th>Result</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sortedMarkets.map((market, i) => {
-                const verdict = detail ? marketVerdict(market, detail) : null;
-                return (
-                  <tr key={i} data-testid="market-row">
-                  <td>{market.market}</td>
-                  <td>{market.selection}</td>
-                  <td>{market.point !== null ? market.point : "—"}</td>
-                  <td>{market.bookmaker ?? "—"}</td>
-                  <td>{market.american_odds !== null ? market.american_odds : "—"}</td>
-                  <td>{pct(market.model_probability)}</td>
-                  <td>{market.market_probability !== null ? pct(market.market_probability) : "—"}</td>
-                  <td
-                    className={
-                      market.edge === null
-                        ? undefined
-                        : market.edge > 0
-                          ? "text-[var(--color-win)]"
-                          : "text-[var(--color-shotclock)]"
-                    }
-                  >
-                    {market.edge !== null ? `${(market.edge * 100).toFixed(1)}pp` : "—"}
-                  </td>
-                  <td>
-                    {verdict === null ? (
-                      "—"
-                    ) : verdict ? (
-                      <span className="text-[var(--color-win)]">✓</span>
-                    ) : (
-                      <span className="text-[var(--color-shotclock)]">✗</span>
-                    )}
-                  </td>
+          <div className="overflow-x-auto">
+            <table className="mb-4 w-full text-sm">
+              <thead>
+                <tr className="text-left text-[var(--color-net-faint)]">
+                  <th>Market</th>
+                  <th>Selection</th>
+                  <th>Line</th>
+                  <th>Bookmaker</th>
+                  <th>Odds</th>
+                  <th>Model %</th>
+                  <th>Market %</th>
+                  <th>Edge</th>
+                  <th>Result</th>
                 </tr>
-              );
-              })}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {sortedMarkets.map((market, i) => {
+                  const verdict = detail ? marketVerdict(market, detail) : null;
+                  return (
+                    <tr key={i} data-testid="market-row">
+                    <td>{market.market}</td>
+                    <td>{market.selection}</td>
+                    <td>{market.point !== null ? market.point : "—"}</td>
+                    <td>{market.bookmaker ?? "—"}</td>
+                    <td>{market.american_odds !== null ? market.american_odds : "—"}</td>
+                    <td>{pct(market.model_probability)}</td>
+                    <td>{market.market_probability !== null ? pct(market.market_probability) : "—"}</td>
+                    <td
+                      className={
+                        market.edge === null
+                          ? undefined
+                          : market.edge > 0
+                            ? "text-[var(--color-win)]"
+                            : "text-[var(--color-shotclock)]"
+                      }
+                    >
+                      {market.edge !== null ? `${(market.edge * 100).toFixed(1)}pp` : "—"}
+                    </td>
+                    <td>
+                      {verdict === null ? (
+                        "—"
+                      ) : verdict ? (
+                        <span className="text-[var(--color-win)]">✓</span>
+                      ) : (
+                        <span className="text-[var(--color-shotclock)]">✗</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+                })}
+              </tbody>
+            </table>
+          </div>
         )}
 
         {detail && detail.head_to_head.length > 0 && (

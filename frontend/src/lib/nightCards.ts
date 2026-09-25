@@ -102,7 +102,8 @@ export function weekTally(games: Game[]): { hits: number; settled: number; rebui
 }
 
 const utc = (iso: string) => new Date(`${iso}T12:00:00Z`);
-const part = (d: Date, o: Intl.DateTimeFormatOptions) => d.toLocaleDateString("en-GB", { timeZone: "UTC", ...o });
+// en-US parts (three-letter "Sep"), laid out day-first like fmt.kickoff.
+const part = (d: Date, o: Intl.DateTimeFormatOptions) => d.toLocaleDateString("en-US", { timeZone: "UTC", ...o });
 
 /** "20–26 Oct", or "27 Oct – 2 Nov" across a month end. */
 export function weekLabel(weekStart: string): string {

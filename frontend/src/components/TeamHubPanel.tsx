@@ -21,37 +21,39 @@ export default function TeamHubPanel() {
       {conferences.map((conference) => (
         <div key={conference}>
           <h3 className="mb-2 font-semibold">{conference}</h3>
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-[var(--color-net-faint)]">
-                <th>Team</th>
-                <th>W-L</th>
-                <th>PPG</th>
-                <th>Opp PPG</th>
-                <th>Net Rtg</th>
-                <th>Pace</th>
-                <th>Streak</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows
-                .filter((row) => row.conference === conference)
-                .sort((a, b) => b.points_per_game - a.points_per_game)
-                .map((row) => (
-                  <tr key={row.abbreviation}>
-                    <td>{row.abbreviation}</td>
-                    <td>
-                      {row.wins}-{row.losses}
-                    </td>
-                    <td>{row.points_per_game.toFixed(1)}</td>
-                    <td>{row.opp_points_per_game.toFixed(1)}</td>
-                    <td>{signed(row.net_rating)}</td>
-                    <td>{row.pace.toFixed(1)}</td>
-                    <td>{streak(row.streak)}</td>
-                  </tr>
-                ))}
-            </tbody>
-          </table>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-[var(--color-net-faint)]">
+                  <th>Team</th>
+                  <th>W-L</th>
+                  <th>PPG</th>
+                  <th>Opp PPG</th>
+                  <th>Net Rtg</th>
+                  <th>Pace</th>
+                  <th>Streak</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows
+                  .filter((row) => row.conference === conference)
+                  .sort((a, b) => b.points_per_game - a.points_per_game)
+                  .map((row) => (
+                    <tr key={row.abbreviation}>
+                      <td>{row.abbreviation}</td>
+                      <td>
+                        {row.wins}-{row.losses}
+                      </td>
+                      <td>{row.points_per_game.toFixed(1)}</td>
+                      <td>{row.opp_points_per_game.toFixed(1)}</td>
+                      <td>{signed(row.net_rating)}</td>
+                      <td>{row.pace.toFixed(1)}</td>
+                      <td>{streak(row.streak)}</td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       ))}
     </div>

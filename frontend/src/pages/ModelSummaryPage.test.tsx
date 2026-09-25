@@ -21,6 +21,7 @@ describe("ModelSummaryPage", () => {
     expect(screen.getByText("Win probability")).toBeInTheDocument();
     expect(screen.getByText("0.64")).toBeInTheDocument();
     expect(screen.queryByText("v20261101120000")).not.toBeInTheDocument();
+    expect(screen.getByText("Trained 1 Nov 2026")).toBeInTheDocument();
   });
 
   it("survives a manifest without a model list", async () => {

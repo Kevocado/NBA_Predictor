@@ -1,4 +1,4 @@
-// Synced from predictor-ui@928b074a3322. Do not edit here: change predictor-hub/packages/predictor-ui and re-run scripts/sync-ui.mjs.
+// Synced from predictor-ui@1f82eb476955. Do not edit here: change predictor-hub/packages/predictor-ui and re-run scripts/sync-ui.mjs.
 const actionClass =
   "rounded-pr border border-pr-rule bg-pr-panel-2 px-3 py-1.5 text-xs font-semibold text-pr-text transition-colors hover:border-pr-accent";
 

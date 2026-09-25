@@ -1,4 +1,4 @@
-// Synced from predictor-ui@928b074a3322. Do not edit here: change predictor-hub/packages/predictor-ui and re-run scripts/sync-ui.mjs.
+// Synced from predictor-ui@1f82eb476955. Do not edit here: change predictor-hub/packages/predictor-ui and re-run scripts/sync-ui.mjs.
 export type Status = "next" | "live" | "called" | "missed" | "nopick" | "rebuilt";
 /** The moment a pick must beat: "kickoff" for football, "tip-off" for basketball. */
 export type Moment = "kickoff" | "tip-off";
@@ -20,7 +20,7 @@ export function StatusBadge({ status, moment = "kickoff" }: { status: Status; mo
   const { tone } = LOOK[status];
   const words = statusWords(status, moment);
   return (
-    <span className={`inline-flex items-center rounded-pr px-1.5 py-0.5 font-pr-display text-xs font-semibold uppercase tracking-wide ${tone}`}>
+    <span className={`inline-flex items-center whitespace-nowrap rounded-pr px-1.5 py-0.5 font-pr-display text-xs font-semibold uppercase tracking-wide ${tone}`}>
       {words}
     </span>
   );

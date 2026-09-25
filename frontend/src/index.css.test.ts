@@ -29,3 +29,9 @@ describe("index.css", () => {
     expect(css).toMatch(/:root,\s*\[data-sport\]\s*\{[^}]*--color-hardwood:\s*var\(--color-pr-accent\)/);
   });
 });
+
+describe("tables on phones", () => {
+  it("keep a gutter between cells", () => {
+    expect(css).toMatch(/td\s*\{[^}]*padding:\s*0\.375rem 0\.75rem/);
+  });
+});

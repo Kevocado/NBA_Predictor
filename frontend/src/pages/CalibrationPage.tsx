@@ -32,28 +32,30 @@ export default function CalibrationPage() {
         well-calibrated model's predicted rate and actual rate should track closely. Uses only picks
         made before tip-off.
       </p>
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="text-left text-[var(--color-net-faint)]">
-            <th>Predicted range</th>
-            <th>Predicted rate</th>
-            <th>Actual rate</th>
-            <th>Games</th>
-          </tr>
-        </thead>
-        <tbody>
-          {bins.map((bin) => (
-            <tr key={bin.bin_start} data-testid="calibration-row">
-              <td>
-                {Math.round(bin.bin_start * 100)}–{Math.round(bin.bin_end * 100)}%
-              </td>
-              <td>{Math.round(bin.predicted_rate * 100)}%</td>
-              <td>{Math.round(bin.actual_rate * 100)}%</td>
-              <td>{bin.count}</td>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-[var(--color-net-faint)]">
+              <th>Predicted range</th>
+              <th>Predicted rate</th>
+              <th>Actual rate</th>
+              <th>Games</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {bins.map((bin) => (
+              <tr key={bin.bin_start} data-testid="calibration-row">
+                <td>
+                  {Math.round(bin.bin_start * 100)}–{Math.round(bin.bin_end * 100)}%
+                </td>
+                <td>{Math.round(bin.predicted_rate * 100)}%</td>
+                <td>{Math.round(bin.actual_rate * 100)}%</td>
+                <td>{bin.count}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

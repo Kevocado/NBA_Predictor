@@ -39,29 +39,31 @@ export default function TrackRecordPanel() {
         Only picks made before tip-off count.
         {rebuilt > 0 && ` ${rebuilt.toLocaleString("en-US")} finals had only a pick rebuilt after tip-off, so they are left out.`}
       </p>
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="text-left text-pr-text-dim">
-            <th>Market</th>
-            <th>Picks</th>
-            <th>Correct</th>
-            <th>Hit rate</th>
-          </tr>
-        </thead>
-        <tbody>
-          {sorted.map((row) => {
-            const settled = SETTLED.has(row.market);
-            return (
-              <tr key={row.market}>
-                <td>{MARKETS[row.market] ?? row.market}</td>
-                <td>{row.total_predictions.toLocaleString("en-US")}</td>
-                <td>{settled ? row.correct_predictions.toLocaleString("en-US") : "Not settled yet"}</td>
-                <td>{settled && row.total_predictions > 0 ? pct(row.hit_rate) : settled ? "—" : "Not settled yet"}</td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-pr-text-dim">
+              <th>Market</th>
+              <th>Picks</th>
+              <th>Correct</th>
+              <th>Hit rate</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map((row) => {
+              const settled = SETTLED.has(row.market);
+              return (
+                <tr key={row.market}>
+                  <td>{MARKETS[row.market] ?? row.market}</td>
+                  <td>{row.total_predictions.toLocaleString("en-US")}</td>
+                  <td>{settled ? row.correct_predictions.toLocaleString("en-US") : "Not settled yet"}</td>
+                  <td>{settled && row.total_predictions > 0 ? pct(row.hit_rate) : settled ? "—" : "Not settled yet"}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

@@ -21,5 +21,7 @@ export default defineConfig({
     environment: "jsdom",
     globals: true,
     setupFiles: "./src/test/setup.ts",
+    // Tip-off times render in the viewer's zone; pin one so tests are stable.
+    env: { TZ: "America/Chicago" },
   },
 });

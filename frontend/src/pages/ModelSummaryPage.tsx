@@ -1,5 +1,31 @@
 import { useEffect, useState } from "react";
 import { api, type Manifest } from "../api/client";
+import { EmptyState, Skeleton, modelDate, stat } from "../predictor-ui";
+
+const MODEL_NAMES: Record<string, string> = {
+  win_probability: "Win probability",
+  margin: "Margin",
+  total: "Total points",
+};
+const METRIC_NAMES: Record<string, string> = {
+  accuracy: "Accuracy",
+  log_loss: "Log loss",
+  brier: "Brier score",
+  brier_score: "Brier score",
+  mae: "Mean abs. error",
+  rmse: "RMSE",
+  auc: "AUC",
+};
+
+// Metrics are fractions or points; three significant places read cleanly.
+const metric = (v: number | null) => (v === null || !Number.isFinite(v) ? "—" : Math.abs(v) < 10 ? String(+v.toFixed(3)) : stat(v));
+
+function trainedOn(iso: string): string | null {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  const part = (o: Intl.DateTimeFormatOptions) => d.toLocaleDateString("en-US", o);
+  return `${part({ day: "numeric" })} ${part({ month: "short" })} ${part({ year: "numeric" })}`;
+}
 
 export default function ModelSummaryPage() {
   const [manifest, setManifest] = useState<Manifest | null>(null);
@@ -8,23 +34,24 @@ export default function ModelSummaryPage() {
   useEffect(() => {
     api
       .getManifest()
-      .then(setManifest)
+      .then((m) => (Array.isArray(m?.models) ? setManifest(m) : setNotTrained(true)))
       .catch(() => setNotTrained(true));
   }, []);
 
-  if (notTrained) return <p>No model has been trained yet.</p>;
-  if (!manifest) return <p>Loading model summary…</p>;
+  if (notTrained) return <EmptyState message="No model has been trained yet." />;
+  if (!manifest) return <Skeleton label="Loading model summary…" />;
+  const trained = trainedOn(manifest.trained_at);
 
   return (
     <div>
-      <p className="mb-1 text-sm text-[var(--color-net-dim)]">Model version</p>
-      <p className="mb-4 font-mono tracking-tight">{manifest.model_version}</p>
-      <p className="mb-1 text-sm text-[var(--color-net-dim)]">Trained at</p>
-      <p className="mb-4">{manifest.trained_at}</p>
+      <h2 className="font-pr-display text-2xl font-bold uppercase tracking-wide">{modelDate(manifest.model_version)}</h2>
+      {trained && <p className="mb-4 text-sm text-pr-text-dim">Trained {trained}</p>}
 
-      <table className="w-full text-sm">
+      <div className="overflow-x-auto">
+
+        <table className="w-full text-sm">
         <thead>
-          <tr className="text-left text-[var(--color-net-faint)]">
+          <tr className="text-left text-pr-text-dim">
             <th>Model</th>
             <th>Metrics</th>
           </tr>
@@ -32,18 +59,21 @@ export default function ModelSummaryPage() {
         <tbody>
           {manifest.models.map((modelName) => (
             <tr key={modelName}>
-              <td>{modelName}</td>
-              <td className="flex gap-3">
-                {Object.entries(manifest.metrics[modelName] ?? {}).map(([key, value]) => (
-                  <span key={key}>
-                    {key}: <span>{value}</span>
-                  </span>
-                ))}
+              <td>{MODEL_NAMES[modelName] ?? modelName}</td>
+              <td>
+                <div className="flex flex-wrap gap-x-4 gap-y-1">
+                  {Object.entries(manifest.metrics?.[modelName] ?? {}).map(([key, value]) => (
+                    <span key={key}>
+                      <span className="text-pr-text-dim">{METRIC_NAMES[key] ?? key}</span> <span>{metric(value)}</span>
+                    </span>
+                  ))}
+                </div>
               </td>
             </tr>
           ))}
         </tbody>
-      </table>
+        </table>
+      </div>
     </div>
   );
 }

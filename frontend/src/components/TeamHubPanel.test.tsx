@@ -18,6 +18,8 @@ describe("TeamHubPanel", () => {
     await waitFor(() => expect(screen.getByText("BOS")).toBeInTheDocument());
     expect(screen.getByText("East")).toBeInTheDocument();
     expect(screen.getByText("West")).toBeInTheDocument();
+    expect(screen.getByText("W3")).toBeInTheDocument();
+    expect(screen.getByText("L1")).toBeInTheDocument();
   });
 
   it("shows an empty state when no team data is cached yet", async () => {

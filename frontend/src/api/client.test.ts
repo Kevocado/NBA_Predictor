@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
-import { api } from "./client";
+import { api, REQUEST_TIMEOUT_MS } from "./client";
 
 function mockFetchOnce(body: unknown, ok = true, status = 200) {
   globalThis.fetch = vi.fn().mockResolvedValue({
@@ -19,7 +19,7 @@ describe("api client", () => {
 
     const teams = await api.getTeams();
 
-    expect(fetch).toHaveBeenCalledWith(expect.stringContaining("/teams"));
+    expect(fetch).toHaveBeenCalledWith(expect.stringContaining("/teams"), expect.anything());
     expect(teams[0].abbreviation).toBe("BOS");
   });
 
@@ -28,7 +28,7 @@ describe("api client", () => {
 
     await api.getGames("2026-11-01");
 
-    expect(fetch).toHaveBeenCalledWith(expect.stringContaining("/games?date=2026-11-01"));
+    expect(fetch).toHaveBeenCalledWith(expect.stringContaining("/games?date=2026-11-01"), expect.anything());
   });
 
   it("getGameDetail fetches the game-specific path", async () => {
@@ -39,7 +39,7 @@ describe("api client", () => {
 
     const detail = await api.getGameDetail("g1");
 
-    expect(fetch).toHaveBeenCalledWith(expect.stringContaining("/games/g1"));
+    expect(fetch).toHaveBeenCalledWith(expect.stringContaining("/games/g1"), expect.anything());
     expect(detail.game_id).toBe("g1");
   });
 
@@ -54,7 +54,7 @@ describe("api client", () => {
 
     const records = await api.getTrackRecord();
 
-    expect(fetch).toHaveBeenCalledWith(expect.stringContaining("/hub/track-record"));
+    expect(fetch).toHaveBeenCalledWith(expect.stringContaining("/hub/track-record"), expect.anything());
     expect(records[0].hit_rate).toBe(0.6);
   });
 });
@@ -65,3 +65,20 @@ describe("api client", () => {
 
     expect(players[0].actual_value).toBe(24.0);
   });
+
+describe("request timeout", () => {
+  it("rejects a request the server never answers, so the page can show its error state", async () => {
+    vi.useFakeTimers();
+    try {
+      globalThis.fetch = vi.fn().mockImplementation((_u: string, init?: RequestInit) =>
+        new Promise((_resolve, reject) =>
+          init?.signal?.addEventListener("abort", () => reject(new DOMException("timed out", "AbortError"))),
+        ));
+      const assertion = expect(api.getTeams()).rejects.toThrow();
+      await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS + 1);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

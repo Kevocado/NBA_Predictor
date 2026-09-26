@@ -1,46 +1,32 @@
-import { NavLink, Route, Routes } from "react-router-dom";
+import { Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { AppFrame } from "./predictor-ui";
+import { SITES } from "./lib/sites";
 import GamesPage from "./pages/GamesPage";
 import DataHubPage from "./pages/DataHubPage";
 import ModelSummaryPage from "./pages/ModelSummaryPage";
 import CalibrationPage from "./pages/CalibrationPage";
 
-const navLinkClass = ({ isActive }: { isActive: boolean }) =>
-  `border-b-2 px-1 py-1 text-sm transition-colors ${
-    isActive
-      ? "border-[var(--color-hardwood)] text-[var(--color-net)]"
-      : "border-transparent text-[var(--color-net-dim)] hover:text-[var(--color-net)]"
-  }`;
+// Page tabs map onto the existing routes, so deep links and refreshes keep working.
+const TABS = [
+  { id: "/", label: "Games" },
+  { id: "/hub", label: "Data Hub" },
+  { id: "/calibration-report", label: "Calibration" },
+  { id: "/model", label: "Model" },
+];
 
 export default function App() {
+  const { pathname } = useLocation();
+  const navigate = useNavigate();
+  const active = TABS.find((tab) => tab.id !== "/" && pathname.startsWith(tab.id))?.id ?? "/";
+
   return (
-    <div className="min-h-screen">
-      <header className="border-b border-[var(--color-line)]">
-        <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-4 px-6 py-4">
-          <h1 className="text-2xl tracking-tight">NBA Predictor</h1>
-          <nav className="flex gap-6">
-            <NavLink to="/" end className={navLinkClass}>
-              Games
-            </NavLink>
-            <NavLink to="/hub" className={navLinkClass}>
-              Data Hub
-            </NavLink>
-            <NavLink to="/model" className={navLinkClass}>
-              Model Summary
-            </NavLink>
-            <NavLink to="/calibration-report" className={navLinkClass}>
-              Calibration
-            </NavLink>
-          </nav>
-        </div>
-      </header>
-      <main className="mx-auto max-w-5xl px-6 py-8">
-        <Routes>
-          <Route path="/" element={<GamesPage />} />
-          <Route path="/hub" element={<DataHubPage />} />
-          <Route path="/model" element={<ModelSummaryPage />} />
-          <Route path="/calibration-report" element={<CalibrationPage />} />
-        </Routes>
-      </main>
-    </div>
+    <AppFrame sport="nba" sportName="NBA" sites={SITES} tabs={TABS} activeTab={active} onTab={(id) => navigate(id)}>
+      <Routes>
+        <Route path="/" element={<GamesPage />} />
+        <Route path="/hub" element={<DataHubPage />} />
+        <Route path="/model" element={<ModelSummaryPage />} />
+        <Route path="/calibration-report" element={<CalibrationPage />} />
+      </Routes>
+    </AppFrame>
   );
 }

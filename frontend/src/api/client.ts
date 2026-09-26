@@ -25,9 +25,13 @@ export interface HeadToHeadMeeting {
 export interface Game {
   game_id: string;
   game_date: string;
+  /** UTC start time; missing for games cached before it was recorded. */
+  tip_off?: string | null;
   home_team: string;
   away_team: string;
   prediction: Prediction | null;
+  /** The pick shown was made after tip-off: labelled, never counted. */
+  rebuilt?: boolean;
   completed: boolean;
   home_pts: number | null;
   away_pts: number | null;
@@ -42,6 +46,8 @@ export interface MarketPrediction {
   bookmaker: string | null;
   american_odds: number | null;
   point: number | null;
+  /** Priced after tip-off: shown, never judged. */
+  rebuilt?: boolean;
 }
 
 export interface GameDetail extends Game {
@@ -61,6 +67,8 @@ export interface PlayerProp {
   stat: string;
   predicted_value: number;
   actual_value: number | null;
+  /** Built after tip-off (a retrain backtest): shown, never judged. */
+  rebuilt?: boolean;
 }
 
 export interface TrackRecord {
@@ -68,6 +76,8 @@ export interface TrackRecord {
   total_predictions: number;
   correct_predictions: number;
   hit_rate: number;
+  /** Finals whose only picks were made after tip-off (left out of the counts). */
+  n_rebuilt?: number;
 }
 
 export interface TeamHubRow {
@@ -133,8 +143,18 @@ export interface CalibrationBin {
   count: number;
 }
 
+// A backend that accepts the connection but never answers must still end in
+// the page's error state (with Try again), never an endless "Loading…".
+export const REQUEST_TIMEOUT_MS = 15_000;
+
+function fetchWithTimeout(url: string, init: RequestInit = {}): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  return fetch(url, { ...init, signal: controller.signal }).finally(() => clearTimeout(timer));
+}
+
 async function fetchJson<T>(path: string): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`);
+  const response = await fetchWithTimeout(`${API_BASE}${path}`);
   if (!response.ok) {
     throw new Error(`Request to ${path} failed with status ${response.status}`);
   }

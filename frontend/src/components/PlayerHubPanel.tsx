@@ -22,38 +22,40 @@ export default function PlayerHubPanel() {
 
   return (
     <div>
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="text-left text-[var(--color-net-faint)]">
-            <th>Player</th>
-            <th>Team</th>
-            <th>Pos</th>
-            <th>Rating</th>
-            <th>PPG</th>
-            <th>RPG</th>
-            <th>APG</th>
-            <th>FG%</th>
-            <th>3P%</th>
-            <th>FT%</th>
-          </tr>
-        </thead>
-        <tbody>
-          {pageRows.map((row) => (
-            <tr key={row.player_id}>
-              <td>{row.player_name}</td>
-              <td>{row.team}</td>
-              <td>{row.position}</td>
-              <td>{row.rating.toFixed(1)}</td>
-              <td>{row.points_per_game.toFixed(1)}</td>
-              <td>{row.rebounds_per_game.toFixed(1)}</td>
-              <td>{row.assists_per_game.toFixed(1)}</td>
-              <td>{(row.fg_pct * 100).toFixed(1)}</td>
-              <td>{(row.three_pt_pct * 100).toFixed(1)}</td>
-              <td>{(row.ft_pct * 100).toFixed(1)}</td>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-[var(--color-net-faint)]">
+              <th>Player</th>
+              <th>Team</th>
+              <th>Pos</th>
+              <th>Rating</th>
+              <th>PPG</th>
+              <th>RPG</th>
+              <th>APG</th>
+              <th>FG%</th>
+              <th>3P%</th>
+              <th>FT%</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {pageRows.map((row) => (
+              <tr key={row.player_id}>
+                <td>{row.player_name}</td>
+                <td>{row.team}</td>
+                <td>{row.position}</td>
+                <td>{row.rating.toFixed(1)}</td>
+                <td>{row.points_per_game.toFixed(1)}</td>
+                <td>{row.rebounds_per_game.toFixed(1)}</td>
+                <td>{row.assists_per_game.toFixed(1)}</td>
+                <td>{(row.fg_pct * 100).toFixed(1)}</td>
+                <td>{(row.three_pt_pct * 100).toFixed(1)}</td>
+                <td>{(row.ft_pct * 100).toFixed(1)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
       <div className="mt-3 flex gap-2">
         <button data-testid="player-hub-prev" disabled={page === 0} onClick={() => setPage((p) => p - 1)}>
           Previous

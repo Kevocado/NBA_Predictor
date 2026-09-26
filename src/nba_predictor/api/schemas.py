@@ -23,6 +23,8 @@ class MarketPredictionOut(BaseModel):
     bookmaker: str | None = None
     american_odds: int | None = None
     point: float | None = None
+    # Priced after tip-off (e.g. a refresh during the game): shown, never judged.
+    rebuilt: bool = False
 
 
 class GameOut(BaseModel):
@@ -30,7 +32,11 @@ class GameOut(BaseModel):
     game_date: str
     home_team: str
     away_team: str
+    tip_off: str | None = None
     prediction: PredictionOut | None = None
+    # True when the pick shown was made at or after tip-off (a backtest). It
+    # is labelled on the site and never counted.
+    rebuilt: bool = False
     completed: bool = False
     home_pts: int | None = None
     away_pts: int | None = None
@@ -58,6 +64,8 @@ class PlayerPropOut(BaseModel):
     stat: str
     predicted_value: float
     actual_value: float | None = None
+    # Built after tip-off (the retrain backtest): shown, never judged.
+    rebuilt: bool = False
 
 
 class TrackRecordOut(BaseModel):
@@ -65,6 +73,8 @@ class TrackRecordOut(BaseModel):
     total_predictions: int
     correct_predictions: int
     hit_rate: float
+    # Final games whose only picks were made after tip-off: left out above.
+    n_rebuilt: int = 0
 
 
 class SeasonBoundsOut(BaseModel):

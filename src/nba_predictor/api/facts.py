@@ -228,8 +228,11 @@ def _markets(game: dict, prediction: dict | None) -> list[dict]:
     return out
 
 
-def _players(teams: set[str]) -> list[dict]:
-    rows = [r for r in _player_rows_of_current_game() if not r["rebuilt"]]
+def _players(game_id: str, teams: set[str]) -> list[dict]:
+    # The id is passed, never kept in module state: sync endpoints run in a
+    # thread pool, and a shared "current game" let one request quote
+    # another game's players.
+    rows = [r for r in _player_rows(game_id) if not r["rebuilt"]]
     rows.sort(key=lambda r: _num(r.get("predicted_value")) or 0.0, reverse=True)
     out = []
     for row in rows[:3]:
@@ -243,13 +246,6 @@ def _players(teams: set[str]) -> list[dict]:
     return out
 
 
-def _player_rows_of_current_game() -> list[dict]:
-    return _player_rows(_current_game_id[0])
-
-
-# The game id being served, set at the top of each request. Keeps _players()
-# from having to thread the id through three helpers.
-_current_game_id: list[str] = [""]
 
 
 def _context(game: dict, schedule: list[dict]) -> dict:
@@ -322,7 +318,6 @@ def get_facts(game_id: str) -> dict:
     game = get_game(schedule, game_id)
     if game is None:
         raise HTTPException(status_code=404, detail=f"Unknown game_id: {game_id}")
-    _current_game_id[0] = str(game_id)
 
     home_team, away_team = game["home_team"], game["away_team"]
     status = _status(game, now)
@@ -357,7 +352,7 @@ def get_facts(game_id: str) -> dict:
         "markets": [] if (started and chosen is None) else _markets(game, prediction),
         "drivers": [],
         "context": _context(game, schedule),
-        "players": _players({home_team, away_team}),
+        "players": _players(str(game_id), {home_team, away_team}),
         "record": _record(),
         "result": _result(game, status, pick_timing, home_prob),
     }

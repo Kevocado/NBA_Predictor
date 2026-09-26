@@ -343,3 +343,37 @@ def test_upcoming_lists_only_games_inside_the_window(api, monkeypatch):
 
 def test_unknown_game_id_is_404(api):
     assert api.get("/facts/999999999").status_code == 404
+
+
+# --- review fixes ---------------------------------------------------------
+
+def test_players_belong_to_the_requested_game_even_when_requests_interleave(api, monkeypatch):
+    # Sync endpoints run in a thread pool: another request can start between
+    # this one choosing its game and reading that game's players.
+    other = _game(game_id="999", home_team="LAL", away_team="DEN")
+    monkeypatch.setattr(facts_mod, "_schedule", lambda: [_game(), other])
+    asked = []
+    interleaved = []
+
+    def predictions(game_id):
+        if game_id == GAME_ID and not interleaved:
+            interleaved.append(True)
+            facts_mod.get_facts("999")  # a second request lands mid-way
+        return [_prediction_row()]
+
+    monkeypatch.setattr(facts_mod, "_predictions", predictions)
+    monkeypatch.setattr(facts_mod, "_player_rows", lambda game_id: asked.append(game_id) or [_player_row()])
+
+    facts_mod.get_facts(GAME_ID)
+
+    assert asked[-1] == GAME_ID
+
+
+def test_upcoming_game_uses_the_newest_read_by_instant_not_by_text(api, monkeypatch):
+    # "…T12:00:00Z" sorts after "…T13:00:00+00:00" as text but is an hour older.
+    monkeypatch.setattr(facts_mod, "_predictions", lambda game_id: [
+        _prediction_row(home_win_prob=0.40, created_at="2026-01-15T12:00:00Z"),
+        _prediction_row(home_win_prob=0.66, created_at="2026-01-15T13:00:00+00:00"),
+    ])
+    body = api.get(f"/facts/{GAME_ID}").json()
+    assert body["pick"]["prob"] == pytest.approx(0.66)

@@ -179,6 +179,23 @@ def test_market_lines_use_pre_tip_rows_only(api, monkeypatch):
     assert "-9.5" not in str(spread)
 
 
+def test_a_totals_line_is_a_plain_total_not_a_signed_spread(api, monkeypatch):
+    """'Over +224.5' is nonsense: a '+' belongs on a spread, not a total.
+
+    The spread wording is the site's own (marginLine / selection + sign), and
+    reusing it for a totals row produces a line a reader cannot parse.
+    """
+    monkeypatch.setattr(facts_mod, "_market_rows", lambda game_id: [
+        _market_row(market="totals", selection="Over", point=224.5),
+    ])
+
+    body = api.get(f"/facts/{GAME_ID}").json()
+    total = next(m for m in body["markets"] if m["market"] == "total")
+
+    assert total["market_line"] == "Over 224.5"
+    assert "+" not in total["market_line"]
+
+
 def test_players_exclude_rebuilt_projections(api, monkeypatch):
     monkeypatch.setattr(facts_mod, "_player_rows", lambda game_id: [
         _player_row(player_id="p1", player_name="Kept", stat="points", predicted_value=28.4),

@@ -165,14 +165,21 @@ def _margin_line(home_team: str, away_team: str, home_prob: float, margin: float
     return "Toss-up"
 
 
-def _line_from_market(row: Any, team: str) -> str | None:
-    """A pre-tip market row's own line, written with its team ('BOS -3.5')."""
+def _line_from_market(row: Any, team: str, market: str | None = None) -> str | None:
+    """A pre-tip market row's own line, written the way a bettor reads it.
+
+    A spread is signed and team-attributed ('BOS -3.5'); a total is neither
+    ('Over 224.5'). Reusing the spread wording for a totals row would render
+    'Over +224.5', which is not a line anyone would say.
+    """
     point = _num(row["point"])
     if point is None:
         return None
+    number = f"{abs(point):.0f}" if float(point).is_integer() else f"{abs(point):.1f}"
+    if (market or row["market"]) == "totals":
+        return f"{team} {number}"
     if point == 0:
         return f"{team} PK"
-    number = f"{abs(point):.0f}" if float(point).is_integer() else f"{abs(point):.1f}"
     return f"{team} {'-' if point < 0 else '+'}{number}"
 
 
@@ -223,7 +230,10 @@ def _markets(game: dict, prediction: dict | None) -> list[dict]:
         market = {"market": "total", "model_total": total}
         quoted = _market_line(game, "totals", None)
         if quoted is not None:
-            market["line"] = quoted
+            # `market_line` in every market, so the panel reads one key for the
+            # quoted book line. `line` is reserved for the model's own wording
+            # (the spread's marginLine), which is a different thing.
+            market["market_line"] = quoted
         out.append(market)
     return out
 

@@ -5,6 +5,7 @@ from starlette.types import Scope
 
 from nba_predictor import config
 from nba_predictor.api.facts import router as facts_router
+from nba_predictor.api.explain import router as explain_router
 from nba_predictor.api.routes import router
 from nba_predictor.tracking.store import init_db
 
@@ -38,6 +39,11 @@ def create_app() -> FastAPI:
     # below so /facts/* is never swallowed by the static-file fallback.
     # /facts/upcoming is declared before /facts/{game_id} inside facts.py.
     app.include_router(facts_router)
+    # The browser's route to the plain-English summary. Caddy only
+    # reverse-proxies this app, so the explainer is reached through here rather
+    # than directly. Registered before the SPA mount below for the same reason
+    # as facts_router: the static-file fallback would otherwise swallow it.
+    app.include_router(explain_router)
 
     frontend_dist = config.PROJECT_ROOT / "frontend" / "dist"
     if frontend_dist.exists():

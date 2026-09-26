@@ -6,6 +6,10 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
     proxy: {
+      // The plain-English summary. This app's own proxy route forwards it to
+      // the explainer, so dev matches production: the browser only ever calls
+      // same-origin /api/explain/*.
+      "/api/explain": "http://127.0.0.1:8020",
       "/health": "http://127.0.0.1:8020",
       "/teams": "http://127.0.0.1:8020",
       "/games": "http://127.0.0.1:8020",

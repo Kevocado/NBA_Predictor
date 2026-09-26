@@ -4,6 +4,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import Scope
 
 from nba_predictor import config
+from nba_predictor.api.facts import router as facts_router
 from nba_predictor.api.routes import router
 from nba_predictor.tracking.store import init_db
 
@@ -32,6 +33,11 @@ def create_app() -> FastAPI:
 
     app = FastAPI(title="NBA Predictor API")
     app.include_router(router)
+    # The explainer service calls {SPORT_API}/facts/{id} on the API root, so
+    # this router carries no /api prefix. Registered before the SPA mount
+    # below so /facts/* is never swallowed by the static-file fallback.
+    # /facts/upcoming is declared before /facts/{game_id} inside facts.py.
+    app.include_router(facts_router)
 
     frontend_dist = config.PROJECT_ROOT / "frontend" / "dist"
     if frontend_dist.exists():

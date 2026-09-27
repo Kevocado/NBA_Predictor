@@ -3,7 +3,6 @@ import { api, type GameDetail, type PlayerProp, type MarketPrediction } from "..
 import { favourite } from "../lib/pick";
 import { teamName } from "../lib/teams";
 import { ErrorState, Skeleton, kickoff, pct, stat, statusWords } from "../predictor-ui";
-import { GameSummaryPanel } from "./GameSummaryPanel";
 
 interface GameDetailModalProps {
   gameId: string;
@@ -167,11 +166,6 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
             ×
           </button>
         </div>
-
-        {/* In plain English, first: it is the one-screen answer the rest of this
-            dialog is the evidence for. It fetches on its own and never gates
-            the game detail below. */}
-        <GameSummaryPanel gameId={gameId} fetcher={api.explain} className="mb-5" />
 
         {error && <ErrorState message={error} onRetry={() => setReloadKey((k) => k + 1)} />}
         {!error && !detail && <Skeleton label="Loading…" />}

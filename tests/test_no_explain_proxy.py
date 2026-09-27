@@ -12,6 +12,7 @@ next person to add "a harmless proxy" would be adding a route that can only ever
 """
 from fastapi.testclient import TestClient
 
+from nba_predictor import config
 from nba_predictor.api.app import create_app
 
 
@@ -49,33 +50,76 @@ def test_the_proxy_module_is_gone():
     )
 
 
-def test_a_request_for_a_summary_is_not_the_proxy_and_not_json():
-    """NBA's honest version of "a request is a plain 404".
+def test_a_request_for_a_summary_is_not_a_summary(monkeypatch, tmp_path):
+    """The live bug was a 502 from the proxy. This asserts what replaced it.
 
-    This app mounts a `SPAStaticFiles` at `/` that **deliberately** falls back to
-    `index.html` for any path that is not a real static file, so once the proxy
-    route is gone `/api/explain/...` is answered by that fallback with a **200
-    and the app shell**. That is the app's documented behaviour for unknown
-    paths and it is not something this change introduced, so pretending it is a
-    404 would be a test asserting something untrue.
+    What answers `/api/explain/*` genuinely **depends on whether
+    `frontend/dist` exists**, and that is the whole of the difference:
 
-    What must be true is the part that matters: the request no longer reaches a
-    proxy (so no more 502), and it is not answered with a summary. Asserting on
-    the body is what distinguishes "the SPA answered" from "something served a
-    summary here", and asserting *not* 502 is what pins the actual bug.
+    * **with `dist`** (the production image): the `SPAStaticFiles` mount
+      deliberately falls back to `index.html` for any path that is not a real
+      static file, so the answer is **200 and the app shell**.
+    * **without `dist`** (local dev, and a clean checkout in CI): there is no
+      mount, so FastAPI's own handler answers **404 with
+      `{"detail": "Not Found"}`** — which is `application/json`.
+
+    The first version of this test asserted "no JSON content-type", which is true
+    only in the *first* environment, so it failed on a clean checkout. That was
+    also the wrong question: a 404 body is JSON and is not a summary. The
+    invariant that holds in both is the one that matters — the response is not an
+    explanation, and it is not the proxy.
+
+    Both environments are exercised explicitly through `config.PROJECT_ROOT`, so
+    the result does not depend on whether the machine running the suite has run a
+    frontend build. A test whose answer changes with a local build artefact is a
+    test that will be green on one machine and red on another.
     """
-    with TestClient(create_app()) as c:
-        res = c.get("/api/explain/nba/401585")
-    assert res.status_code != 502, (
-        "the proxy is still answering; a 502 here is the live bug"
-    )
-    assert "application/json" not in res.headers.get("content-type", ""), (
-        f"something is still serving JSON at /api/explain: {res.headers.get('content-type')}"
-    )
-    body = res.text.strip().lower()
-    assert not body.startswith("{") and not body.startswith("["), (
-        "a JSON body came back from /api/explain, so a summary is still served"
-    )
+    for dist in (False, True):
+        root = tmp_path / ("with-dist" if dist else "without-dist")
+        (root / "frontend").mkdir(parents=True)
+        if dist:
+            (root / "frontend" / "dist").mkdir()
+            (root / "frontend" / "dist" / "index.html").write_text(
+                "<!doctype html><html lang=en><body>SPA shell</body></html>")
+        monkeypatch.setattr(config, "PROJECT_ROOT", root)
+
+        with TestClient(create_app()) as c:
+            res = c.get("/api/explain/nba/401585")
+
+        where = "with dist" if dist else "without dist"
+        assert res.status_code != 502, (
+            f"[{where}] the proxy is still answering; a 502 here is the live bug"
+        )
+        assert "summary" not in res.text.lower(), (
+            f"[{where}] something is still serving a summary: {res.text[:120]!r}"
+        )
+        assert "verdict" not in res.text and "factors" not in res.text, (
+            f"[{where}] the response carries explanation fields: {res.text[:120]!r}"
+        )
+
+
+def test_both_environments_really_do_differ(monkeypatch, tmp_path):
+    """So the test above is not passing because the two cases are identical.
+
+    If the SPA mount stopped existing, or stopped falling back, the loop above
+    would still pass — it just would not be covering two environments. This pins
+    the difference so that a change to the mount is a loud failure here rather
+    than a silent narrowing of what the other test checks.
+    """
+    seen = {}
+    for dist in (False, True):
+        root = tmp_path / str(dist)
+        (root / "frontend").mkdir(parents=True)
+        if dist:
+            (root / "frontend" / "dist").mkdir()
+            (root / "frontend" / "dist" / "index.html").write_text("<!doctype html><html></html>")
+        monkeypatch.setattr(config, "PROJECT_ROOT", root)
+        with TestClient(create_app()) as c:
+            res = c.get("/api/explain/nba/401585")
+        seen[dist] = (res.status_code, res.headers.get("content-type", ""))
+    assert seen[False][0] == 404, f"without dist: expected FastAPI's own 404, got {seen[False]}"
+    assert seen[True][0] == 200, f"with dist: expected the SPA shell, got {seen[True]}"
+    assert "text/html" in seen[True][1], f"with dist: expected HTML, got {seen[True][1]!r}"
 
 
 def test_the_apps_own_routes_still_answer():

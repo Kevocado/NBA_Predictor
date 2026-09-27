@@ -5,7 +5,6 @@ from starlette.types import Scope
 
 from nba_predictor import config
 from nba_predictor.api.facts import router as facts_router
-from nba_predictor.api.explain import router as explain_router
 from nba_predictor.api.routes import router
 from nba_predictor.tracking.store import init_db
 
@@ -39,11 +38,16 @@ def create_app() -> FastAPI:
     # below so /facts/* is never swallowed by the static-file fallback.
     # /facts/upcoming is declared before /facts/{game_id} inside facts.py.
     app.include_router(facts_router)
-    # The browser's route to the plain-English summary. Caddy only
-    # reverse-proxies this app, so the explainer is reached through here rather
-    # than directly. Registered before the SPA mount below for the same reason
-    # as facts_router: the static-file fallback would otherwise swallow it.
-    app.include_router(explain_router)
+    # There is deliberately no /api/explain proxy here. The shared explainer
+    # refuses nba with a 404 (predictor-hub#10), so a proxy had exactly one
+    # possible outcome: a 502 on every game detail, which the frontend rendered
+    # as an error box on a dialog whose real content was fine. The panel is gone
+    # from frontend/src too. tests/test_no_explain_proxy.py keeps both gone.
+    #
+    # Note what now answers /api/explain/*: the SPAStaticFiles mount below, with
+    # the app shell and a 200. That is this app's documented behaviour for any
+    # unknown path, not something this change introduced, and the test asserts
+    # what actually matters -- no proxy, and no JSON.
 
     frontend_dist = config.PROJECT_ROOT / "frontend" / "dist"
     if frontend_dist.exists():

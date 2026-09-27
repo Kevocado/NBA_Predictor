@@ -19,7 +19,12 @@ dependencies = [
     "optuna>=4.0",
     "nba_api>=1.5",
     "requests>=2.32",
-    # Runtime, not dev: api/explain.py imports httpx to reach the explainer
+    # Runtime, not dev when api/explain.py imported httpx to reach the explainer.
+    # That proxy is gone (nba is refused by the explainer, so it could only 502),
+    # and httpx is no longer imported anywhere in src/ -- which
+    # tests/test_runtime_dependencies.py now asserts. The dependency is kept: the
+    # tests need it, and dropping a declared runtime dep is a separate change
+    # with an image-build risk that cannot be checked from here.
     # service, and a Docker image installs only [project].dependencies. With
     # httpx dev-only the image died on import on the VPS while every test
     # passed, because the test tooling pulls httpx in anyway.

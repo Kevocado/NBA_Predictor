@@ -1,4 +1,3 @@
-import type { Explanation } from "../predictor-ui";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 
@@ -163,9 +162,6 @@ async function fetchJson<T>(path: string): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-/** The plain-English summary type is the shared panel's own, so the site and the
- *  panel cannot disagree about the shape. */
-
 export const api = {
   getTeams: () => fetchJson<Team[]>("/teams"),
   getTeam: (abbreviation: string) => fetchJson<Team>(`/teams/${abbreviation}`),
@@ -181,11 +177,4 @@ export const api = {
   getTrackRecord: () => fetchJson<TrackRecord[]>("/hub/track-record"),
   getManifest: () => fetchJson<Manifest>("/manifest"),
   getCalibration: () => fetchJson<CalibrationBin[]>("/calibration"),
-  // The plain-English summary. Same-origin, on the family 15 s timeout, and
-  // proxied to the explainer by this site's own FastAPI (see
-  // api/routes.py::explain_proxy), which is what Caddy reverse-proxies to.
-  // Deliberately uncached: the panel's footer states how long ago the summary
-  // was written, so a cached copy would show a stale age beside fresh
-  // numbers. The service caches by the facts it was given.
-  explain: (sport: string, id: string) => fetchJson<Explanation>(`/api/explain/${sport}/${encodeURIComponent(id)}`),
 };

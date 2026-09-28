@@ -102,7 +102,7 @@ def explain(sport: str, explainer_id: str):
     # All of it is refused BEFORE any request goes out, so a rejected input never
     # becomes a request. 502 like every other failure, so the site's error state
     # takes it and no upstream (and no request) is involved.
-    if ".." in sport or ".." in explainer_id or "/" in sport or explainer_id.startswith("/"):
+    if ".." in sport or ".." in explainer_id or "/" in sport or not explainer_id or explainer_id.startswith("/"):
         raise HTTPException(status_code=502, detail=_UNAVAILABLE)
     url = f"{EXPLAINER_URL}/explain/{quote(sport, safe='')}/{quote(explainer_id, safe='')}"
     try:

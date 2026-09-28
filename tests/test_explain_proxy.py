@@ -34,6 +34,7 @@ import json
 
 import pytest
 import requests
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from nba_predictor import config
@@ -46,6 +47,17 @@ from nba_predictor.api.app import create_app
 #: it found "401" inside "401585". Change the id to `777` and a mutation that
 #: echoes the upstream URL into the 502 body stops failing any test at all.
 GAME_ID = "777"
+
+#: The 502 body, as a LITERAL rather than as `explain_module._UNAVAILABLE`.
+#:
+#: Asserting against the constant looks stronger and is weaker: it can only detect
+#: a change at the raise site, never a change to the message. Appending the internal
+#: hostname -- `_UNAVAILABLE = "The summary service is not available (upstream
+#: predictor-explainer:8090)."` -- left all 55 tests green while the internal host
+#: reached the browser. This is the same "guard relative to a live object" mistake
+#: as reading the route table off a framework structure that hid the route, and as
+#: the `401585`/`"401"` substring coincidence.
+UNAVAILABLE_LITERAL = "The summary service is not available."
 
 UPSTREAM_BODY = {
     "verdict": "BOS by 4.2 points, against a line of BOS -3.5.",
@@ -205,12 +217,20 @@ def test_the_upstream_timeout_is_below_the_browsers():
 
 # --- nothing upstream is ever echoed ---------------------------------------
 
-#: A non-2xx the proxy must turn into a 502. The fake RETURNS a response with
+#: Every non-2xx the proxy must turn into a 502. **The 3xx range is here for a
+#: reason:** with only 400-and-up, `< 300` -> `<= 300` and `< 300` -> `< 400` were
+#: both silent, and a 3xx carrying a JSON body would be handed to the browser as a
+#: summary -- contradicting both the module docstring and this file's headline
+#: claim. "The window is a range" is proved by testing below 200; where it ENDS is a
+#: separate question, and only a 3xx asks it.
+#:
+#: The fake RETURNS a response with
 #: this status -- it does not raise. That distinction is the whole test: when the
 #: fake raised `HTTPError` instead, `requests.get()` never returned and the
 #: proxy's own `if not (200 <= response.status_code < 300)` check was never
 #: executed, so removing that check left every test green.
-UPSTREAM_ERROR_STATUSES = [400, 401, 403, 404, 422, 429, 500, 502, 503]
+UPSTREAM_ERROR_STATUSES = [300, 301, 302, 303, 304, 307, 308, 399,
+                          400, 401, 403, 404, 422, 429, 500, 502, 503]
 
 
 @pytest.mark.parametrize("status", UPSTREAM_ERROR_STATUSES)
@@ -234,7 +254,7 @@ def test_an_upstream_error_status_becomes_a_502_carrying_no_upstream_body(monkey
     # The strongest form: the body IS the fixed message. Every assertion above is
     # a "not containing", and a mutation that appends the upstream URL to the
     # message satisfies all of them while disclosing the internal host and path.
-    assert res.json() == {"detail": explain_module._UNAVAILABLE}, res.text[:200]
+    assert res.json() == {"detail": UNAVAILABLE_LITERAL}, res.text[:200]
 
 
 @pytest.mark.parametrize("status", UPSTREAM_ERROR_STATUSES)
@@ -263,7 +283,7 @@ def test_a_raised_upstream_error_becomes_a_502_carrying_nothing(monkeypatch, sta
 
     assert res.status_code == 502, f"[upstream {status}] {res.text[:200]!r}"
     assert secret not in res.text, f"[upstream {status}] an upstream body was echoed"
-    assert res.json() == {"detail": explain_module._UNAVAILABLE}, res.text[:200]
+    assert res.json() == {"detail": UNAVAILABLE_LITERAL}, res.text[:200]
 
 
 def test_a_200_that_is_not_json_is_a_502(monkeypatch):
@@ -365,7 +385,12 @@ WALK_OUT_PATHS = [
     ("/api/explain/nba/%2e%2e/%2e%2e/etc/passwd", True),
     ("/api/explain/nba/secrets%2F..%2Fx", True),
     ("/api/explain/nba/secrets/../x", False),
-    ("/api/explain/nba//etc/passwd", False),
+    # `True`, not `False`: the guard DOES refuse this (the id resolves to
+    # `/etc/passwd`). The comment above presents it as the case that defeats a
+    # walk-out-only guard, and with `False` the confinement loop alone would not
+    # notice the guard being removed -- the outbound URL satisfies all four
+    # confinement assertions either way.
+    ("/api/explain/nba//etc/passwd", True),
     ("/api/explain/nba/%2Fetc%2Fpasswd", True),
 ]
 
@@ -431,7 +456,7 @@ def test_a_path_that_walks_out_never_reaches_the_explainer(monkeypatch, tmp_path
         # echo the sport and the id left every test green, because nothing
         # asserted the body of the guard's refusal -- only the bodies of the
         # failures that happen after a request was sent.
-        assert res.json() == {"detail": explain_module._UNAVAILABLE}, (
+        assert res.json() == {"detail": UNAVAILABLE_LITERAL}, (
             f"[{path}] the refusal did not use the fixed message: {res.text[:200]!r}"
         )
     # The invariant is NOT "no request left". A path the client normalises
@@ -450,7 +475,7 @@ def test_a_path_that_walks_out_never_reaches_the_explainer(monkeypatch, tmp_path
         )
         assert ".." not in url, f"[{path}] a traversal reached the wire: {url}"
         tail = url[len(f"{explain_module.EXPLAINER_URL}/explain/"):]
-        assert tail.startswith("nba/") or tail == "..", f"[{path}] wrong sport segment: {url}"
+        assert tail.startswith("nba/"), f"[{path}] wrong sport segment: {url}"
         assert not tail[len("nba/"):].startswith("/"), (
             f"[{path}] an absolute-path id was forwarded, so the explainer's ASGI "
             f"layer decodes it back to a deeper path: {url}"
@@ -516,16 +541,41 @@ def test_a_2xx_that_is_not_an_object_is_a_502(monkeypatch):
         assert payload.decode() not in res.text or payload == b"null", res.text[:200]
 
 
-def test_the_apps_own_routes_still_answer():
+@pytest.mark.parametrize("ship_dist", [False, True], ids=["no-dist", "with-dist"])
+def test_the_apps_own_routes_still_answer(monkeypatch, tmp_path, ship_dist):
     """So the guard above cannot be satisfied by breaking a neighbour.
 
-    This existed in the file this one replaced. Without it, a change that made
-    the app fail to start, or that shadowed `/facts/*`, would leave the
-    route-table assertion passing on an app that answers nothing useful.
+    This existed in the file this one replaced. Without it, a change that made the
+    app fail to start, or that shadowed `/facts/*`, would leave the route-table
+    assertion passing on an app that answers nothing useful.
+
+    **The status code is not enough, and in the production shape it is not even
+    true.** `SPAStaticFiles` answers 200 with the app shell for any path it does not
+    recognise, so with `frontend/dist` present, deleting
+    `app.include_router(facts_router)` makes `/facts/upcoming` answer **200** --
+    and this guard passed, while failing in the no-dist shape. That is the
+    Critical's own defect class (a status assertion satisfied by the static-file
+    fallback) reintroduced in the guard this commit restored, in a file that had
+    just learned it twice. So the BODY is asserted: a route that exists returns
+    JSON, and a shell does not.
     """
+    root = tmp_path / f"root-{ship_dist}"
+    (root / "frontend").mkdir(parents=True)
+    if ship_dist:
+        (root / "frontend" / "dist").mkdir()
+        (root / "frontend" / "dist" / "index.html").write_text(
+            "<!doctype html><html lang=en><body>SPA shell</body></html>")
+    monkeypatch.setattr(config, "PROJECT_ROOT", root)
+
     with TestClient(create_app()) as c:
-        assert c.get("/health").status_code == 200
-        assert c.get("/facts/upcoming").status_code == 200
+        health = c.get("/health")
+        assert health.status_code == 200, health.text[:200]
+        assert isinstance(health.json(), dict), (
+            f"the SPA shell answered /health: {health.text[:120]!r}")
+        facts_res = c.get("/facts/upcoming")
+        assert facts_res.status_code == 200, facts_res.text[:200]
+        assert isinstance(facts_res.json(), dict), (
+            f"the SPA shell answered /facts/upcoming: {facts_res.text[:120]!r}")
 
 
 def test_an_unparseable_timeout_does_not_take_the_app_down(monkeypatch):
@@ -580,8 +630,12 @@ def test_a_slash_in_the_sport_is_refused(monkeypatch):
 
     from fastapi import HTTPException
 
+    # Plain "nba/x", NOT "nba/../x". The latter also contains "..", so it trips the
+    # walk-out half as well and the `/` half is never isolated -- deleting
+    # `or "/" in sport` left every test green. One token, and it is the difference
+    # between this guard existing and not.
     with pytest.raises(HTTPException) as caught:
-        explain_module.explain("nba/../x", GAME_ID)
+        explain_module.explain("nba/x", GAME_ID)
     assert caught.value.status_code == 502
     assert not sent, f"a request was sent for a refused sport: {sent}"
 
@@ -611,3 +665,48 @@ def test_the_explainer_url_is_read_from_the_environment(monkeypatch):
     finally:
         monkeypatch.delenv("EXPLAINER_URL", raising=False)
         importlib.reload(explain_module)
+
+
+def test_an_empty_id_is_refused():
+    """`/api/explain/nba/` forwarded to `/explain/nba/`.
+
+    Not a traversal and not a leak -- the path is the one the caller named -- but the
+    guard's own comment says "an id is one relative segment; anything else is
+    refused", and an empty string is not one. A comment that overstates what the code
+    does is the same defect as a test that asserts less than its name says, so the
+    code was brought in line rather than the comment weakened.
+    """
+    sent: list[str] = []
+
+    def fake_get(url, **kwargs):
+        sent.append(url)
+        response = requests.Response()
+        response.status_code = 200
+        response._content = json.dumps(UPSTREAM_BODY).encode()
+        return response
+
+    m = pytest.MonkeyPatch()
+    m.setattr(explain_module.requests, "get", fake_get)
+    try:
+        with pytest.raises(HTTPException) as caught:
+            explain_module.explain("nba", "")
+        assert caught.value.status_code == 502
+        assert not sent, f"a request was sent for an empty id: {sent}"
+    finally:
+        m.undo()
+
+
+def test_the_timeout_helper_survives_a_non_string():
+    """`except (TypeError, ValueError)` looks redundant -- `os.getenv` with a default
+    always returns a `str` -- and narrowing it to `except ValueError` was silent.
+
+    Kept, and pinned. `_positive_float` is a module-level helper with a typed
+    parameter, so a future caller passing `None` is the kind of change that looks
+    safe and takes the whole API down at import, which is the failure the helper
+    exists to prevent. A defensive branch nobody exercises is indistinguishable from
+    a redundant one until it is exercised.
+    """
+    assert explain_module._positive_float(None, "X") == explain_module._DEFAULT_TIMEOUT_S
+    assert explain_module._positive_float(float("nan"), "X") == explain_module._DEFAULT_TIMEOUT_S
+    assert explain_module._positive_float(float("inf"), "X") == explain_module._DEFAULT_TIMEOUT_S
+    assert explain_module._positive_float("abc", "X") == explain_module._DEFAULT_TIMEOUT_S

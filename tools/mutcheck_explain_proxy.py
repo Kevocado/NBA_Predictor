@@ -31,15 +31,20 @@ built to make each of them impossible.
   same length inside the same second can be silently ignored and pytest imports
   the unmutated bytecode.
 
-  **How far that is actually established, stated precisely:** the mechanism is
-  real and the sibling harness in `predictor-hub` hit it -- one guard reported
-  SILENT on four runs of five and BITES on the fifth, purely on where the second
-  boundary fell, and a debug `read_text()` "fixed" it because a few more
-  milliseconds was enough. Disabling the purge *here* did not reproduce it: the
-  two same-length mutations below still bit. So the purge is a cheap guard
-  against a failure that is intermittent by nature, not one demonstrated in this
-  repo. The two `"15"` mutations are same-length precisely so the question stays
-  answerable on any run rather than being assumed.
+  **How far that is established:** the mechanism is real and it is reproducible
+  HERE, though not by accident. A review forced it: take the same-length `15` ->
+  `45` mutation below, `os.utime` the mutated file back into the second the stale
+  `.pyc` header recorded, and run pytest with bytecode enabled -- **0 failures,
+  the mutation silently masked**. With the purge, 1 failure.
+
+  It had looked unreproducible, because simply deleting the purge did not mask
+  anything: the two same-length rows still bit. The mtime has to be forced into
+  the recorded second, and deleting the purge does not do that. An earlier version
+  of this docstring therefore said "disabling the purge here did not reproduce
+  it" and concluded the purge was a cheap guard against an intermittent failure
+  "not one demonstrated in this repo" -- which was under-claiming, and under-
+  claiming about a mechanism that turns out to be exact is still a wrong claim.
+  The purge is load-bearing.
 * **It keeps a `.bak` beside the source and restores under `try/finally`.** Also
   demonstrated for real: a bug in an earlier version of this script's own
   unpacking raised mid-table, and the `git checkout` used to recover reverted
@@ -96,8 +101,8 @@ MUTATIONS = [
     ("walk-out: `in` weakened to `startswith`",
      r'"\.\." in sport or "\.\." in explainer_id',
      'sport.startswith("..") or explainer_id.startswith("..")'),
-    ("walk-out: absolute-path id allowed again",
-     r' or "/" in sport or explainer_id\.startswith\("/"\)', ""),
+    ("walk-out: the absolute-path-id half dropped",
+     r' or not explainer_id or explainer_id\.startswith\("/"\)', ""),
     ("2xx window narrowed from a range to == 200",
      r"if not \(200 <= response\.status_code < 300\):", "if response.status_code != 200:"),
     ("`{explainer_id:path}` narrowed to a single segment",
@@ -121,6 +126,24 @@ MUTATIONS = [
     ("timeout raised above the browser's 15->25 [same length]",
      r'EXPLAINER_TIMEOUT_S", "15"', 'EXPLAINER_TIMEOUT_S", "25"'),
 
+    # --- a second review round found these four silent ---
+    ("a leak routed through the _UNAVAILABLE message itself",
+     r'_UNAVAILABLE = "The summary service is not available\."',
+     '_UNAVAILABLE = "The summary service is not available (upstream predictor-explainer:8090)."'),
+    ("2xx window upper bound: < 300 widened to <= 300",
+     r"if not \(200 <= response\.status_code < 300\):", "if not (200 <= response.status_code <= 300):"),
+    ("2xx window upper bound: < 300 widened to < 400",
+     r"if not \(200 <= response\.status_code < 300\):", "if not (200 <= response.status_code < 400):"),
+    ("walk-out: the `/`-in-sport half dropped on its own",
+     r' or "/" in sport', ""),
+    ("an empty id is no longer refused",
+     r' or "/" in sport or not explainer_id or ', ' or "/" in sport or '),
+    # A real weakening of the guard as it stands, rather than the `or not body`
+    # narrowing that was removed from the source -- a mutation row that moves the
+    # code somewhere it already is not is not a test of anything.
+    ("the non-dict 2xx check narrowed to one wrong type",
+     r"        if not isinstance\(body, dict\):", "        if isinstance(body, list):"),
+
     (f"quote(sport) left at its `safe='/'` default [{EXPECTED_SILENT_MARK}: "
      f"the `/`-in-sport guard refuses it first, so this is defence in depth]",
      r"quote\(sport, safe=''\)", "quote(sport)"),
@@ -142,16 +165,26 @@ def run() -> tuple[int, int, int]:
     _purge_bytecode()
     env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
     p = subprocess.run(
-        ["uv", "run", "pytest", TEST, "-q", "-p", "no:cacheprovider"],
-        capture_output=True, text=True, env=env,
+        ["uv", "run", "pytest", TEST, "-q", "-p", "no:cacheprovider", "--tb=no"],
+        capture_output=True, text=True, env=env, timeout=600,
     )
     out = p.stdout + p.stderr
     if p.returncode not in (0, 1):
         return -1, 0, 1
 
     def count(word: str) -> int:
-        m = re.search(rf"(\d+) {word}", out)
-        return int(m.group(1)) if m else 0
+        """The LAST match, not the first.
+
+        `re.search` takes the first `N failed` anywhere in stdout+stderr, and
+        that includes tracebacks and assertion messages. So a mutation that echoes
+        `GAME_ID` into a failure message makes its own tally read `777 failed` when
+        the real number is 19 -- and with `GAME_ID = "0"` the same mutation is
+        reported SILENT and filed as a guard that does not bite. The summary line
+        is always last, so the last match is the right one. `--tb=no` keeps the
+        tracebacks out as well, which is belt and braces rather than the fix.
+        """
+        m = re.findall(rf"(\d+) {word}", out)
+        return int(m[-1]) if m else 0
 
     return count("failed"), count("passed"), 0
 
@@ -164,7 +197,8 @@ def main() -> int:
         print("  Every mutation would report BITES for free, so the table below would")
         print("  be meaningless. Fix the baseline first; do not read the rows below.")
         return 1
-    print(f"  baseline: {base_passed} passed, 0 failed -- the table below is meaningful")
+    print(f"  baseline: {base_passed} passed, 0 failed in {TEST} -- "
+          f"the table below is meaningful FOR THAT FILE")
     print(f"  {len(MUTATIONS)} mutations\n")
 
     backup = TARGET.with_suffix(TARGET.suffix + ".bak")
@@ -190,14 +224,25 @@ def main() -> int:
             else:
                 verdict, bite = f"*** SILENT *** ({passed} passed)", False
             print(f"  {label[:58]:<58} {verdict}")
-            if bite:
-                if label == CANARY:
-                    canary_ok = True
-            elif label == CANARY:
-                canary_ok = True
+            if label == CANARY:
+                # The canary must be SILENT. This set the flag in BOTH branches --
+                # the identical defect I had just fixed in the sibling harness in
+                # predictor-hub, reintroduced here by restructuring. The effect is
+                # the same: the check below is unreachable and the closing line is a
+                # hardcoded string. Demonstrated by adding a test that pins the
+                # compiled-in default URL: the row read `BITES (1 failed)` and the
+                # harness still printed "the canary stayed silent as it should" and
+                # exited 0.
+                canary_ok = not bite
             elif EXPECTED_SILENT_MARK in label:
                 expected.append(label.split(" [")[0])
-            else:
+            elif not bite:
+                # The `elif not bite` is load-bearing, and dropping it while fixing
+                # the canary above put EVERY mutation in the "did not bite" list
+                # while its row still said BITES -- so the harness reported 20
+                # broken guards and 20 working ones at the same time. A run that
+                # contradicts itself in two adjacent lists is the same failure as a
+                # harness that reports a green run on a red one.
                 silent.append(label)
     finally:
         TARGET.write_text(KEEP)
@@ -221,7 +266,11 @@ def main() -> int:
             print(f"    - {s}")
         return 1
     if not canary_ok:
-        print("  the canary BORE -- the harness is misreporting; distrust the table")
+        print("  THE CANARY BIT -- the harness is misreporting; distrust the table "
+              "above entirely.")
+        print("  Either the canary now covers something real (a test was added for "
+              "it, so it is no longer a control) or the mutations are not being "
+              "applied. Fix the canary before reading any row.")
         return 1
     print("  every mutation bit or was documented as expected-silent, "
           "and the canary stayed silent as it should")

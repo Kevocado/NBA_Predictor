@@ -111,15 +111,15 @@ export default function PlayerBoxScore({ playerProps, hubPlayers, homeTeam, away
       <div className="box-score-scroll" data-testid="box-score-scroll">
         <table className="box-score-table">
           <colgroup>
-            <col style={{ width: "15.5%" }} />
+            <col className="box-score-col-name" />
             {STAT_KEYS.map((key) => (
-              <col key={`a-${key}`} style={{ width: "8.5%" }} />
+              <col key={`a-${key}`} className="box-score-col-stat" />
             ))}
-            <col style={{ width: "1%" }} />
+            <col className="box-score-col-divider" />
             {STAT_KEYS.map((key) => (
-              <col key={`h-${key}`} style={{ width: "8.5%" }} />
+              <col key={`h-${key}`} className="box-score-col-stat" />
             ))}
-            <col style={{ width: "15.5%" }} />
+            <col className="box-score-col-name" />
           </colgroup>
           <thead>
             <tr>

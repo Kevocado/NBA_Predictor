@@ -78,26 +78,39 @@ td:not(:first-child) {
    right gutter and a top rule -- right for a 9-column market table, wrong for
    an 11-column table that has to stay symmetric across the split.
 
-   The scroll contract is the part worth reading. ONE container scrolls, on
-   both axes, with a bounded height: a 22-player game must not grow the card,
-   and on a 390px phone the columns must not force the modal sideways. A wide
-   table inside a modal that already scrolls needs its own box, or the modal
-   scrolls horizontally and the whole page moves with it. */
+   No scroll container, deliberately. An earlier version capped the box at
+   19rem and scrolled it, which meant a normal game still cut off mid-table and
+   the reader had to scroll to see a roster that fits. It now sizes to its
+   content and sits entirely inside the card, which is what was asked for.
+
+   table-layout: fixed plus a symmetric colgroup is what makes the away and home
+   halves line up. With auto layout the browser sizes each name column to its
+   own content and the two sides drift apart. */
 .box-score-scroll {
-  max-height: 19rem;
-  overflow: auto;
   border: 1px solid var(--color-pr-rule);
   border-radius: 2px;
 }
 
 .box-score-table {
-  /* table-fixed plus a symmetric colgroup is what makes the away and home
-     halves line up. With auto layout the browser sizes each name column to
-     its own content and the two sides drift apart. */
   table-layout: fixed;
   width: 100%;
-  min-width: 40rem;
   font-size: 0.8125rem;
+}
+
+/* Column widths live here, not as inline styles on the <col>s, so the narrow
+   media query below can rebalance them. An inline width would win the cascade
+   and the phone layout would be stuck at the desktop ratio. Symmetric by
+   construction: name, 4 stats, divider, 4 stats, name. */
+.box-score-col-name {
+  width: 15.5%;
+}
+
+.box-score-col-stat {
+  width: 8.5%;
+}
+
+.box-score-col-divider {
+  width: 1%;
 }
 
 .box-score-table th,
@@ -107,46 +120,48 @@ td:not(:first-child) {
   white-space: nowrap;
 }
 
-.box-score-table thead th,
-.box-score-table tfoot th {
-  position: sticky;
-  /* A sticky cell needs an opaque background of its own or the rows scroll
-     through the text. z-index above the body rows, below nothing. */
+/* The team names. Centred over each half, and set the way the modal's own
+   heading is set -- display face, 700, uppercase, tracked -- so the split reads
+   as two team headers rather than two grey captions. */
+.box-score-table thead .box-score-team-head {
+  padding-top: 0.45rem;
+  padding-bottom: 0.35rem;
+  text-align: center;
+  font-family: var(--font-pr-display);
+  font-weight: 700;
+  font-size: 0.9375rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-hardwood-bright);
+  /* Opaque: the rule between the halves runs underneath these cells, and a
+     transparent header would let it show through the text. */
   background: var(--color-court-900);
-  z-index: 1;
-  text-align: right;
+  border-bottom: 1px solid var(--color-pr-rule);
+  animation: box-score-team-in 220ms ease-out both;
+}
+
+.box-score-table thead .box-score-team-head--home {
+  animation-delay: 60ms;
+}
+
+@keyframes box-score-team-in {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.box-score-table thead .box-score-col-head {
   font-size: 0.6875rem;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--color-net-dim);
-}
-
-.box-score-table thead th:first-child {
-  top: 0;
-}
-
-.box-score-table thead tr:nth-child(2) th {
-  top: 1.6rem;
-}
-
-.box-score-table thead tr:first-child th {
-  top: 0;
-  text-align: left;
-  font-family: var(--font-pr-display, inherit);
-  font-size: 0.75rem;
-  letter-spacing: 0.06em;
-}
-
-.box-score-team-head--home {
-  text-align: right !important;
-}
-
-.box-score-table tfoot th,
-.box-score-table tfoot td {
-  bottom: 0;
-  border-bottom: none;
-  font-weight: 700;
-  color: var(--color-hardwood-bright, var(--color-pr-text));
+  font-weight: 600;
+  text-align: right;
 }
 
 .box-score-col-head--away,
@@ -186,9 +201,15 @@ td:not(:first-child) {
   width: 1px;
 }
 
-.box-score-table thead .box-score-divider,
-.box-score-table tfoot .box-score-divider {
+.box-score-table thead .box-score-divider {
   background: var(--color-court-900);
+}
+
+.box-score-table tfoot th,
+.box-score-table tfoot td {
+  border-bottom: none;
+  font-weight: 700;
+  color: var(--color-hardwood-bright);
 }
 
 .box-score-cell {
@@ -214,8 +235,36 @@ td:not(:first-child) {
   color: var(--color-net-dim);
 }
 
-.box-score-total .box-score-actual {
-  color: var(--color-net-dim);
+/* Eleven columns have to survive a 390px phone without a scrollbar. The
+   padding and the stat columns give way before the names do: "17.9" still
+   fits in 25px, but a player's name truncated to "Nikola Jo…" is worse than a
+   stat column held tight. */
+@media (max-width: 30rem) {
+  .box-score-table {
+    font-size: 0.6875rem;
+  }
+
+  .box-score-table th,
+  .box-score-table td {
+    padding: 0.25rem 0.1rem;
+  }
+
+  .box-score-table thead .box-score-team-head {
+    font-size: 0.8125rem;
+    letter-spacing: 0.03em;
+  }
+
+  .box-score-col-name {
+    width: 22%;
+  }
+
+  .box-score-col-stat {
+    width: 6.75%;
+  }
+
+  .box-score-col-divider {
+    width: 1%;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

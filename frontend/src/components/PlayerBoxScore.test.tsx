@@ -269,32 +269,39 @@ describe("PlayerBoxScore", () => {
     expect(homeCells[0].textContent?.replace(/\s+/g, "")).toBe("30.028(-2.0)");
   });
 
-  it("scrolls on both axes with a bounded height, so the card does not grow", () => {
+  it("does not scroll: the whole roster fits the card", () => {
     renderBox();
-    // jsdom loads no stylesheet, so getComputedStyle returns "" for everything
-    // and getBoundingClientRect returns zeros -- neither can see the layout.
-    // Asserting on either would be theatre. So: assert the element carries the
-    // hook, and assert the stylesheet actually declares the contract. Real
-    // geometry is measured in a browser.
+    // Kevin asked for the scrollability gone, the box already being compact.
+    // A cap plus overflow is exactly what made a normal game cut off
+    // mid-table, so the container must declare neither.
     const scroller = screen.getByTestId("box-score-scroll");
     expect(scroller.className).toBe("box-score-scroll");
-    expect(scroller.className).not.toContain("overflow-auto"); // no utility, no drift
-
     const css = readCss();
     const rule = css.slice(css.indexOf(".box-score-scroll {"));
-    expect(rule.slice(0, rule.indexOf("}"))).toMatch(/max-height:\s*[\d.]+rem/);
-    expect(rule.slice(0, rule.indexOf("}"))).toMatch(/overflow:\s*auto/);
+    const body = rule.slice(0, rule.indexOf("}"));
+    expect(body).not.toMatch(/max-height/);
+    expect(body).not.toMatch(/overflow/);
+    // And the table must not carry a min-width that would force a scrollbar.
+    const table = css.slice(css.indexOf(".box-score-table {"));
+    expect(table.slice(0, table.indexOf("}"))).not.toMatch(/min-width/);
+    expect(table.slice(0, table.indexOf("}"))).toMatch(/table-layout:\s*fixed/);
   });
 
-  it("sticks the headers and totals so a scrolled split table stays readable", () => {
+  it("sets the team names like the modal heading: centred, display face, bold", () => {
     const css = readCss();
-    // Without this, the column labels scroll out of view and a two-sided
-    // comparison becomes guesswork.
-    expect(css).toMatch(/\.box-score-table thead th[\s\S]*?position:\s*sticky/);
-    expect(css).toMatch(/\.box-score-table tfoot th[\s\S]*?position:\s*sticky/);
-    // Fixed layout plus a symmetric colgroup is what keeps the two halves the
-    // same width; with auto layout the halves drift apart.
-    expect(css).toMatch(/\.box-score-table \{[\s\S]*?table-layout:\s*fixed/);
+    const rule = css.slice(css.indexOf(".box-score-table thead .box-score-team-head {"));
+    const body = rule.slice(0, rule.indexOf("}"));
+    expect(body).toMatch(/text-align:\s*center/);
+    expect(body).toMatch(/font-family:\s*var\(--font-pr-display\)/);
+    expect(body).toMatch(/font-weight:\s*700/);
+    expect(body).toMatch(/text-transform:\s*uppercase/);
+    // Opaque, or the divider rule shows through the name.
+    expect(body).toMatch(/background:\s*var\(--color-court-900\)/);
+    // Animated in, but not for anyone who asked for less motion: the file's
+    // global reduced-motion block zeroes animation-duration.
+    expect(body).toMatch(/animation:/);
+    expect(css).toMatch(/@keyframes box-score-team-in/);
+    expect(css).toMatch(/prefers-reduced-motion[\s\S]*?animation-duration/);
   });
 
   it("does not grow its row count with the player count", () => {

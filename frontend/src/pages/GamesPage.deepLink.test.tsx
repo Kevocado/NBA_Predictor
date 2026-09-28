@@ -7,7 +7,10 @@ import { api, type Game, type GameDetail } from "../api/client";
 // behaviour on load — not a click. Everything the page and the detail modal
 // ask for is stubbed here; nothing in this file reaches the network.
 vi.mock("../api/client", () => ({
-  api: { getSeasonFirstWeek: vi.fn(), getGamesWeek: vi.fn(), getGameDetail: vi.fn(), getGamePlayers: vi.fn() },
+  api: {
+    getSeasonFirstWeek: vi.fn(), getGamesWeek: vi.fn(), getGameDetail: vi.fn(),
+    getGamePlayers: vi.fn(), getHubPlayers: vi.fn().mockResolvedValue([]),
+  },
 }));
 
 const g1: Game = {

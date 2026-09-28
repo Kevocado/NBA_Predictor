@@ -72,9 +72,32 @@ class TrackRecordOut(BaseModel):
     market: str
     total_predictions: int
     correct_predictions: int
-    hit_rate: float
+    # None when nothing was graded: 0.0 would claim every graded pick missed,
+    # which is a different statement from "never measured".
+    hit_rate: float | None = None
     # Final games whose only picks were made after tip-off: left out above.
     n_rebuilt: int = 0
+    # Picks left out of the rate because there was nothing to grade them
+    # against: the margin landed exactly on the line (a push), or the row
+    # carried no line. Counted, never scored as a miss.
+    n_push: int = 0
+    # False when this repo has no rule for judging the market (or no results
+    # to judge it against). The site shows the stored count and says so, and
+    # never a fabricated 0%.
+    settled: bool = True
+    # Every week from the first tracked week through this week, gaps filled in
+    # with tracked=false so a week with no picks reads as "not tracked"
+    # instead of vanishing. Empty when the tracking DB has nothing to date.
+    weekly: list["TrackRecordWeekOut"] = []
+
+
+class TrackRecordWeekOut(BaseModel):
+    week_start: str  # ISO date of the Monday the week starts on
+    n: int
+    correct: int
+    # None for a week with no graded picks -- see TrackRecordOut.hit_rate.
+    hit_rate: float | None = None
+    tracked: bool
 
 
 class SeasonBoundsOut(BaseModel):

@@ -201,6 +201,144 @@ def test_track_record_h2h_ignores_market_rows_made_after_tip_off(tmp_path):
     assert h2h.correct_predictions == 0
 
 
+def test_track_record_settles_spread_picks_against_the_closing_line(tmp_path):
+    """Spread rows are judged against the line the pick was priced at.
+
+    `point` is the selection's own line in book convention (BOS -4.5 stores
+    -4.5 for BOS), so the side covers when its margin beats `-point`.
+    """
+    from nba_predictor.services.hub_service import compute_track_record
+    from nba_predictor.tracking import store
+
+    db_path = tmp_path / "tracking.db"
+    store.init_db(db_path)
+    # Model's side: BOS -4.5, BOS won by 10 -> cleared the line, correct.
+    store.insert_market_prediction(
+        db_path, game_id="g1", market="spread", selection="BOS", model_probability=0.6,
+        market_probability=0.5, edge=0.1, bookmaker="DraftKings", american_odds=-110,
+        created_at="2026-03-01T00:00:00", point=-4.5,
+    )
+    # Model's side: LAL +3.5, LAL lost by 10 -> did not cover, wrong.
+    store.insert_market_prediction(
+        db_path, game_id="g2", market="spread", selection="LAL", model_probability=0.55,
+        market_probability=0.5, edge=0.05, bookmaker="DraftKings", american_odds=-110,
+        created_at="2026-03-01T00:00:00", point=3.5,
+    )
+    schedule = [
+        _completed_game("g1", "BOS", "MIA", 110, 100),  # margin +10
+        _completed_game("g2", "LAL", "GSW", 95, 105),   # margin -10
+    ]
+
+    spread = next(r for r in compute_track_record(db_path, schedule) if r.market == "spread")
+
+    assert (spread.total_predictions, spread.correct_predictions, spread.hit_rate) == (2, 1, 0.5)
+    assert spread.settled is True
+
+
+def test_spread_grading_uses_the_same_threshold_as_the_odds_writer(tmp_path):
+    """The writer prices a cover with `line=-point` (refresh_odds.
+    _model_probability); the grader must clear the SAME threshold, or the
+    record would judge every pick by a rule the pick was never priced with.
+    The convention is pinned against `normal_cover_probability` rather than
+    restated, because a grader written from the opposite reading produces
+    plausible-looking rates that are all mirrored."""
+    from nba_predictor.odds.value_bets import normal_cover_probability
+    from nba_predictor.services.hub_service import compute_track_record
+    from nba_predictor.tracking import store
+
+    db_path = tmp_path / "tracking.db"
+    store.init_db(db_path)
+    # The writer's view for BOS -4.5 with a 10-point predicted margin.
+    assert normal_cover_probability(mean=10.0, line=4.5, std=12.0) > 0.5
+
+    for game_id, home_pts, away_pts in (("g1", 114, 100), ("g2", 104, 100)):
+        store.insert_market_prediction(
+            db_path, game_id=game_id, market="spread", selection="BOS", model_probability=0.6,
+            market_probability=0.5, edge=0.1, bookmaker="DraftKings", american_odds=-110,
+            created_at="2026-03-01T00:00:00", point=-4.5,
+        )
+    schedule = [
+        _completed_game("g1", "BOS", "MIA", 114, 100),  # margin 14 > 4.5 -> covered
+        _completed_game("g2", "BOS", "MIA", 104, 100),  # margin 4 < 4.5 -> did not cover
+    ]
+
+    spread = next(r for r in compute_track_record(db_path, schedule) if r.market == "spread")
+
+    assert (spread.total_predictions, spread.correct_predictions) == (2, 1)
+
+
+def test_track_record_settles_total_picks_against_the_line(tmp_path):
+    from nba_predictor.services.hub_service import compute_track_record
+    from nba_predictor.tracking import store
+
+    db_path = tmp_path / "tracking.db"
+    store.init_db(db_path)
+    store.insert_market_prediction(
+        db_path, game_id="g1", market="total", selection="over", model_probability=0.6,
+        market_probability=0.5, edge=0.1, bookmaker="DraftKings", american_odds=-110,
+        created_at="2026-03-01T00:00:00", point=205.5,
+    )
+    store.insert_market_prediction(
+        db_path, game_id="g2", market="total", selection="under", model_probability=0.55,
+        market_probability=0.5, edge=0.05, bookmaker="DraftKings", american_odds=-110,
+        created_at="2026-03-01T00:00:00", point=214.5,
+    )
+    schedule = [
+        _completed_game("g1", "BOS", "MIA", 110, 100),  # total 210 > 205.5 -> over wins
+        _completed_game("g2", "LAL", "GSW", 105, 105),  # total 210 < 214.5 -> under wins
+    ]
+
+    total = next(r for r in compute_track_record(db_path, schedule) if r.market == "total")
+
+    assert (total.total_predictions, total.correct_predictions, total.hit_rate) == (2, 2, 1.0)
+
+
+def test_track_record_counts_a_push_as_neither_right_nor_wrong(tmp_path):
+    """A final margin that lands exactly on the line is a push: nobody won it.
+    It is counted in `n_push` and left out of the rate -- counting it as a
+    miss would make a 0.0-line bet look like a wrong pick."""
+    from nba_predictor.services.hub_service import compute_track_record
+    from nba_predictor.tracking import store
+
+    db_path = tmp_path / "tracking.db"
+    store.init_db(db_path)
+    store.insert_market_prediction(
+        db_path, game_id="g1", market="spread", selection="BOS", model_probability=0.6,
+        market_probability=0.5, edge=0.1, bookmaker="DraftKings", american_odds=-110,
+        created_at="2026-03-01T00:00:00", point=-4.0,
+    )
+    schedule = [_completed_game("g1", "BOS", "MIA", 104, 100)]  # margin 4 == the line
+
+    spread = next(r for r in compute_track_record(db_path, schedule) if r.market == "spread")
+
+    assert spread.total_predictions == 0
+    assert spread.correct_predictions == 0
+    assert spread.n_push == 1
+    # No graded pick means no rate: None, never 0.0 (0% claims every pick missed).
+    assert spread.hit_rate is None
+
+
+def test_track_record_marks_markets_it_cannot_judge_as_unsettled(tmp_path):
+    """Rows for a market this repo has no rule for are shown with their stored
+    count and no rate -- never a fabricated 0%."""
+    from nba_predictor.services.hub_service import compute_track_record
+    from nba_predictor.tracking import store
+
+    db_path = tmp_path / "tracking.db"
+    store.init_db(db_path)
+    store.insert_market_prediction(
+        db_path, game_id="g9", market="player_points", selection="Jayson Tatum",
+        model_probability=0.6, market_probability=None, edge=None, bookmaker=None,
+        american_odds=None, created_at="2026-03-01T00:00:00",
+    )
+
+    row = next(r for r in compute_track_record(db_path, []) if r.market == "player_points")
+
+    assert row.settled is False
+    assert row.total_predictions == 1
+    assert row.hit_rate is None
+
+
 def test_track_record_h2h_settles_one_model_pick_per_game(tmp_path):
     """Odds refresh stores both sides for every bookmaker on every run; the
     record judges only the model's side, once per game, from the latest

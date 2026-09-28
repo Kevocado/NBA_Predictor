@@ -103,6 +103,14 @@ export interface BoxScoreSides {
  * feed. Anyone the join cannot place is returned rather than dropped, and the
  * caller says so on screen -- a player silently moved to the wrong side of the
  * table would be a fabricated box score.
+ *
+ * Known limit, and it is a freshness limit rather than a guess: the hub feed's
+ * `team` is the team in a player's most recent box score inside its window, not
+ * their team as of this game's date. For a game earlier in that window where a
+ * player was traded, they file under their later team. Fixing it properly means
+ * sourcing team and position from the per-game box scores the API already
+ * fetches, so the join disappears; until then, do not describe the split as
+ * exact for historical games.
  */
 export function splitByTeam(rows: BoxScoreRow[], homeTeam: string, awayTeam: string): BoxScoreSides {
   const away: BoxScoreRow[] = [];

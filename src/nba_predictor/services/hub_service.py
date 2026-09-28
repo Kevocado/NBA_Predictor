@@ -3,7 +3,13 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from nba_predictor.api.schemas import TrackRecordOut, TrackRecordWeekOut
+from nba_predictor.api.schemas import (
+    TrackRecordOut,
+    TrackRecordWeekOut,
+    VsMarketOut,
+    VsMarketScopeOut,
+    VsMarketWeekOut,
+)
 from nba_predictor.tracking import store
 from nba_predictor.tracking.store import get_connection
 from nba_predictor.tracking.timing import latest_pre_tip
@@ -326,3 +332,167 @@ def compute_track_record(
                 row.weekly = _weekly_rows(graded_by_market.get(row.market, []), window)
 
     return rows
+
+
+# The sentences the page prints verbatim, once per key it sends. A number
+# nobody can interpret is not a decision aid, and a disclaimer nobody reads is
+# not one either -- so the backend owns the wording and the frontend does not
+# get to paraphrase it away. No profit, ROI or "beats the bookies" claim lives
+# in here; `not_a_profit_claim` exists to say that out loud in the payload.
+_VS_MARKET_METHOD: dict[str, str] = {
+    "market_probability": (
+        "The market number is the book's own price with the overround removed "
+        "(Shin's method), so the two sides of a moneyline add to 100%. It is "
+        "read straight from the odds-refresh run that priced the pick, not "
+        "recomputed here."
+    ),
+    "edge": (
+        "Edge is the model's probability for its pick minus the probability "
+        "the price carried for that same side, in percentage points, positive "
+        "when the model likes a side more than the price does. It measures "
+        "disagreement with a price, not superiority: a closing price is the "
+        "market's best estimate, so a well-calibrated model's average edge is "
+        "near zero by design. A large average edge means one of the two is "
+        "miscalibrated, not that the model is right."
+    ),
+    "disagreement": (
+        "The disagreement cohort is the games where the model backed the side "
+        "the price did not favour -- a pick against the price. Its hit rate is "
+        "how often that side won, over exactly those games. Games the price "
+        "split 50/50 are compared but left out of the cohort: an even price "
+        "favours nobody, so there is no side to disagree with. This is the "
+        "number to read for a decision; the mean edge is a calibration check."
+    ),
+    "not_a_profit_claim": (
+        "This is agreement with a price, not a profit claim. No figure here is "
+        "a return, a yield, a stake or a cent. We do not publish profit or ROI "
+        "figures, and this comparison does not become one by being labelled "
+        "'edge'."
+    ),
+    "population": (
+        "The figures above cover every finished game whose moneyline was "
+        "priced before tip-off, in every season the tracker holds. The week "
+        "table covers the same window as the rest of this page: from the first "
+        "game the tracker wrote a pick for through this week. The scope line "
+        "states how many compared games sit inside that window and how many "
+        "fall outside it, and the two add up to the count above."
+    ),
+}
+
+
+def compute_vs_market(
+    db_path: Path, schedule: list[dict] | None = None, today: date | None = None
+) -> VsMarketOut:
+    """The model's moneyline pick beside the price it was measured against.
+
+    Per finished game: the latest pre-tip odds run, the row with the higher
+    model probability (one pick per game -- the same rule the h2h record
+    grades with), and the price carried by that row. Eligible means a result
+    to judge it against, a market_probability on the pick, and the other side
+    priced at the SAME bookmaker in the same run: a price with only one side
+    stored cannot be said to have favoured either side, and the disagreement
+    test below would be reading a sum-to-100% that was never summed.
+
+    `edge` is model minus price in percentage points on the model's own side.
+    The disagreement cohort is `price < 0.5` -- the price fancied the other
+    side; exactly 0.5 favours nobody, so it stays out of the cohort but
+    remains in `n`.
+    """
+    schedule = schedule or []
+    today = today or date.today()
+    schedule_by_id = {g["game_id"]: g for g in schedule}
+
+    with get_connection(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM game_market_predictions WHERE market = 'h2h'"
+        ).fetchall()
+
+    by_game: dict[str, list] = {}
+    for row in rows:
+        by_game.setdefault(row["game_id"], []).append(row)
+
+    compared: list[dict] = []
+    for game_id, game_rows in by_game.items():
+        game = schedule_by_id.get(game_id)
+        if game is None or not game.get("completed") or game.get("home_pts") is None:
+            continue
+        latest = latest_pre_tip(game_rows, game)
+        if latest is None:
+            continue
+        day = _game_date(game)
+        if day is None:
+            continue
+        run = [r for r in game_rows if r["created_at"] == latest["created_at"]]
+        pick = max(run, key=lambda r: r["model_probability"])
+        price = pick["market_probability"]
+        if price is None:
+            continue
+        other_priced = [
+            r for r in run
+            if r["bookmaker"] == pick["bookmaker"]
+            and r["selection"] != pick["selection"]
+            and r["market_probability"] is not None
+        ]
+        if not other_priced:
+            continue
+        winner = game["home_team"] if game["home_pts"] > game["away_pts"] else game["away_team"]
+        compared.append({
+            "day": day,
+            "game_id": str(game_id),
+            "model": float(pick["model_probability"]),
+            "price": float(price),
+            "edge_points": (float(pick["model_probability"]) - float(price)) * 100.0,
+            "disagrees": float(price) < 0.5,
+            "hit": pick["selection"] == winner,
+        })
+
+    n = len(compared)
+    disagreements = [c for c in compared if c["disagrees"]]
+    hits = sum(1 for c in disagreements if c["hit"])
+    n_disagree = len(disagreements)
+
+    window = _tracking_window(db_path, schedule, today)
+    by_week: dict[date, list[dict]] = defaultdict(list)
+    for c in compared:
+        by_week[_week_start(c["day"])].append(c)
+
+    weekly = []
+    for week in window:
+        group = by_week.get(week, [])
+        week_disagreements = [c for c in group if c["disagrees"]]
+        week_hits = sum(1 for c in week_disagreements if c["hit"])
+        weekly.append(VsMarketWeekOut(
+            week_start=week.isoformat(), tracked=bool(group), n=len(group),
+            mean_edge_points=round(_mean(c["edge_points"] for c in group), 1) if group else None,
+            disagreement_n=len(week_disagreements),
+            disagreement_hit_rate=(
+                round(week_hits / len(week_disagreements), 3) if week_disagreements else None
+            ),
+        ))
+
+    in_weekly = sum(w.n for w in weekly)
+    return VsMarketOut(
+        market="h2h",
+        n=n,
+        mean_model_probability=round(_mean(c["model"] for c in compared), 4) if n else None,
+        mean_market_probability=round(_mean(c["price"] for c in compared), 4) if n else None,
+        mean_edge_points=round(_mean(c["edge_points"] for c in compared), 1) if n else None,
+        disagreement_n=n_disagree,
+        disagreement_hit_rate=round(hits / n_disagree, 3) if n_disagree else None,
+        disagreement_game_ids=sorted(c["game_id"] for c in disagreements),
+        weekly=weekly,
+        scope=VsMarketScopeOut(
+            population="finished games with a pre-tip moneyline price",
+            weekly_from=window[0].isoformat() if window else None,
+            weekly_through=window[-1].isoformat() if window else None,
+            n_games_total=n,
+            n_games_in_weekly=in_weekly,
+            n_games_outside_weekly=n - in_weekly,
+        ),
+        method=dict(_VS_MARKET_METHOD),
+    )
+
+
+def _mean(values) -> float:
+    values = list(values)
+    return sum(values) / len(values) if values else 0.0

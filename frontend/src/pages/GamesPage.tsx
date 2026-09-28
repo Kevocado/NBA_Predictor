@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import GameDetailModal from "../components/GameDetailModal";
 import { api, type Game } from "../api/client";
 import { EmptyState, ErrorState, MatchCard, RoundNavigator, Skeleton } from "../predictor-ui";
@@ -15,6 +15,19 @@ export default function GamesPage() {
   const [error, setError] = useState<string | null>(null);
   const [selectedGameId, setSelectedGameId] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  // A deep link (?game=<id> on "/" — the hub's teaser rows point here) names
+  // one game. Read once, on arrival, and matched against the week's games
+  // after each successful load: only an id this page actually shows is
+  // "known", so an unknown or absent identifier opens nothing and the visitor
+  // gets the normal list — never an error dialog, never a blank screen. A
+  // ref rather than state on purpose: clearing it must not re-run the
+  // week-load effect (that would refetch and blank the list the moment the
+  // detail opened), and it is cleared on a match so closing the detail does
+  // not reopen it on the next week navigation. A failed load leaves it set,
+  // so Try again still honours it.
+  const deepLinkedGameId = useRef<string | null>(
+    new URLSearchParams(window.location.search).get("game"),
+  );
 
   useEffect(() => {
     const land = (week: string) => {
@@ -33,7 +46,17 @@ export default function GamesPage() {
     setError(null);
     api
       .getGamesWeek(weekStart)
-      .then(setGames)
+      .then((fetched) => {
+        setGames(fetched);
+        const wanted = deepLinkedGameId.current;
+        if (wanted) {
+          const match = fetched.find((game) => game.game_id === wanted);
+          if (match) {
+            setSelectedGameId(match.game_id);
+            deepLinkedGameId.current = null;
+          }
+        }
+      })
       .catch(() => setError("games"));
   }, [weekStart, reloadKey]);
 

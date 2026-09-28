@@ -1,15 +1,23 @@
-import { describe, expect, it, vi, afterEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { describe, expect, it, vi, afterEach, beforeEach } from "vitest";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import GameDetailModal from "./GameDetailModal";
 import { api } from "../api/client";
 
 vi.mock("../api/client", () => ({
-  api: { getGameDetail: vi.fn(), getGamePlayers: vi.fn() },
+  api: { getGameDetail: vi.fn(), getGamePlayers: vi.fn(), getHubPlayers: vi.fn().mockResolvedValue([]) },
 }));
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+// The box score's team split is a join against the season hub feed, so the
+// modal fetches it too. Every test here restores mocks afterwards, which wipes
+// a mockResolvedValue set at module scope -- so it has to be re-armed per test
+// or the second test onwards calls undefined.then() and every render throws.
+beforeEach(() => {
+  vi.mocked(api.getHubPlayers).mockResolvedValue([]);
 });
 
 const completedDetail = {
@@ -37,6 +45,14 @@ const detail = {
 
 const players = [{ player_id: "203999", player_name: "Nikola Jokic", stat: "points", predicted_value: 27.5, actual_value: null }];
 
+/** The box score splits by team, so its fixtures need a player on each side. */
+const hubPlayer = (player_id: string, player_name: string, team: string) => ({
+  player_id, player_name, team, position: "C",
+  rating: 0, live_form_rating: 0, points_per_game: 0, rebounds_per_game: 0,
+  assists_per_game: 0, fg_pct: 0, three_pt_pct: 0, ft_pct: 0, usage_rate: 0, minutes_per_game: 0,
+});
+const hub = [hubPlayer("203999", "Nikola Jokic", "MIA"), hubPlayer("p1", "Jayson Tatum", "BOS")];
+
 describe("GameDetailModal", () => {
   it("shows a loading state before data arrives", () => {
     vi.mocked(api.getGameDetail).mockReturnValue(new Promise(() => {}));
@@ -57,14 +73,21 @@ describe("GameDetailModal", () => {
     expect(rows[1]).toHaveTextContent("spread");
   });
 
-  it("renders player prop predictions", async () => {
+  it("renders player prop predictions as a box score split by team", async () => {
     vi.mocked(api.getGameDetail).mockResolvedValue(detail);
     vi.mocked(api.getGamePlayers).mockResolvedValue(players);
+    vi.mocked(api.getHubPlayers).mockResolvedValue(hub);
 
     render(<GameDetailModal gameId="g1" onClose={() => {}} />);
 
-    expect(await screen.findByText("points")).toBeInTheDocument();
-    expect(screen.getByText("27.5")).toBeInTheDocument();
+    // One row per player, not one row per stat: the player is a row header and
+    // the prediction is a cell in it. Scoped to the row because a one-player
+    // team totals the same number, which is correct and would otherwise be an
+    // ambiguous query.
+    const head = await screen.findByRole("rowheader", { name: "Nikola Jokic" });
+    expect(within(head.closest("tr")!).getByText("27.5")).toBeInTheDocument();
+    // The stat names are column headers now, not per-row text.
+    expect(screen.getAllByRole("columnheader", { name: "Pts" })).toHaveLength(2);
   });
 
   it("renders bookmaker and american odds for each market row", async () => {
@@ -245,17 +268,24 @@ it("shows no verdict for a market row without a point value on an unsettled mark
   expect(screen.queryAllByTestId("market-row")).toHaveLength(0);
 });
 
-it("shows predicted vs actual for a settled player prop", async () => {
+it("shows predicted vs actual and the error for a settled player prop", async () => {
   vi.mocked(api.getGameDetail).mockResolvedValue(completedDetail);
   vi.mocked(api.getGamePlayers).mockResolvedValue([
     { player_id: "203999", player_name: "Nikola Jokic", stat: "points", predicted_value: 27.5, actual_value: 24.0 },
   ]);
+  vi.mocked(api.getHubPlayers).mockResolvedValue(hub);
 
   render(<GameDetailModal gameId="g2" onClose={() => {}} />);
 
-  expect(await screen.findByText(/predicted: 27.5/i)).toBeInTheDocument();
-  expect(screen.getByText(/actual: 24/i)).toBeInTheDocument();
-  expect(screen.getByText(/off by 3.5/i)).toBeInTheDocument();
+  // Predicted on one line, actual and the miss beneath it. The old list said
+  // "off by 3.5"; the number is the same, the delta is what carries it now.
+  const head = await screen.findByRole("rowheader", { name: "Nikola Jokic" });
+  const playerRow = within(head.closest("tr")!);
+  expect(playerRow.getByText("27.5")).toBeInTheDocument();
+  expect(playerRow.getByText(/24\.0 \(-3\.5\)|24 \(-3\.5\)/)).toBeInTheDocument();
+  // And a real team total appears, because a per-player list makes the reader
+  // add it up by hand.
+  expect(screen.getByTestId("box-score-totals")).toBeInTheDocument();
 });
 
 it("shows only the predicted value for an unsettled player prop", async () => {
@@ -263,12 +293,17 @@ it("shows only the predicted value for an unsettled player prop", async () => {
   vi.mocked(api.getGamePlayers).mockResolvedValue([
     { player_id: "203999", player_name: "Nikola Jokic", stat: "points", predicted_value: 27.5, actual_value: null },
   ]);
+  vi.mocked(api.getHubPlayers).mockResolvedValue(hub);
 
   render(<GameDetailModal gameId="g1" onClose={() => {}} />);
 
-  expect(await screen.findByText("points")).toBeInTheDocument();
-  expect(screen.getByText("27.5")).toBeInTheDocument();
-  expect(screen.queryByText(/actual/i)).not.toBeInTheDocument();
+  const head = await screen.findByRole("rowheader", { name: "Nikola Jokic" });
+  const playerRow = within(head.closest("tr")!);
+  // Predicted only, and no delta in parentheses -- the cell must not imply a
+  // result that does not exist yet.
+  expect(playerRow.getByText("27.5")).toBeInTheDocument();
+  expect(playerRow.queryByText(/\(/)).toBeNull();
+  expect(playerRow.queryByText(/actual/i)).toBeNull();
 });
 
 it("names the favoured side for the margin when both models agree", async () => {
@@ -345,15 +380,23 @@ it("labels rebuilt player props and market rows, and never judges them", async (
   vi.mocked(api.getGamePlayers).mockResolvedValue([
     { player_id: "p1", player_name: "Jayson Tatum", stat: "points", predicted_value: 27.456, actual_value: 31, rebuilt: true },
   ]);
+  vi.mocked(api.getHubPlayers).mockResolvedValue(hub);
 
   render(<GameDetailModal gameId="g2" onClose={() => {}} />);
 
   const row = await screen.findByTestId("market-row");
   expect(row).toHaveTextContent("Rebuilt");
   expect(row).not.toHaveTextContent("✓");
-  const prop = screen.getByText("Jayson Tatum").closest("li")!;
-  expect(prop).toHaveTextContent("Predicted: 27.5 — Actual: 31");
-  expect(prop).not.toHaveTextContent(/off by/);
+  // A rebuilt prop is shown with its actual, but never judged -- so no error
+  // delta, the same rule the market rows follow.
+  const prop = screen.getByRole("rowheader", { name: /Jayson Tatum/ }).closest("tr")!;
+  expect(prop).toHaveTextContent("27.5");
+  expect(prop).toHaveTextContent("31");
+  // The label travels with the name, so a screen reader hears it too.
+  expect(prop).toHaveTextContent("Rebuilt");
+  // No delta: scoring a rebuilt projection would judge a forecast made with
+  // the result already known.
+  expect(prop).not.toHaveTextContent(/\(\s*[+-]/);
   expect(screen.getByText(/built after tip-off/i)).toBeInTheDocument();
 });
 

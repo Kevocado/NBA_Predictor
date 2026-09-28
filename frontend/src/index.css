@@ -71,9 +71,214 @@ td:not(:first-child) {
   white-space: nowrap;
 }
 
+/* ---------------------------------------------------------------- box score
+
+   The predicted box score, split down the middle by team. Almost all of it
+   exists to override the global th/td rules above, which give every cell a
+   right gutter and a top rule -- right for a 9-column market table, wrong for
+   an 11-column table that has to stay symmetric across the split.
+
+   No scroll container, deliberately. An earlier version capped the box at
+   19rem and scrolled it, which meant a normal game still cut off mid-table and
+   the reader had to scroll to see a roster that fits. It now sizes to its
+   content and sits entirely inside the card, which is what was asked for.
+
+   table-layout: fixed plus a symmetric colgroup is what makes the away and home
+   halves line up. With auto layout the browser sizes each name column to its
+   own content and the two sides drift apart. */
+.box-score-scroll {
+  border: 1px solid var(--color-pr-rule);
+  border-radius: 2px;
+}
+
+.box-score-table {
+  table-layout: fixed;
+  width: 100%;
+  font-size: 0.8125rem;
+}
+
+/* Column widths live here, not as inline styles on the <col>s, so the narrow
+   media query below can rebalance them. An inline width would win the cascade
+   and the phone layout would be stuck at the desktop ratio. Symmetric by
+   construction: name, 4 stats, divider, 4 stats, name. */
+.box-score-col-name {
+  width: 15.5%;
+}
+
+.box-score-col-stat {
+  width: 8.5%;
+}
+
+.box-score-col-divider {
+  width: 1%;
+}
+
+.box-score-table th,
+.box-score-table td {
+  padding: 0.3rem 0.35rem;
+  border-top: 1px solid var(--color-pr-rule);
+  white-space: nowrap;
+}
+
+/* The team names. Centred over each half, and set the way the modal's own
+   heading is set -- display face, 700, uppercase, tracked -- so the split reads
+   as two team headers rather than two grey captions. */
+.box-score-table thead .box-score-team-head {
+  padding-top: 0.45rem;
+  padding-bottom: 0.35rem;
+  text-align: center;
+  font-family: var(--font-pr-display);
+  font-weight: 700;
+  font-size: 0.9375rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-hardwood-bright);
+  /* Opaque: the rule between the halves runs underneath these cells, and a
+     transparent header would let it show through the text. */
+  background: var(--color-court-900);
+  border-bottom: 1px solid var(--color-pr-rule);
+  animation: box-score-team-in 220ms ease-out both;
+}
+
+.box-score-table thead .box-score-team-head--home {
+  animation-delay: 60ms;
+}
+
+@keyframes box-score-team-in {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.box-score-table thead .box-score-col-head {
+  font-size: 0.6875rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-net-dim);
+  font-weight: 600;
+  text-align: right;
+}
+
+.box-score-col-head--away,
+.box-score-name--away {
+  text-align: left;
+}
+
+.box-score-col-head--home,
+.box-score-name--home {
+  text-align: right;
+}
+
+.box-score-table tbody th {
+  text-align: left;
+  font-weight: 400;
+  color: var(--color-pr-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.box-score-table tbody td {
+  text-align: right;
+}
+
+.box-score-name--home {
+  text-align: right !important;
+}
+
+/* The split itself. A 1px rule between the halves, not a styled cell or a
+   pipe character: it has to read as a boundary you cannot cross. */
+.box-score-divider {
+  padding: 0 !important;
+  border-top: none;
+  border-left: 1px solid var(--color-pr-rule);
+  border-right: 1px solid var(--color-pr-rule);
+  background: transparent;
+  width: 1px;
+}
+
+.box-score-table thead .box-score-divider {
+  background: var(--color-court-900);
+}
+
+.box-score-table tfoot th,
+.box-score-table tfoot td {
+  border-bottom: none;
+  font-weight: 700;
+  color: var(--color-hardwood-bright);
+}
+
+.box-score-cell {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  /* A settled cell reads "24.0" over "24 (-3.5)", which is about 40px of
+     glyphs. On a phone the stat column is only ~23px, so without this the
+     actual and its delta paint straight over the next column. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Kept from the flat list this table replaced: a rebuilt projection was always
+   labelled in place, not just explained once in a note above the table. */
+.box-score-rebuilt {
+  display: block;
+  font-size: 0.5625rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-net-dim);
+}
+
+/* A finished game shows the actual under the prediction, in the same cell, so
+   the comparison costs no extra width. */
+.box-score-actual {
+  display: block;
+  font-size: 0.6875rem;
+  color: var(--color-net-dim);
+}
+
+/* Eleven columns have to survive a 390px phone without a scrollbar. The
+   padding and the stat columns give way before the names do: "17.9" still
+   fits in 25px, but a player's name truncated to "Nikola Jo…" is worse than a
+   stat column held tight. */
+@media (max-width: 30rem) {
+  .box-score-table {
+    font-size: 0.6875rem;
+  }
+
+  .box-score-table th,
+  .box-score-table td {
+    padding: 0.25rem 0.1rem;
+  }
+
+  .box-score-table thead .box-score-team-head {
+    font-size: 0.8125rem;
+    letter-spacing: 0.03em;
+  }
+
+  .box-score-col-name {
+    width: 22%;
+  }
+
+  .box-score-col-stat {
+    width: 6.75%;
+  }
+
+  .box-score-col-divider {
+    width: 1%;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   * {
     transition-duration: 0.01ms !important;
+    /* The delay matters as much as the duration here: the team headers animate
+       in with fill-mode "both" and a 60ms stagger, so a duration-only reset
+       leaves the home team name parked at opacity 0 for those 60ms. */
     animation-duration: 0.01ms !important;
+    animation-delay: 0ms !important;
   }
 }

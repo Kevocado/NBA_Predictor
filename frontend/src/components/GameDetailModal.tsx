@@ -1,8 +1,9 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { api, type GameDetail, type PlayerProp, type MarketPrediction } from "../api/client";
+import { api, type GameDetail, type PlayerProp, type PlayerHubRow, type MarketPrediction } from "../api/client";
 import { favourite } from "../lib/pick";
 import { teamName } from "../lib/teams";
 import { ErrorState, Skeleton, kickoff, pct, stat, statusWords } from "../predictor-ui";
+import PlayerBoxScore from "./PlayerBoxScore";
 
 interface GameDetailModalProps {
   gameId: string;
@@ -103,6 +104,10 @@ function FormBadge({ result }: { result: string }) {
 export default function GameDetailModal({ gameId, onClose }: GameDetailModalProps) {
   const [detail, setDetail] = useState<GameDetail | null>(null);
   const [players, setPlayers] = useState<PlayerProp[] | null>(null);
+  // The per-game player feed carries no team, so the box score's split comes
+  // from the season hub feed. Fetched separately, and allowed to fail: losing
+  // the split must not take the game detail down with it.
+  const [hubPlayers, setHubPlayers] = useState<PlayerHubRow[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const titleId = useId();
@@ -119,6 +124,12 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
       })
       .catch(() => setError("We couldn't load this game. Check your connection and try again."));
   }, [gameId, reloadKey]);
+
+  useEffect(() => {
+    api.getHubPlayers()
+      .then(setHubPlayers)
+      .catch(() => setHubPlayers([]));
+  }, []);
 
   // Focus moves into the dialog on open, and back to the card on close.
   useEffect(() => {
@@ -321,34 +332,23 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
         )}
 
         {players && players.length > 0 && (
-          <div>
+          <section aria-labelledby={`${titleId}-box`}>
+            <h3 id={`${titleId}-box`} className="mb-2 text-sm text-[var(--color-net-faint)]">
+              Projected box score
+            </h3>
             {players.some((p) => p.rebuilt) && (
               <p className="mb-2 text-xs text-pr-text-dim">
-                Projections marked Rebuilt were built after tip-off, by a later retrain. They are shown for reference and never judged.
+                Rows marked Rebuilt were built after tip-off, by a later retrain. They are shown for reference and never
+                judged.
               </p>
             )}
-            <ul className="text-sm">
-              {players.map((player, i) => (
-                <li key={i} className="flex justify-between gap-3 border-b border-[var(--color-line)] py-1">
-                  <span>
-                    {player.player_name}
-                    {player.rebuilt && <span className="ml-2 text-xs uppercase text-pr-text-dim">Rebuilt</span>}
-                  </span>
-                  <span>
-                    <span>{player.stat}</span>:{" "}
-                    {player.actual_value !== null ? (
-                      <>
-                        Predicted: {stat(player.predicted_value)} — Actual: {player.actual_value}
-                        {!player.rebuilt && ` (off by ${stat(Math.abs(player.predicted_value - player.actual_value))})`}
-                      </>
-                    ) : (
-                      <span>{stat(player.predicted_value)}</span>
-                    )}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </div>
+            <PlayerBoxScore
+              playerProps={players}
+              hubPlayers={hubPlayers}
+              homeTeam={detail?.home_team ?? ""}
+              awayTeam={detail?.away_team ?? ""}
+            />
+          </section>
         )}
       </div>
     </div>

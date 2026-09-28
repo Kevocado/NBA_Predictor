@@ -213,6 +213,58 @@ def hub_track_record(
     return compute_track_record(db_path, schedule)
 
 
+@router.get("/snapshot-meta")
+def get_snapshot_meta() -> dict:
+    """When the data this site serves was last written, as an ISO-8601 UTC string.
+
+    NBA is the odd one out: the routes above read the tracking DB, the schedule
+    cache, and the hub caches, never public_snapshot.json, so there is no
+    generated_at to report verbatim. The honest equivalent is the newest mtime
+    across exactly the files those routes actually read -- the tracking DB
+    (predictions, market rows, outcomes), the schedule cache (games.json, read
+    by nearly every route including /games/week, which is what the hub's NBA
+    teaser calls), and data/cache/hub/*.json (teams/players/rankings/
+    standings, plus the player-name map) -- which is when the numbers the
+    visitor is looking at were produced. Reporting the snapshot file's
+    timestamp instead would describe numbers nobody is served, so that was
+    ruled out deliberately; do not "fix" this to read the snapshot.
+
+    "source" keeps the vocabulary shared with the other four sport APIs
+    ("public_snapshot" when files exist, "live" otherwise) because the hub
+    switches on it -- even though here the value is a filesystem mtime, not a
+    snapshot stamp. Every path missing means "nothing written yet", reported
+    as source "live" with a null timestamp rather than raising: a public
+    deploy before its first refresh is a real state, not a failure. The
+    exists() guard also covers a TRACKING_DB_PATH (env-overridable) pointing
+    at a path with no local file.
+    """
+    # Built from config.DATA_DIR, not config.CACHE_DIR, deliberately: every
+    # hub route above spells the path as config.DATA_DIR / "cache" / "hub" /
+    # <name>.json, and CACHE_DIR is frozen at import from the original
+    # DATA_DIR, so only the DATA_DIR form keeps this set exactly the files
+    # those routes read when DATA_DIR is redirected (tests, PROJECT_ROOT env).
+    # Identical to CACHE_DIR / "hub" in any normal deployment. The schedule
+    # cache comes from the get_schedule_path() helper itself -- the same
+    # function get_schedule() depends on -- rather than a re-spelled literal,
+    # so the two cannot drift. data/cache/training/games.json is deliberately
+    # excluded: only the admin retrain POST reads it (guarded on exists()),
+    # no public GET serves it, so it is not part of "these numbers".
+    hub_dir = config.DATA_DIR / "cache" / "hub"
+    paths = [
+        config.TRACKING_DB_PATH,
+        get_schedule_path(),
+        *sorted(hub_dir.glob("*.json")),
+    ]
+    mtimes = [p.stat().st_mtime for p in paths if p.exists()]
+    if not mtimes:
+        return {"generated_at": None, "source": "live"}
+    newest = max(mtimes)
+    return {
+        "generated_at": datetime.fromtimestamp(newest, tz=timezone.utc).isoformat(),
+        "source": "public_snapshot",
+    }
+
+
 @router.get("/calibration")
 def calibration(
     db_path: Path = Depends(get_db_path), schedule: list[dict] = Depends(get_schedule)

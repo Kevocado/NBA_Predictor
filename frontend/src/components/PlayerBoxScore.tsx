@@ -65,13 +65,20 @@ function SideTotals({ rows }: { rows: BoxScoreRow[] }) {
 }
 
 function ActualTotals({ rows }: { rows: BoxScoreRow[] }) {
-  // Only shown when the game is played and the API actually reported numbers.
-  if (!hasActuals(rows)) return null;
+  // Emits four cells even when this side has no actuals, as dashes. Returning
+  // null here instead would hand the row fewer cells than columns, and under
+  // table-layout: fixed the home header would land in the wrong column and the
+  // split would stop lining up. A settled game with outcomes for one team only
+  // is reachable, so the row must be well-formed whenever it appears at all.
   return (
     <>
       {STAT_KEYS.map((key) => (
         <td key={key} className="box-score-cell box-score-total">
-          <span className="box-score-actual tabular-nums">{sumStat(rows, key, "actual")}</span>
+          {hasActuals(rows) ? (
+            <span className="box-score-actual tabular-nums">{sumStat(rows, key, "actual")}</span>
+          ) : (
+            <span className="text-pr-text-dim">—</span>
+          )}
         </td>
       ))}
     </>
@@ -84,11 +91,14 @@ function ActualTotals({ rows }: { rows: BoxScoreRow[] }) {
  * A real `<table>`, not a grid of divs: two `th scope="row"` in a row is valid
  * and is what makes a screen reader read the row as "MIA player, 16.5, ...".
  *
- * The scroll contract is deliberate and the thing most likely to be got wrong:
- * ONE container scrolls on both axes, with a bounded height so a 22-player
- * game does not grow the card. Sticky headers keep the column labels and both
- * team totals in view while it scrolls, which is what a reader needs to
- * compare the two sides of a split table.
+ * Sizing contract, replacing the scroll container an earlier version had: the
+ * table takes its height from its rows and scrolls on no axis. A real 22-player
+ * game measured 487px with 13 body rows, and every row sat inside the card --
+ * where the previous version capped the box at 19rem and cut the roster off
+ * mid-table. So: no max-height, no overflow, no min-width, and no sticky
+ * headers, all four of which existed only to serve that cap. A phone is the
+ * binding case, and there the stat columns give way before the player names
+ * do, because "17.9" still fits in 23px and a truncated name does not.
  */
 export default function PlayerBoxScore({ playerProps, hubPlayers, homeTeam, awayTeam }: PlayerBoxScoreProps) {
   const { away, home, unattributed } = useMemo(
@@ -104,7 +114,18 @@ export default function PlayerBoxScore({ playerProps, hubPlayers, homeTeam, away
     (_, i) => ({ away: away[i] ?? null, home: home[i] ?? null }),
   );
 
-  if (depth === 0) return null;
+  // No player could be placed on either side. Rendering nothing at all would be
+  // a silent deletion: the caller asked for a box score and would get silence
+  // with no hint that anything failed. Say what happened instead.
+  if (depth === 0) {
+    return (
+      <div className="mt-5 text-sm text-pr-text-dim" data-testid="player-box-score">
+        {hubPlayers.length === 0
+          ? "Player breakdown unavailable — the team feed did not load, so nobody could be matched to a side. Guessing a side would be worse than saying nothing."
+          : "No player could be matched to either team."}
+      </div>
+    );
+  }
 
   return (
     <div className="mt-5" data-testid="player-box-score">
@@ -196,7 +217,7 @@ export default function PlayerBoxScore({ playerProps, hubPlayers, homeTeam, away
                 Total
               </th>
             </tr>
-            {hasActuals(away) && (
+            {hasActuals(away) || hasActuals(home) ? (
               <tr data-testid="box-score-actual-totals">
                 <th scope="row" className="box-score-name box-score-name--away">
                   Actual
@@ -208,7 +229,7 @@ export default function PlayerBoxScore({ playerProps, hubPlayers, homeTeam, away
                   Actual
                 </th>
               </tr>
-            )}
+            ) : null}
           </tfoot>
         </table>
       </div>

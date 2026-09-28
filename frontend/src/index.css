@@ -215,6 +215,11 @@ td:not(:first-child) {
 .box-score-cell {
   text-align: right;
   font-variant-numeric: tabular-nums;
+  /* A settled cell reads "24.0" over "24 (-3.5)", which is about 40px of
+     glyphs. On a phone the stat column is only ~23px, so without this the
+     actual and its delta paint straight over the next column. */
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Kept from the flat list this table replaced: a rebuilt projection was always
@@ -270,6 +275,10 @@ td:not(:first-child) {
 @media (prefers-reduced-motion: reduce) {
   * {
     transition-duration: 0.01ms !important;
+    /* The delay matters as much as the duration here: the team headers animate
+       in with fill-mode "both" and a 60ms stagger, so a duration-only reset
+       leaves the home team name parked at opacity 0 for those 60ms. */
     animation-duration: 0.01ms !important;
+    animation-delay: 0ms !important;
   }
 }

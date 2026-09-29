@@ -185,6 +185,26 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
             : "away_win",
     };
   }, [detail, verdict]);
+  // Three states, not two. A game in progress carries BOTH scores and
+  // `completed: false` — the API fills `home_pts`/`away_pts` as they happen — so
+  // `completed ? "finished" : "pre-game"` labelled every live game as pre-game,
+  // and the flow then said the pick had not been made yet for a game that was
+  // half over. The middle state is `in-play`, and it is chosen by the SCORES
+  // rather than by a flag, because the scores are the fact.
+  //
+  // `rebuilt` still forces "pre-game": a pick written after tip-off cannot be
+  // in-play even when the clock is running, and the panel's own rule is that a
+  // rebuilt pick is shown and never judged.
+  //
+  // Null-guarded because this is computed on every render, including the first
+  // one where `detail` is still null and the whole modal is a skeleton.
+  const flowState: "pre-game" | "in-play" | "finished" = !detail
+    ? "pre-game"
+    : detail.completed
+      ? "finished"
+      : detail.home_pts != null && detail.away_pts != null && !detail.rebuilt
+        ? "in-play"
+        : "pre-game";
   // The panel's figures, from the SHARED adapter: moneyline segments for the
   // bar, and nothing else, because the game carries no market line for a tile.
   // The away probability is the site's own convention -- `favourite` derives
@@ -303,7 +323,7 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
                 to find "Get the AI summary". */}
             <FixtureExplainer
               sport="nba"
-              state={detail.completed ? "finished" : "pre-game"}
+              state={flowState}
               bundle={flowBundle}
               request={() => api.explainGame(gameId)}
               extras={{ tiles: panel.tiles, segments: panel.segments }}

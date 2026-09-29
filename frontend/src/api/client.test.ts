@@ -112,3 +112,33 @@ describe("request timeout", () => {
     }
   });
 });
+
+describe("the explain path builds a safe route", () => {
+  it("percent-encodes a game id that would otherwise split the route", async () => {
+    // The explainer route is /explain/{sport}/{id}, and NBA's own proxy
+    // refuses a multi-segment id with the fixed 502 rather than resolving it.
+    // A game id is never one of those today, so this is insurance on a path the
+    // router would happily corrupt — and the assertion is on the URL that goes
+    // out, not on the argument, which is identical either way.
+    mockFetchOnce({ verdict: "v", band: "moderate", factors: [] });
+
+    await api.explainGame("401585224/../admin");
+
+    const url = String((fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0]);
+    expect(url).toContain(encodeURIComponent("401585224/../admin"));
+    expect(url).not.toContain("401585224/../admin");
+  });
+
+  it("leaves an ordinary id untouched", async () => {
+    // The control, and the one that matters most: encoding must not mangle the
+    // normal case, or every request would 404 instead.
+    mockFetchOnce({ verdict: "v", band: "moderate", factors: [] });
+
+    await api.explainGame("401585224");
+
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining("/api/explain/nba/401585224"),
+      expect.anything(),
+    );
+  });
+});

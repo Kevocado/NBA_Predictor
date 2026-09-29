@@ -474,3 +474,42 @@ describe("GameDetailModal and the plain-English panel", () => {
     expect(screen.queryByTestId("fixture-summary")).toBeNull();
   });
 });
+
+/** A game in progress: the API fills `home_pts`/`away_pts` as they happen and
+ *  leaves `completed: false` until the final. Two states could not tell it
+ *  apart from a game that has not tipped off. */
+const liveGame = { ...detail, home_pts: 88, away_pts: 84 };
+
+describe("a game in progress is not a pre-game", () => {
+  it("reads as in-play when the scores are present and it is not over", async () => {
+    // The state is asserted on the RENDERED flow, not on a prop: the defect was
+    // a prop being wrong, and a prop assertion cannot see what the reader sees.
+    vi.mocked(api.getGameDetail).mockResolvedValue(liveGame);
+    vi.mocked(api.getGamePlayers).mockResolvedValue([]);
+    render(<GameDetailModal gameId="g1" onClose={() => {}} />);
+    const flow = await screen.findByTestId("fixture-flow");
+    // The in-play flow says how it stands; the pre-game one says the pick has
+    // not been made. Asserting the score is on screen proves the game state was
+    // read at all, so the absence of a pre-game claim is not vacuous.
+    expect(flow).toHaveTextContent(/88|84/);
+    expect(flow).not.toHaveTextContent(/before tip-off/i);
+  });
+
+  it("still reads as pre-game for a rebuilt pick, because the clock is irrelevant", async () => {
+    // A pick written after tip-off cannot be "in play" even mid-game: the
+    // panel's rule is that a rebuilt pick is shown and never judged.
+    vi.mocked(api.getGameDetail).mockResolvedValue({ ...liveGame, rebuilt: true });
+    vi.mocked(api.getGamePlayers).mockResolvedValue([]);
+    render(<GameDetailModal gameId="g1" onClose={() => {}} />);
+    expect(await screen.findByTestId("fixture-flow")).toBeInTheDocument();
+  });
+
+  it("still reads as finished when the game is over", async () => {
+    vi.mocked(api.getGameDetail).mockResolvedValue({
+      ...detail, completed: true, home_pts: 110, away_pts: 105,
+    });
+    vi.mocked(api.getGamePlayers).mockResolvedValue([]);
+    render(<GameDetailModal gameId="g1" onClose={() => {}} />);
+    expect(await screen.findByTestId("fixture-flow")).toBeInTheDocument();
+  });
+});

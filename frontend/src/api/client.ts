@@ -226,7 +226,7 @@ export const api = {
   /** The shared plain-English summary, via this API's explainer proxy. The id
    *  is the game's own id — the only value the route needs, and the only one
    *  the site has. */
-  explainGame: (gameId: string) => fetchJson<Explanation>(`/api/explain/nba/${gameId}`),
+  explainGame: (gameId: string) => fetchJson<Explanation>(`/api/explain/nba/${encodeURIComponent(gameId)}`),
   getSeasonFirstWeek: () => fetchJson<SeasonBounds>("/season/first-week"),
   getHubTeams: () => fetchJson<TeamHubRow[]>("/hub/teams"),
   getHubPlayers: () => fetchJson<PlayerHubRow[]>("/hub/players"),

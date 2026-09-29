@@ -1,8 +1,9 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { api, type GameDetail, type PlayerProp, type PlayerHubRow, type MarketPrediction } from "../api/client";
 import { favourite } from "../lib/pick";
 import { teamName } from "../lib/teams";
-import { ErrorState, Skeleton, kickoff, pct, stat, statusWords } from "../predictor-ui";
+import { ErrorState, FixtureExplainer, Skeleton, kickoff, pct, stat, statusWords } from "../predictor-ui";
+import { panelFacts } from "../predictor-ui/lib/panelFacts";
 import PlayerBoxScore from "./PlayerBoxScore";
 
 interface GameDetailModalProps {
@@ -148,6 +149,58 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
 
   const sortedMarkets = detail ? [...detail.markets].sort((a, b) => (b.edge ?? 0) - (a.edge ?? 0)) : [];
   const verdict = detail ? computePostMatchVerdict(detail) : null;
+  // The flow's facts: what this modal already holds, no request. The away
+  // probability is the site's own convention (`favourite` derives the pair the
+  // same way for the pick it prints), and the game carries no market line --
+  // 142 of 142 bundles have none -- so the flow says the pick and stops. That
+  // thinness is data, not a defect in the panel.
+  const finite = (x: unknown): number | undefined =>
+    typeof x === "number" && Number.isFinite(x) ? x : undefined;
+  const flowBundle = useMemo(() => {
+    if (!detail) return null;
+    const hw = finite(detail.prediction?.home_win_probability);
+    const aw = hw !== undefined ? 1 - hw : undefined;
+    const fav = hw !== undefined && detail.prediction ? favourite(detail.prediction, detail.home_team, detail.away_team) : null;
+    const wasRight = verdict ? verdict.winnerCorrect : undefined;
+    const score =
+      detail.home_pts != null && detail.away_pts != null
+        ? { home: detail.home_pts, away: detail.away_pts }
+        : undefined;
+    return {
+      home_team: detail.home_team,
+      away_team: detail.away_team,
+      home_win_prob: hw,
+      away_win_prob: aw,
+      pick: fav
+        ? { label: fav.team, prob: fav.prob, ...(typeof wasRight === "boolean" ? { was_right: wasRight } : {}) }
+        : undefined,
+      pick_timing: detail.rebuilt ? "rebuilt" : undefined,
+      score,
+      result: !score
+        ? undefined
+        : score.home === score.away
+          ? "draw"
+          : score.home > score.away
+            ? "home_win"
+            : "away_win",
+    };
+  }, [detail, verdict]);
+  // The panel's figures, from the SHARED adapter: moneyline segments for the
+  // bar, and nothing else, because the game carries no market line for a tile.
+  // The away probability is the site's own convention -- `favourite` derives
+  // the pair the same way for the pick it prints -- so the bar this draws
+  // agrees with the pick above it by construction, not by coincidence.
+  const panel = useMemo(() => {
+    if (!detail) return { tiles: [], segments: [], legend: undefined };
+    const hw = finite(detail.prediction?.home_win_probability);
+    return panelFacts({
+      kind: "SP",
+      game: { home_team: detail.home_team, away_team: detail.away_team, spread_line: null, total_line: null },
+      prediction: detail.prediction
+        ? { home_win_prob: hw ?? null, away_win_prob: hw !== undefined ? 1 - hw : null }
+        : null,
+    });
+  }, [detail]);
   const pickFav = detail?.prediction ? favourite(detail.prediction, detail.home_team, detail.away_team) : null;
   const marginFav = detail?.prediction ? favoredTeam(detail.prediction.predicted_margin, detail.home_team, detail.away_team) : null;
   // The win and margin numbers come from separate models. When they point at
@@ -233,6 +286,28 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
             <div className="text-[var(--color-net-faint)]">
               Predicted total: {verdict.predictedTotal.toFixed(1)} — Actual: {verdict.actualTotal} (off by {verdict.totalDiff.toFixed(1)})
             </div>
+          </div>
+        )}
+
+        {detail && (
+          <div className="mb-5 border-b border-[var(--color-line)] pb-5">
+            {/* In plain English: the flow renders from facts this modal already
+                holds, with no request; the AI summary sits behind the button
+                and costs nothing until a reader asks. Thin by data, not by
+                defect: the game carries no market line, so the flow says the
+                pick and stops, and the bar below is the model's own split.
+
+                FixtureExplainer renders the flow itself and adds the button —
+                mounting a bare FixtureFlow alongside it produced two flows and
+                no button, which is how three tests here spent a cycle failing
+                to find "Get the AI summary". */}
+            <FixtureExplainer
+              sport="nba"
+              state={detail.completed ? "finished" : "pre-game"}
+              bundle={flowBundle}
+              request={() => api.explainGame(gameId)}
+              extras={{ tiles: panel.tiles, segments: panel.segments }}
+            />
           </div>
         )}
 

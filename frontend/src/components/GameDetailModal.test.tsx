@@ -5,7 +5,7 @@ import GameDetailModal from "./GameDetailModal";
 import { api } from "../api/client";
 
 vi.mock("../api/client", () => ({
-  api: { getGameDetail: vi.fn(), getGamePlayers: vi.fn(), getHubPlayers: vi.fn().mockResolvedValue([]) },
+  api: { getGameDetail: vi.fn(), getGamePlayers: vi.fn(), getHubPlayers: vi.fn().mockResolvedValue([]), explainGame: vi.fn() },
 }));
 
 afterEach(() => {
@@ -407,4 +407,70 @@ it("labels a rebuilt pick on a game that has not finished", async () => {
   render(<GameDetailModal gameId="g1" onClose={() => {}} />);
 
   expect(await screen.findByText(/Rebuilt after tip-off: BOS · 62%/)).toBeInTheDocument();
+});
+
+/** The plain-English panel: flow-first, thin by data. The game carries no
+ *  market line (142 of 142 bundles), so the flow says the pick and stops and
+ *  the summary state draws the model's own moneyline split and nothing else.
+ *  That thinness is data, not a defect: do not file it, do not work around it. */
+const nbaSummary = {
+  verdict: "Boston is the pick at home.",
+  band: "moderate",
+  factors: [{ key: "moneyline", direction: "up", headline: "Home edge", text: "Boston at home." }],
+  source: "template" as const,
+  model: "",
+  generated_at: new Date().toISOString(),
+  sport: "nba",
+  pick_timing: "pre_kickoff" as const,
+};
+
+function openPregame() {
+  vi.mocked(api.getGameDetail).mockResolvedValue(detail);
+  vi.mocked(api.getGamePlayers).mockResolvedValue([]);
+}
+
+describe("GameDetailModal and the plain-English panel", () => {
+  it("says the pick with no line named, the moment worded for tip-off", async () => {
+    openPregame();
+    render(<GameDetailModal gameId="g1" onClose={() => {}} />);
+    const flow = await screen.findByTestId("fixture-flow");
+    expect(flow).toHaveTextContent(/BOS/);
+    expect(flow).toHaveTextContent("before tip-off");
+    expect(flow.innerHTML).not.toContain("market line");
+    expect(flow.innerHTML).not.toContain("market-line");
+  });
+
+  it("makes no summary request until asked, then asks for this game", async () => {
+    openPregame();
+    const explain = vi.mocked(api.explainGame).mockResolvedValue(nbaSummary as never);
+    render(<GameDetailModal gameId="g1" onClose={() => {}} />);
+    await screen.findByTestId("fixture-flow");
+    expect(explain).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: /ai summary/i }));
+    expect(await screen.findByText("Boston is the pick at home.")).toBeInTheDocument();
+    expect(explain).toHaveBeenCalledTimes(1);
+  });
+
+  it("draws the moneyline split and no spread or total tile", async () => {
+    openPregame();
+    vi.mocked(api.explainGame).mockResolvedValue(nbaSummary as never);
+    render(<GameDetailModal gameId="g1" onClose={() => {}} />);
+    await userEvent.click(await screen.findByRole("button", { name: /ai summary/i }));
+    const summary = await screen.findByTestId("fixture-summary");
+    expect(within(summary).getByTestId("tile-moneyline")).toBeInTheDocument();
+    expect(within(summary).queryByTestId("tile-spread")).toBeNull();
+    expect(within(summary).queryByTestId("tile-total")).toBeNull();
+  });
+
+  it("shows the flow with no request made when the explainer is unreachable", async () => {
+    openPregame();
+    const explain = vi.mocked(api.explainGame).mockRejectedValue(new Error("unreachable"));
+    render(<GameDetailModal gameId="g1" onClose={() => {}} />);
+    const flow = await screen.findByTestId("fixture-flow");
+    expect(flow).toHaveTextContent(/BOS vs MIA/);
+    expect(explain).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: /ai summary/i })).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByTestId("fixture-summary")).toBeNull();
+  });
 });

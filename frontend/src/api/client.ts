@@ -1,4 +1,6 @@
 
+import type { Explanation } from "../predictor-ui";
+
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 
 export interface Team {
@@ -221,6 +223,10 @@ export const api = {
   getGamesWeek: (start: string) => fetchJson<Game[]>(`/games/week?start=${start}`),
   getGameDetail: (gameId: string) => fetchJson<GameDetail>(`/games/${gameId}`),
   getGamePlayers: (gameId: string) => fetchJson<PlayerProp[]>(`/games/${gameId}/players`),
+  /** The shared plain-English summary, via this API's explainer proxy. The id
+   *  is the game's own id — the only value the route needs, and the only one
+   *  the site has. */
+  explainGame: (gameId: string) => fetchJson<Explanation>(`/api/explain/nba/${gameId}`),
   getSeasonFirstWeek: () => fetchJson<SeasonBounds>("/season/first-week"),
   getHubTeams: () => fetchJson<TeamHubRow[]>("/hub/teams"),
   getHubPlayers: () => fetchJson<PlayerHubRow[]>("/hub/players"),

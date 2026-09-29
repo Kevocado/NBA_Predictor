@@ -72,9 +72,76 @@ class TrackRecordOut(BaseModel):
     market: str
     total_predictions: int
     correct_predictions: int
-    hit_rate: float
+    # None when nothing was graded: 0.0 would claim every graded pick missed,
+    # which is a different statement from "never measured".
+    hit_rate: float | None = None
     # Final games whose only picks were made after tip-off: left out above.
     n_rebuilt: int = 0
+    # Picks left out of the rate because there was nothing to grade them
+    # against: the margin landed exactly on the line (a push), or the row
+    # carried no line. Counted, never scored as a miss.
+    n_push: int = 0
+    # False when this repo has no rule for judging the market (or no results
+    # to judge it against). The site shows the stored count and says so, and
+    # never a fabricated 0%.
+    settled: bool = True
+    # Every week from the first tracked week through this week, gaps filled in
+    # with tracked=false so a week with no picks reads as "not tracked"
+    # instead of vanishing. Empty when the tracking DB has nothing to date.
+    weekly: list["TrackRecordWeekOut"] = []
+
+
+class TrackRecordWeekOut(BaseModel):
+    week_start: str  # ISO date of the Monday the week starts on
+    n: int
+    correct: int
+    # None for a week with no graded picks -- see TrackRecordOut.hit_rate.
+    hit_rate: float | None = None
+    tracked: bool
+
+
+class VsMarketWeekOut(BaseModel):
+    week_start: str  # ISO Monday date
+    tracked: bool  # n > 0: games actually compared with a price
+    n: int
+    # Percentage points; None when nothing was compared that week.
+    mean_edge_points: float | None = None
+    disagreement_n: int = 0
+    disagreement_hit_rate: float | None = None
+
+
+class VsMarketScopeOut(BaseModel):
+    population: str
+    weekly_from: str | None = None
+    weekly_through: str | None = None
+    n_games_total: int
+    n_games_in_weekly: int
+    n_games_outside_weekly: int
+
+
+class VsMarketOut(BaseModel):
+    """The model's moneyline pick beside the price it was measured against.
+
+    NBA stores the market's own de-vigged probability per side (see
+    pipeline/refresh_odds), so unlike the NFL/CFB version this needs no
+    implied-probability conversion of a line: the comparison reads the same
+    row the pick was priced with.
+    """
+
+    market: str = "h2h"
+    n: int = 0
+    mean_model_probability: float | None = None
+    mean_market_probability: float | None = None
+    # Percentage points, signed toward the model; None when n == 0.
+    mean_edge_points: float | None = None
+    # Games where the model backed the side the price did not favour.
+    disagreement_n: int = 0
+    disagreement_hit_rate: float | None = None
+    disagreement_game_ids: list[str] = []
+    weekly: list[VsMarketWeekOut] = []
+    scope: VsMarketScopeOut
+    # Sentences the page prints verbatim; see hub_service._VS_MARKET_METHOD.
+    method: dict[str, str | float] = {}
 
 
 class SeasonBoundsOut(BaseModel):

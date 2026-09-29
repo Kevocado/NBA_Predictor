@@ -201,6 +201,317 @@ def test_track_record_h2h_ignores_market_rows_made_after_tip_off(tmp_path):
     assert h2h.correct_predictions == 0
 
 
+def test_track_record_settles_spread_picks_against_the_closing_line(tmp_path):
+    """Spread rows are judged against the line the pick was priced at.
+
+    `point` is the selection's own line in book convention (BOS -4.5 stores
+    -4.5 for BOS), so the side covers when its margin beats `-point`.
+    """
+    from nba_predictor.services.hub_service import compute_track_record
+    from nba_predictor.tracking import store
+
+    db_path = tmp_path / "tracking.db"
+    store.init_db(db_path)
+    # Model's side: BOS -4.5, BOS won by 10 -> cleared the line, correct.
+    store.insert_market_prediction(
+        db_path, game_id="g1", market="spread", selection="BOS", model_probability=0.6,
+        market_probability=0.5, edge=0.1, bookmaker="DraftKings", american_odds=-110,
+        created_at="2026-03-01T00:00:00", point=-4.5,
+    )
+    # Model's side: LAL +3.5, LAL lost by 10 -> did not cover, wrong.
+    store.insert_market_prediction(
+        db_path, game_id="g2", market="spread", selection="LAL", model_probability=0.55,
+        market_probability=0.5, edge=0.05, bookmaker="DraftKings", american_odds=-110,
+        created_at="2026-03-01T00:00:00", point=3.5,
+    )
+    schedule = [
+        _completed_game("g1", "BOS", "MIA", 110, 100),  # margin +10
+        _completed_game("g2", "LAL", "GSW", 95, 105),   # margin -10
+    ]
+
+    spread = next(r for r in compute_track_record(db_path, schedule) if r.market == "spread")
+
+    assert (spread.total_predictions, spread.correct_predictions, spread.hit_rate) == (2, 1, 0.5)
+    assert spread.settled is True
+
+
+def test_spread_grading_uses_the_same_threshold_as_the_odds_writer(tmp_path):
+    """The writer prices a cover with `line=-point` (refresh_odds.
+    _model_probability); the grader must clear the SAME threshold, or the
+    record would judge every pick by a rule the pick was never priced with.
+    The convention is pinned against `normal_cover_probability` rather than
+    restated, because a grader written from the opposite reading produces
+    plausible-looking rates that are all mirrored."""
+    from nba_predictor.odds.value_bets import normal_cover_probability
+    from nba_predictor.services.hub_service import compute_track_record
+    from nba_predictor.tracking import store
+
+    db_path = tmp_path / "tracking.db"
+    store.init_db(db_path)
+    # The writer's view for BOS -4.5 with a 10-point predicted margin.
+    assert normal_cover_probability(mean=10.0, line=4.5, std=12.0) > 0.5
+
+    for game_id, home_pts, away_pts in (("g1", 114, 100), ("g2", 104, 100)):
+        store.insert_market_prediction(
+            db_path, game_id=game_id, market="spread", selection="BOS", model_probability=0.6,
+            market_probability=0.5, edge=0.1, bookmaker="DraftKings", american_odds=-110,
+            created_at="2026-03-01T00:00:00", point=-4.5,
+        )
+    schedule = [
+        _completed_game("g1", "BOS", "MIA", 114, 100),  # margin 14 > 4.5 -> covered
+        _completed_game("g2", "BOS", "MIA", 104, 100),  # margin 4 < 4.5 -> did not cover
+    ]
+
+    spread = next(r for r in compute_track_record(db_path, schedule) if r.market == "spread")
+
+    assert (spread.total_predictions, spread.correct_predictions) == (2, 1)
+
+
+def test_track_record_settles_total_picks_against_the_line(tmp_path):
+    from nba_predictor.services.hub_service import compute_track_record
+    from nba_predictor.tracking import store
+
+    db_path = tmp_path / "tracking.db"
+    store.init_db(db_path)
+    store.insert_market_prediction(
+        db_path, game_id="g1", market="total", selection="over", model_probability=0.6,
+        market_probability=0.5, edge=0.1, bookmaker="DraftKings", american_odds=-110,
+        created_at="2026-03-01T00:00:00", point=205.5,
+    )
+    store.insert_market_prediction(
+        db_path, game_id="g2", market="total", selection="under", model_probability=0.55,
+        market_probability=0.5, edge=0.05, bookmaker="DraftKings", american_odds=-110,
+        created_at="2026-03-01T00:00:00", point=214.5,
+    )
+    schedule = [
+        _completed_game("g1", "BOS", "MIA", 110, 100),  # total 210 > 205.5 -> over wins
+        _completed_game("g2", "LAL", "GSW", 105, 105),  # total 210 < 214.5 -> under wins
+    ]
+
+    total = next(r for r in compute_track_record(db_path, schedule) if r.market == "total")
+
+    assert (total.total_predictions, total.correct_predictions, total.hit_rate) == (2, 2, 1.0)
+
+
+def test_track_record_counts_a_push_as_neither_right_nor_wrong(tmp_path):
+    """A final margin that lands exactly on the line is a push: nobody won it.
+    It is counted in `n_push` and left out of the rate -- counting it as a
+    miss would make a 0.0-line bet look like a wrong pick."""
+    from nba_predictor.services.hub_service import compute_track_record
+    from nba_predictor.tracking import store
+
+    db_path = tmp_path / "tracking.db"
+    store.init_db(db_path)
+    store.insert_market_prediction(
+        db_path, game_id="g1", market="spread", selection="BOS", model_probability=0.6,
+        market_probability=0.5, edge=0.1, bookmaker="DraftKings", american_odds=-110,
+        created_at="2026-03-01T00:00:00", point=-4.0,
+    )
+    schedule = [_completed_game("g1", "BOS", "MIA", 104, 100)]  # margin 4 == the line
+
+    spread = next(r for r in compute_track_record(db_path, schedule) if r.market == "spread")
+
+    assert spread.total_predictions == 0
+    assert spread.correct_predictions == 0
+    assert spread.n_push == 1
+    # No graded pick means no rate: None, never 0.0 (0% claims every pick missed).
+    assert spread.hit_rate is None
+
+
+def test_track_record_marks_markets_it_cannot_judge_as_unsettled(tmp_path):
+    """Rows for a market this repo has no rule for are shown with their stored
+    count and no rate -- never a fabricated 0%."""
+    from nba_predictor.services.hub_service import compute_track_record
+    from nba_predictor.tracking import store
+
+    db_path = tmp_path / "tracking.db"
+    store.init_db(db_path)
+    store.insert_market_prediction(
+        db_path, game_id="g9", market="player_points", selection="Jayson Tatum",
+        model_probability=0.6, market_probability=None, edge=None, bookmaker=None,
+        american_odds=None, created_at="2026-03-01T00:00:00",
+    )
+
+    row = next(r for r in compute_track_record(db_path, []) if r.market == "player_points")
+
+    assert row.settled is False
+    assert row.total_predictions == 1
+    assert row.hit_rate is None
+
+
+def _game_on(game_id, home, away, home_pts, away_pts, game_date):
+    return {
+        "game_id": game_id, "game_date": game_date, "home_team": home, "away_team": away,
+        "completed": True, "home_pts": home_pts, "away_pts": away_pts,
+    }
+
+
+def test_track_record_weekly_fills_every_week_since_tracking_began(tmp_path):
+    """A week with no graded picks still gets a row: tracked=false, rate None.
+
+    Grouping the picks by week and emitting one row per group would make a
+    week the tracker skipped read as if it never existed. The window runs
+    from the first game the tracker wrote a pick for through the current
+    week, so the gap is visible as a gap.
+    """
+    from datetime import date
+
+    from nba_predictor.services.hub_service import compute_track_record
+    from nba_predictor.tracking import store
+
+    db_path = tmp_path / "tracking.db"
+    store.init_db(db_path)
+    # g1 tips in the week of Mon 2026-03-02, g3 in the week of Mon 2026-03-16.
+    store.insert_prediction(
+        db_path, game_id="g1", created_at="2026-03-02T00:00:00", model_version="v1",
+        home_win_prob=0.7, predicted_margin=5.0, predicted_total=220.0,
+    )
+    store.insert_prediction(
+        db_path, game_id="g3", created_at="2026-03-16T00:00:00", model_version="v1",
+        home_win_prob=0.6, predicted_margin=3.0, predicted_total=215.0,
+    )
+    schedule = [
+        _game_on("g1", "BOS", "MIA", 110, 100, "2026-03-02"),  # correct (home won)
+        _game_on("g3", "LAL", "GSW", 95, 105, "2026-03-16"),   # wrong (home lost)
+    ]
+
+    row = next(r for r in compute_track_record(db_path, schedule, today=date(2026, 3, 20))
+               if r.market == "game_outcome")
+    weeks = {w.week_start: w for w in row.weekly}
+
+    assert list(weeks) == ["2026-03-02", "2026-03-09", "2026-03-16"]
+    assert weeks["2026-03-02"].tracked is True
+    assert (weeks["2026-03-02"].n, weeks["2026-03-02"].correct, weeks["2026-03-02"].hit_rate) == (1, 1, 1.0)
+    # The gap week: a count of nothing, and no rate at all. 0.0 would claim
+    # the model was wrong on every pick it never made.
+    assert weeks["2026-03-09"].tracked is False
+    assert (weeks["2026-03-09"].n, weeks["2026-03-09"].correct) == (0, 0)
+    assert weeks["2026-03-09"].hit_rate is None
+    assert weeks["2026-03-16"].tracked is True
+    assert (weeks["2026-03-16"].n, weeks["2026-03-16"].correct, weeks["2026-03-16"].hit_rate) == (1, 0, 0.0)
+
+
+def test_track_record_weekly_reaches_the_current_week(tmp_path):
+    from datetime import date
+
+    from nba_predictor.services.hub_service import compute_track_record
+    from nba_predictor.tracking import store
+
+    db_path = tmp_path / "tracking.db"
+    store.init_db(db_path)
+    store.insert_prediction(
+        db_path, game_id="g1", created_at="2026-03-02T00:00:00", model_version="v1",
+        home_win_prob=0.7, predicted_margin=5.0, predicted_total=220.0,
+    )
+    schedule = [_game_on("g1", "BOS", "MIA", 110, 100, "2026-03-02")]
+
+    row = next(r for r in compute_track_record(db_path, schedule, today=date(2026, 3, 25))
+               if r.market == "game_outcome")
+
+    # Through the current week (Mon 2026-03-23), not through the last pick.
+    assert [w.week_start for w in row.weekly] == ["2026-03-02", "2026-03-09", "2026-03-16", "2026-03-23"]
+    assert row.weekly[-1].tracked is False
+    assert row.weekly[-1].hit_rate is None
+
+
+def test_track_record_weekly_sums_to_the_headline(tmp_path):
+    """The identity the panel reconciles with: the week rows add up to the
+    headline above them, pick for pick and hit for hit. If they can drift,
+    the page shows two counts of the same record that disagree."""
+    from datetime import date
+
+    from nba_predictor.services.hub_service import compute_track_record
+    from nba_predictor.tracking import store
+
+    db_path = tmp_path / "tracking.db"
+    store.init_db(db_path)
+    store.insert_prediction(
+        db_path, game_id="g1", created_at="2026-03-02T00:00:00", model_version="v1",
+        home_win_prob=0.7, predicted_margin=5.0, predicted_total=220.0,
+    )
+    store.insert_prediction(
+        db_path, game_id="g2", created_at="2026-03-03T00:00:00", model_version="v1",
+        home_win_prob=0.6, predicted_margin=3.0, predicted_total=215.0,
+    )
+    store.insert_market_prediction(
+        db_path, game_id="g1", market="h2h", selection="BOS", model_probability=0.65,
+        market_probability=0.55, edge=0.1, bookmaker="DraftKings", american_odds=-140,
+        created_at="2026-03-02T00:00:00",
+    )
+    store.insert_market_prediction(
+        db_path, game_id="g2", market="spread", selection="LAL", model_probability=0.6,
+        market_probability=0.5, edge=0.1, bookmaker="DraftKings", american_odds=-110,
+        created_at="2026-03-03T00:00:00", point=-4.5,
+    )
+    schedule = [
+        _game_on("g1", "BOS", "MIA", 110, 100, "2026-03-02"),
+        _game_on("g2", "LAL", "GSW", 95, 105, "2026-03-03"),
+    ]
+
+    records = compute_track_record(db_path, schedule, today=date(2026, 3, 8))
+    settled = [r for r in records if r.settled]
+
+    assert {r.market for r in settled} == {"game_outcome", "h2h", "spread"}
+    for row in settled:
+        assert sum(w.n for w in row.weekly) == row.total_predictions, row.market
+        assert sum(w.correct for w in row.weekly) == row.correct_predictions, row.market
+
+
+def test_track_record_weekly_windows_align_across_markets(tmp_path):
+    """Every settled market's week list covers the same weeks in the same
+    order, so the panel can lay them side by side in one table without
+    inventing a join or a missing row."""
+    from datetime import date
+
+    from nba_predictor.services.hub_service import compute_track_record
+    from nba_predictor.tracking import store
+
+    db_path = tmp_path / "tracking.db"
+    store.init_db(db_path)
+    store.insert_prediction(
+        db_path, game_id="g1", created_at="2026-03-16T00:00:00", model_version="v1",
+        home_win_prob=0.7, predicted_margin=5.0, predicted_total=220.0,
+    )
+    store.insert_market_prediction(
+        db_path, game_id="g1", market="h2h", selection="BOS", model_probability=0.65,
+        market_probability=0.55, edge=0.1, bookmaker="DraftKings", american_odds=-140,
+        created_at="2026-03-16T00:00:00",
+    )
+    schedule = [_game_on("g1", "BOS", "MIA", 110, 100, "2026-03-16")]
+
+    records = compute_track_record(db_path, schedule, today=date(2026, 3, 22))
+    weeks = {r.market: [w.week_start for w in r.weekly] for r in records if r.settled}
+
+    assert weeks["game_outcome"] == weeks["h2h"]
+
+
+def test_track_record_weekly_is_empty_when_nothing_was_graded(tmp_path):
+    """Stored rows with no results to judge them against carry no week rows
+    either -- an empty weekly list says 'nothing measured' where a list of
+    untracked weeks would imply a window the tracker never had."""
+    from datetime import date
+
+    from nba_predictor.services.hub_service import compute_track_record
+    from nba_predictor.tracking import store
+
+    db_path = tmp_path / "tracking.db"
+    store.init_db(db_path)
+    store.insert_market_prediction(
+        db_path, game_id="g9", market="h2h", selection="BOS", model_probability=0.6,
+        market_probability=0.5, edge=0.1, bookmaker="DraftKings", american_odds=-140,
+        created_at="2026-03-01T00:00:00",
+    )
+    # The game has not finished: nothing to grade, and no window to lay out.
+    schedule = [{
+        "game_id": "g9", "game_date": "2026-03-01", "home_team": "BOS", "away_team": "MIA",
+        "completed": False, "home_pts": None, "away_pts": None,
+    }]
+
+    records = compute_track_record(db_path, schedule, today=date(2026, 3, 8))
+
+    assert records and all(r.weekly == [] for r in records)
+
+
 def test_track_record_h2h_settles_one_model_pick_per_game(tmp_path):
     """Odds refresh stores both sides for every bookmaker on every run; the
     record judges only the model's side, once per game, from the latest

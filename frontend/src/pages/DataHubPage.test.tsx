@@ -10,6 +10,26 @@ vi.mock("../api/client", () => ({
     getHubRankings: vi.fn().mockResolvedValue([]),
     getHubStandings: vi.fn().mockResolvedValue([]),
     getTrackRecord: vi.fn().mockResolvedValue([]),
+    getVsMarket: vi.fn().mockResolvedValue({
+      market: "h2h",
+      n: 0,
+      mean_model_probability: null,
+      mean_market_probability: null,
+      mean_edge_points: null,
+      disagreement_n: 0,
+      disagreement_hit_rate: null,
+      disagreement_game_ids: [],
+      weekly: [],
+      scope: {
+        population: "finished games with a pre-tip moneyline price",
+        weekly_from: null,
+        weekly_through: null,
+        n_games_total: 0,
+        n_games_in_weekly: 0,
+        n_games_outside_weekly: 0,
+      },
+      method: {},
+    }),
   },
 }));
 

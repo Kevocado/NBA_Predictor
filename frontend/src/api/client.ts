@@ -72,13 +72,65 @@ export interface PlayerProp {
   rebuilt?: boolean;
 }
 
+export interface TrackRecordWeek {
+  /** ISO date of the Monday the week starts on. */
+  week_start: string;
+  n: number;
+  correct: number;
+  /** null when the week graded nothing: an em dash, never a fabricated 0%. */
+  hit_rate: number | null;
+  tracked: boolean;
+}
+
 export interface TrackRecord {
   market: string;
   total_predictions: number;
   correct_predictions: number;
-  hit_rate: number;
+  /** null when nothing was graded — a dash, never a 0% claim. */
+  hit_rate: number | null;
   /** Finals whose only picks were made after tip-off (left out of the counts). */
   n_rebuilt?: number;
+  /** Picks left out of the rate: the result landed on the line, or there was no line. */
+  n_push?: number;
+  /** False when the backend has no rule for judging this market: never render a rate. */
+  settled?: boolean;
+  /** Every week since tracking began, through this week; gaps carried as tracked=false. */
+  weekly?: TrackRecordWeek[];
+}
+
+export interface VsMarketWeek {
+  week_start: string;
+  /** Games actually compared with a price that week. */
+  tracked: boolean;
+  n: number;
+  /** Model minus price, in percentage points; null when nothing was compared. */
+  mean_edge_points: number | null;
+  disagreement_n: number;
+  disagreement_hit_rate: number | null;
+}
+
+export interface VsMarketScope {
+  population: string;
+  weekly_from: string | null;
+  weekly_through: string | null;
+  n_games_total: number;
+  n_games_in_weekly: number;
+  n_games_outside_weekly: number;
+}
+
+export interface VsMarket {
+  market: string;
+  n: number;
+  mean_model_probability: number | null;
+  mean_market_probability: number | null;
+  mean_edge_points: number | null;
+  disagreement_n: number;
+  disagreement_hit_rate: number | null;
+  disagreement_game_ids: string[];
+  weekly: VsMarketWeek[];
+  scope: VsMarketScope;
+  /** Sentences the panel prints verbatim — see hub_service._VS_MARKET_METHOD. */
+  method: Record<string, string | number>;
 }
 
 export interface TeamHubRow {
@@ -175,6 +227,7 @@ export const api = {
   getHubRankings: () => fetchJson<PowerRankingRow[]>("/hub/rankings"),
   getHubStandings: () => fetchJson<StandingsRow[]>("/hub/standings"),
   getTrackRecord: () => fetchJson<TrackRecord[]>("/hub/track-record"),
+  getVsMarket: () => fetchJson<VsMarket>("/hub/vs-market"),
   getManifest: () => fetchJson<Manifest>("/manifest"),
   getCalibration: () => fetchJson<CalibrationBin[]>("/calibration"),
 };

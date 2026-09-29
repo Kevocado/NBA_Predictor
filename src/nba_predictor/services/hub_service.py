@@ -1,7 +1,15 @@
 import json
+from collections import defaultdict
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from nba_predictor.api.schemas import TrackRecordOut
+from nba_predictor.api.schemas import (
+    TrackRecordOut,
+    TrackRecordWeekOut,
+    VsMarketOut,
+    VsMarketScopeOut,
+    VsMarketWeekOut,
+)
 from nba_predictor.tracking import store
 from nba_predictor.tracking.store import get_connection
 from nba_predictor.tracking.timing import latest_pre_tip
@@ -45,44 +53,114 @@ def pre_tip_picks(db_path: Path, schedule: list[dict]) -> tuple[list[tuple[dict,
     return picks, rebuilt
 
 
-def _settle_game_outcome(db_path: Path, schedule: list[dict]) -> TrackRecordOut | None:
+def _settle_game_outcome(db_path: Path, schedule: list[dict]) -> tuple[TrackRecordOut | None, list[tuple[date, bool]]]:
     """Settles the model's own win/loss call (predictions.home_win_prob >= 0.5)
     against each game's actual result, using only the pick made before
     tip-off. Every result is a real completed game, joined via the schedule
-    cache's home_pts/away_pts (populated by pipeline/ingest.py)."""
+    cache's home_pts/away_pts (populated by pipeline/ingest.py).
+
+    Returns the row and its graded picks as (game_date, correct) pairs, which
+    is what the weekly breakdown is built from -- one list, one rule, so a
+    week can never be graded more loosely than the headline above it."""
     picks, rebuilt = pre_tip_picks(db_path, schedule)
     if not picks and not rebuilt:
-        return None
+        return None, []
 
-    correct = sum(
-        1 for game, pick in picks
-        if (pick["home_win_prob"] >= 0.5) == (game["home_pts"] > game["away_pts"])
-    )
-    total = len(picks)
+    graded: list[tuple[date, bool]] = []
+    for game, pick in picks:
+        day = _game_date(game)
+        if day is None:
+            # Untimed and undated: `made_before_tip` cannot have judged it
+            # pre-tip either, but if it somehow graded, dropping it here would
+            # break the weekly-to-headline identity the panel reconciles with.
+            continue
+        graded.append((day, (pick["home_win_prob"] >= 0.5) == (game["home_pts"] > game["away_pts"])))
+
+    correct = sum(1 for _, ok in graded if ok)
+    total = len(graded)
     return TrackRecordOut(
         market="game_outcome", total_predictions=total, correct_predictions=correct,
-        hit_rate=round(correct / total, 3) if total else 0.0, n_rebuilt=rebuilt,
-    )
+        hit_rate=round(correct / total, 3) if total else None, n_rebuilt=rebuilt,
+        settled=True,
+    ), graded
 
 
-def _settle_h2h_market_predictions(db_path: Path, schedule: list[dict]) -> TrackRecordOut | None:
-    """Settles the model's moneyline side against actual results, once per
-    game. Odds refresh stores both selections for every bookmaker on every
-    run, so judging every row would pin the rate near 50%: per game, take the
-    latest run made before tip-off and its selection with the higher model
-    probability. Spread/total rows aren't settled here — see the market-count
-    fallback below."""
+def _grade_market_row(row, game: dict) -> bool | None:
+    """True = the pick cleared its line, False = it did not, None = no grade.
+
+    A grade is the pick against the line it was priced at, never against a
+    line re-read from anywhere else:
+
+    - **h2h**: `selection` is the side the model backed; it wins the game.
+    - **spread**: `point` is the selection's own line in book convention
+      (BOS -4.5 stores -4.5 for BOS), so the side covers when its margin
+      beats `-point`. The same threshold `refresh_odds._model_probability`
+      prices with (`line=-point`); `test_spread_grading_uses_the_same_
+      threshold_as_the_odds_writer` pins the two together, because a grader
+      reading the sign the other way produces plausible rates that are all
+      mirrored.
+    - **total**: `point` is the line; `selection` is "over" or "under".
+
+    None is a push (the result landed exactly on the line) or a row with no
+    line to judge: nobody won that one, so it is counted in `n_push` and
+    stays out of the rate rather than becoming a miss.
+    """
+    market = row["market"]
+    home_pts, away_pts = game["home_pts"], game["away_pts"]
+
+    if market == "h2h":
+        winner = game["home_team"] if home_pts > away_pts else game["away_team"]
+        return row["selection"] == winner
+
+    point = row["point"]
+    if point is None:
+        return None
+
+    if market == "spread":
+        if row["selection"] == game["home_team"]:
+            side_margin = home_pts - away_pts
+        elif row["selection"] == game["away_team"]:
+            side_margin = away_pts - home_pts
+        else:
+            return None
+        # Covers when side_margin > -point; == is the push.
+        margin_vs_line = side_margin + point
+        return None if margin_vs_line == 0 else margin_vs_line > 0
+
+    if market == "total":
+        margin_vs_line = (home_pts + away_pts) - point
+        if margin_vs_line == 0:
+            return None
+        return (margin_vs_line > 0) == (str(row["selection"]).lower() == "over")
+
+    return None
+
+
+def _settle_market_predictions(
+    db_path: Path, schedule: list[dict], market: str
+) -> tuple[TrackRecordOut | None, list[tuple[date, bool]]]:
+    """Settles one priced market against actual results, once per game.
+
+    Odds refresh stores both selections for every bookmaker on every run, so
+    judging every row would pin the rate near 50%: per game, take the latest
+    run made before tip-off and its selection with the higher model
+    probability, then grade that one pick. Returns (None, []) when the
+    schedule holds no finished game for this market -- the caller then
+    reports the stored rows as unsettled rather than as 0%.
+    """
     schedule_by_id = {g["game_id"]: g for g in schedule}
     with get_connection(db_path) as conn:
-        rows = conn.execute("SELECT * FROM game_market_predictions WHERE market = 'h2h'").fetchall()
+        rows = conn.execute(
+            "SELECT * FROM game_market_predictions WHERE market = ?", (market,)
+        ).fetchall()
 
     by_game: dict[str, list] = {}
     for row in rows:
         by_game.setdefault(row["game_id"], []).append(row)
 
     completed_games = 0
-    total = 0
-    correct = 0
+    graded: list[tuple[date, bool]] = []
+    n_push = 0
     for game_id, game_rows in by_game.items():
         game = schedule_by_id.get(game_id)
         if game is None or not game.get("completed") or game.get("home_pts") is None:
@@ -91,39 +169,330 @@ def _settle_h2h_market_predictions(db_path: Path, schedule: list[dict]) -> Track
         latest = latest_pre_tip(game_rows, game)
         if latest is None:
             continue
+        day = _game_date(game)
+        if day is None:
+            continue
         run = [r for r in game_rows if r["created_at"] == latest["created_at"]]
         pick = max(run, key=lambda r: r["model_probability"])
-        total += 1
-        actual_winner = game["home_team"] if game["home_pts"] > game["away_pts"] else game["away_team"]
-        if pick["selection"] == actual_winner:
-            correct += 1
+        verdict = _grade_market_row(pick, game)
+        if verdict is None:
+            n_push += 1
+            continue
+        graded.append((day, verdict))
 
     if completed_games == 0:
-        return None
+        return None, []
+    correct = sum(1 for _, ok in graded if ok)
+    total = len(graded)
     return TrackRecordOut(
-        market="h2h", total_predictions=total, correct_predictions=correct,
-        hit_rate=round(correct / total, 3) if total else 0.0,
-    )
+        market=market, total_predictions=total, correct_predictions=correct,
+        hit_rate=round(correct / total, 3) if total else None,
+        n_push=n_push, settled=True,
+    ), graded
 
 
-def compute_track_record(db_path: Path, schedule: list[dict] | None = None) -> list[TrackRecordOut]:
+# The markets this repo has a grading rule for. Anything else in
+# game_market_predictions is reported with its stored count and `settled=false`.
+_SETTLED_MARKETS = ("h2h", "spread", "total")
+
+
+def _game_date(game: dict | None) -> date | None:
+    """The day a game was played, for week grouping.
+
+    `game_date` first (the schedule's own key); a `tip_off` date only, for a
+    row written before `game_date` existed. None when neither parses -- and
+    such a game can never have been graded anyway, because `timing.pick_cutoff`
+    would have raised before `made_before_tip` could return True.
+    """
+    if game is None:
+        return None
+    raw = game.get("game_date")
+    if raw:
+        try:
+            return date.fromisoformat(str(raw)[:10])
+        except ValueError:
+            pass
+    tip = game.get("tip_off")
+    if tip:
+        try:
+            return datetime.fromisoformat(str(tip).replace("Z", "+00:00")).date()
+        except ValueError:
+            return None
+    return None
+
+
+def _week_start(day: date) -> date:
+    """Monday on or before `day` -- the same Monday-based week the site's
+    `frontend/src/lib/weeks.ts` groups its schedule by, so a week the visitor
+    already knows by name is the week this table reports."""
+    return day - timedelta(days=day.weekday())
+
+
+def _tracking_window(db_path: Path, schedule: list[dict], today: date) -> list[date]:
+    """Every week from the first game the tracker wrote a pick for, through
+    the current week.
+
+    Enumerating weeks from the data (rather than emitting one row per group)
+    is the whole point: a week the tracker skipped must read as "not tracked",
+    not vanish, because a reader cannot tell a gap from an absence. The start
+    is games with ROWS rather than with grades, so a week whose picks were all
+    rebuilt or all unsettled still belongs to the window -- it just appears
+    untracked.
+
+    `/hub/vs-market` derives its window from this same function, so the two
+    week tables on the page line up row for row.
+
+    Empty when the tracking DB has nothing the schedule can date.
+    """
+    schedule_by_id = {g["game_id"]: g for g in schedule}
+    with get_connection(db_path) as conn:
+        ids = {row[0] for row in conn.execute("SELECT DISTINCT game_id FROM predictions")}
+        ids |= {row[0] for row in conn.execute("SELECT DISTINCT game_id FROM game_market_predictions")}
+
+    weeks = [_week_start(day) for day in
+             (d for d in (_game_date(schedule_by_id.get(game_id)) for game_id in ids) if d is not None)]
+    if not weeks:
+        return []
+    first = min(weeks)
+    # Never before tracking began; always up to this week, so an in-progress
+    # week with nothing graded yet shows as a row instead of ending the table.
+    last = max(_week_start(today), first)
+    return [first + timedelta(weeks=i) for i in range((last - first).days // 7 + 1)]
+
+
+def _weekly_rows(graded: list[tuple[date, bool]], window: list[date]) -> list[TrackRecordWeekOut]:
+    """One row per week in `window` for one market.
+
+    `hit_rate` is None (not 0.0) when a week graded nothing: 0% is a claim
+    that every pick missed, which is not what "never measured" means. The
+    headline's rule is reused verbatim -- this is the only other place the
+    market's record is computed, deliberately.
+    """
+    by_week: dict[date, list[bool]] = defaultdict(list)
+    for day, correct in graded:
+        by_week[_week_start(day)].append(correct)
+
+    rows = []
+    for week in window:
+        results = by_week.get(week, [])
+        n = len(results)
+        correct = sum(1 for ok in results if ok)
+        rows.append(TrackRecordWeekOut(
+            week_start=week.isoformat(), n=n, correct=correct,
+            hit_rate=round(correct / n, 3) if n else None, tracked=n > 0,
+        ))
+    return rows
+
+
+def compute_track_record(
+    db_path: Path, schedule: list[dict] | None = None, today: date | None = None
+) -> list[TrackRecordOut]:
     schedule = schedule or []
+    today = today or date.today()
     rows: list[TrackRecordOut] = []
+    settled_rows: dict[str, TrackRecordOut] = {}
+    graded_by_market: dict[str, list[tuple[date, bool]]] = {}
 
     with get_connection(db_path) as conn:
         market_counts = conn.execute(
             "SELECT market, COUNT(*) as total FROM game_market_predictions GROUP BY market"
         ).fetchall()
 
-    settled_h2h = _settle_h2h_market_predictions(db_path, schedule)
-    for row in market_counts:
-        if row["market"] == "h2h" and settled_h2h is not None:
-            rows.append(settled_h2h)
-        else:
-            rows.append(TrackRecordOut(market=row["market"], total_predictions=row["total"], correct_predictions=0, hit_rate=0.0))
+    for market in _SETTLED_MARKETS:
+        row, graded = _settle_market_predictions(db_path, schedule, market)
+        if row is not None:
+            settled_rows[market] = row
+            graded_by_market[market] = graded
 
-    game_outcome = _settle_game_outcome(db_path, schedule)
+    for row in market_counts:
+        settled_row = settled_rows.get(row["market"])
+        if settled_row is not None:
+            rows.append(settled_row)
+        else:
+            # Stored rows we cannot judge against results: the count is real,
+            # the rate is not measured. hit_rate stays None so no surface can
+            # print a 0% for it.
+            rows.append(TrackRecordOut(
+                market=row["market"], total_predictions=row["total"],
+                correct_predictions=0, hit_rate=None, settled=False,
+            ))
+
+    game_outcome, outcome_graded = _settle_game_outcome(db_path, schedule)
     if game_outcome is not None:
+        settled_rows["game_outcome"] = game_outcome
+        graded_by_market["game_outcome"] = outcome_graded
         rows.append(game_outcome)
 
+    # Every settled market gets the SAME window, so the weekly tables align
+    # row for row on the page without the frontend inventing a join.
+    window = _tracking_window(db_path, schedule, today)
+    if window:
+        for row in rows:
+            if row.settled:
+                row.weekly = _weekly_rows(graded_by_market.get(row.market, []), window)
+
     return rows
+
+
+# The sentences the page prints verbatim, once per key it sends. A number
+# nobody can interpret is not a decision aid, and a disclaimer nobody reads is
+# not one either -- so the backend owns the wording and the frontend does not
+# get to paraphrase it away. No profit, ROI or "beats the bookies" claim lives
+# in here; `not_a_profit_claim` exists to say that out loud in the payload.
+_VS_MARKET_METHOD: dict[str, str] = {
+    "market_probability": (
+        "The market number is the book's own price with the overround removed "
+        "(Shin's method), so the two sides of a moneyline add to 100%. It is "
+        "read straight from the odds-refresh run that priced the pick, not "
+        "recomputed here."
+    ),
+    "edge": (
+        "Edge is the model's probability for its pick minus the probability "
+        "the price carried for that same side, in percentage points, positive "
+        "when the model likes a side more than the price does. It measures "
+        "disagreement with a price, not superiority: a closing price is the "
+        "market's best estimate, so a well-calibrated model's average edge is "
+        "near zero by design. A large average edge means one of the two is "
+        "miscalibrated, not that the model is right."
+    ),
+    "disagreement": (
+        "The disagreement cohort is the games where the model backed the side "
+        "the price did not favour -- a pick against the price. Its hit rate is "
+        "how often that side won, over exactly those games. Games the price "
+        "split 50/50 are compared but left out of the cohort: an even price "
+        "favours nobody, so there is no side to disagree with. This is the "
+        "number to read for a decision; the mean edge is a calibration check."
+    ),
+    "not_a_profit_claim": (
+        "This is agreement with a price, not a profit claim. No figure here is "
+        "a return, a yield, a stake or a cent. We do not publish profit or ROI "
+        "figures, and this comparison does not become one by being labelled "
+        "'edge'."
+    ),
+    "population": (
+        "The figures above cover every finished game whose moneyline was "
+        "priced before tip-off, in every season the tracker holds. The week "
+        "table covers the same window as the rest of this page: from the first "
+        "game the tracker wrote a pick for through this week. The scope line "
+        "states how many compared games sit inside that window and how many "
+        "fall outside it, and the two add up to the count above."
+    ),
+}
+
+
+def compute_vs_market(
+    db_path: Path, schedule: list[dict] | None = None, today: date | None = None
+) -> VsMarketOut:
+    """The model's moneyline pick beside the price it was measured against.
+
+    Per finished game: the latest pre-tip odds run, the row with the higher
+    model probability (one pick per game -- the same rule the h2h record
+    grades with), and the price carried by that row. Eligible means a result
+    to judge it against, a market_probability on the pick, and the other side
+    priced at the SAME bookmaker in the same run: a price with only one side
+    stored cannot be said to have favoured either side, and the disagreement
+    test below would be reading a sum-to-100% that was never summed.
+
+    `edge` is model minus price in percentage points on the model's own side.
+    The disagreement cohort is `price < 0.5` -- the price fancied the other
+    side; exactly 0.5 favours nobody, so it stays out of the cohort but
+    remains in `n`.
+    """
+    schedule = schedule or []
+    today = today or date.today()
+    schedule_by_id = {g["game_id"]: g for g in schedule}
+
+    with get_connection(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM game_market_predictions WHERE market = 'h2h'"
+        ).fetchall()
+
+    by_game: dict[str, list] = {}
+    for row in rows:
+        by_game.setdefault(row["game_id"], []).append(row)
+
+    compared: list[dict] = []
+    for game_id, game_rows in by_game.items():
+        game = schedule_by_id.get(game_id)
+        if game is None or not game.get("completed") or game.get("home_pts") is None:
+            continue
+        latest = latest_pre_tip(game_rows, game)
+        if latest is None:
+            continue
+        day = _game_date(game)
+        if day is None:
+            continue
+        run = [r for r in game_rows if r["created_at"] == latest["created_at"]]
+        pick = max(run, key=lambda r: r["model_probability"])
+        price = pick["market_probability"]
+        if price is None:
+            continue
+        other_priced = [
+            r for r in run
+            if r["bookmaker"] == pick["bookmaker"]
+            and r["selection"] != pick["selection"]
+            and r["market_probability"] is not None
+        ]
+        if not other_priced:
+            continue
+        winner = game["home_team"] if game["home_pts"] > game["away_pts"] else game["away_team"]
+        compared.append({
+            "day": day,
+            "game_id": str(game_id),
+            "model": float(pick["model_probability"]),
+            "price": float(price),
+            "edge_points": (float(pick["model_probability"]) - float(price)) * 100.0,
+            "disagrees": float(price) < 0.5,
+            "hit": pick["selection"] == winner,
+        })
+
+    n = len(compared)
+    disagreements = [c for c in compared if c["disagrees"]]
+    hits = sum(1 for c in disagreements if c["hit"])
+    n_disagree = len(disagreements)
+
+    window = _tracking_window(db_path, schedule, today)
+    by_week: dict[date, list[dict]] = defaultdict(list)
+    for c in compared:
+        by_week[_week_start(c["day"])].append(c)
+
+    weekly = []
+    for week in window:
+        group = by_week.get(week, [])
+        week_disagreements = [c for c in group if c["disagrees"]]
+        week_hits = sum(1 for c in week_disagreements if c["hit"])
+        weekly.append(VsMarketWeekOut(
+            week_start=week.isoformat(), tracked=bool(group), n=len(group),
+            mean_edge_points=round(_mean(c["edge_points"] for c in group), 1) if group else None,
+            disagreement_n=len(week_disagreements),
+            disagreement_hit_rate=(
+                round(week_hits / len(week_disagreements), 3) if week_disagreements else None
+            ),
+        ))
+
+    in_weekly = sum(w.n for w in weekly)
+    return VsMarketOut(
+        market="h2h",
+        n=n,
+        mean_model_probability=round(_mean(c["model"] for c in compared), 4) if n else None,
+        mean_market_probability=round(_mean(c["price"] for c in compared), 4) if n else None,
+        mean_edge_points=round(_mean(c["edge_points"] for c in compared), 1) if n else None,
+        disagreement_n=n_disagree,
+        disagreement_hit_rate=round(hits / n_disagree, 3) if n_disagree else None,
+        disagreement_game_ids=sorted(c["game_id"] for c in disagreements),
+        weekly=weekly,
+        scope=VsMarketScopeOut(
+            population="finished games with a pre-tip moneyline price",
+            weekly_from=window[0].isoformat() if window else None,
+            weekly_through=window[-1].isoformat() if window else None,
+            n_games_total=n,
+            n_games_in_weekly=in_weekly,
+            n_games_outside_weekly=n - in_weekly,
+        ),
+        method=dict(_VS_MARKET_METHOD),
+    )
+
+
+def _mean(values) -> float:
+    values = list(values)
+    return sum(values) / len(values) if values else 0.0

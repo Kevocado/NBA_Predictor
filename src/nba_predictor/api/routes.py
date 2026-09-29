@@ -24,6 +24,7 @@ from nba_predictor.api.schemas import (
     SeasonBoundsOut,
     TeamOut,
     TrackRecordOut,
+    VsMarketOut,
 )
 from nba_predictor.data.team_reference import TEAMS, get_team
 from nba_predictor.odds.value_bets import std_from_mae
@@ -31,7 +32,12 @@ from nba_predictor.pipeline.ingest import run_ingest
 from nba_predictor.pipeline.refresh_odds import refresh_market_predictions
 from nba_predictor.pipeline.retrain import run_retrain_pipeline
 from nba_predictor.services.calibration_service import compute_model_calibration
-from nba_predictor.services.hub_service import compute_track_record, load_hub_cache, load_player_name_map
+from nba_predictor.services.hub_service import (
+    compute_track_record,
+    compute_vs_market,
+    load_hub_cache,
+    load_player_name_map,
+)
 from nba_predictor.services.schedule_repository import (
     default_week_start,
     get_game,
@@ -211,6 +217,16 @@ def hub_track_record(
     db_path: Path = Depends(get_db_path), schedule: list[dict] = Depends(get_schedule)
 ) -> list[TrackRecordOut]:
     return compute_track_record(db_path, schedule)
+
+
+@router.get("/hub/vs-market", response_model=VsMarketOut)
+def hub_vs_market(
+    db_path: Path = Depends(get_db_path), schedule: list[dict] = Depends(get_schedule)
+) -> VsMarketOut:
+    """Model against the price on the moneyline: headline, weekly rows over
+    the same window as /hub/track-record, the scope reconciliation, and the
+    method sentences the page prints verbatim."""
+    return compute_vs_market(db_path, schedule)
 
 
 @router.get("/snapshot-meta")

@@ -57,6 +57,36 @@ describe("api client", () => {
     expect(fetch).toHaveBeenCalledWith(expect.stringContaining("/hub/track-record"), expect.anything());
     expect(records[0].hit_rate).toBe(0.6);
   });
+
+  it("getVsMarket fetches /hub/vs-market", async () => {
+    mockFetchOnce({
+      market: "h2h",
+      n: 3,
+      mean_model_probability: 0.57,
+      mean_market_probability: 0.54,
+      mean_edge_points: 3.2,
+      disagreement_n: 1,
+      disagreement_hit_rate: 1,
+      disagreement_game_ids: ["g1"],
+      weekly: [],
+      scope: {
+        population: "finished games with a pre-tip moneyline price",
+        weekly_from: "2026-09-21",
+        weekly_through: "2026-09-28",
+        n_games_total: 3,
+        n_games_in_weekly: 3,
+        n_games_outside_weekly: 0,
+      },
+      method: { edge: "Edge is the model's probability for its pick minus the price." },
+    });
+
+    const vs = await api.getVsMarket();
+
+    expect(fetch).toHaveBeenCalledWith(expect.stringContaining("/hub/vs-market"), expect.anything());
+    expect(vs.n).toBe(3);
+    expect(vs.scope.n_games_in_weekly + vs.scope.n_games_outside_weekly).toBe(vs.scope.n_games_total);
+    expect(vs.method.edge).toContain("Edge is the model's probability");
+  });
 });
   it("getGamePlayers response includes actual_value", async () => {
     mockFetchOnce([{ player_id: "203999", player_name: "Nikola Jokic", stat: "points", predicted_value: 27.5, actual_value: 24.0 }]);

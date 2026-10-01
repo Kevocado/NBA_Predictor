@@ -1,5 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { api, type GameDetail, type PlayerProp, type PlayerHubRow, type MarketPrediction, type TrackRecord } from "../api/client";
+import { api, type GameDetail, type OutPlayer, type PlayerProp, type PlayerHubRow, type MarketPrediction, type TrackRecord } from "../api/client";
+import TopCalls from "./TopCalls";
 import { favourite } from "../lib/pick";
 import { teamName } from "../lib/teams";
 import { ErrorState, FixtureExplainer, Skeleton, kickoff, pct, stat, statusWords } from "../predictor-ui";
@@ -91,6 +92,14 @@ function FormBadge({ result }: { result: string }) {
 export default function GameDetailModal({ gameId, onClose }: GameDetailModalProps) {
   const [detail, setDetail] = useState<GameDetail | null>(null);
   const [players, setPlayers] = useState<PlayerProp[] | null>(null);
+  // Who the availability gate removed from this game's ranking. `null` is a
+  // third state on purpose, and it is not "nobody is out": while it is loading,
+  // and after a failure, the ranking is not shown at all. A ranking whose
+  // exclusions could not be read is a ranking nobody can vouch for, and the API
+  // answers an unreadable feed with a 503 rather than an empty report precisely
+  // so the two cases stay apart. Showing the top three of a list we cannot prove
+  // is complete would be the dishonest reading, not the cautious one.
+  const [outPlayers, setOutPlayers] = useState<OutPlayer[] | null>(null);
   // The per-game player feed carries no team, so the box score's split comes
   // from the season hub feed. Fetched separately, and allowed to fail: losing
   // the split must not take the game detail down with it.
@@ -109,6 +118,7 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
   useEffect(() => {
     setDetail(null);
     setPlayers(null);
+    setOutPlayers(null);
     setError(null);
     Promise.all([api.getGameDetail(gameId), api.getGamePlayers(gameId)])
       .then(([detailResult, playersResult]) => {
@@ -116,6 +126,24 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
         setPlayers(playersResult);
       })
       .catch(() => setError("We couldn't load this game. Check your connection and try again."));
+  }, [gameId, reloadKey]);
+
+  // Its own fetch, allowed to fail on its own. Deliberately NOT folded into the
+  // Promise.all above: that one failing would take the whole game detail down,
+  // and losing the exclusion list must not cost the reader the box score.
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getGameOutPlayers(gameId)
+      .then((result) => {
+        if (!cancelled) setOutPlayers(result);
+      })
+      .catch(() => {
+        if (!cancelled) setOutPlayers(null);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [gameId, reloadKey]);
 
   useEffect(() => {
@@ -533,6 +561,28 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
               awayTeam={detail?.away_team ?? ""}
             />
           </section>
+        )}
+
+        {/* The ranked calls, as a block of their own rather than another column
+            of the box score: a ranking that a reader could mistake for the full
+            roster is the thing this must not be, and one list per category with
+            at most three rows each cannot be read that way. Gated on the out
+            feed having loaded -- see `outPlayers`. */}
+        {players && players.length > 0 && outPlayers && (
+          <section aria-labelledby={`${titleId}-calls`} className="mt-4">
+            <h3 id={`${titleId}-calls`} className="mb-2 text-sm text-[var(--color-net-faint)]">
+              Player projections
+            </h3>
+            <TopCalls props={players} out={outPlayers} />
+          </section>
+        )}
+        {players && players.length > 0 && !outPlayers && (
+          // No "0 players out", and no empty ranking: see `outPlayers` for why
+          // an unreadable feed is not an empty report.
+          <p data-testid="top-calls-unavailable" className="mt-4 text-xs text-pr-text-dim">
+            The model's top calls are hidden for this game: we could not read the availability report, so we can't
+            confirm who is fit to be ranked.
+          </p>
         )}
       </div>
     </div>

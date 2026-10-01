@@ -10,6 +10,9 @@ vi.mock("../api/client", () => ({
   api: {
     getSeasonFirstWeek: vi.fn(), getGamesWeek: vi.fn(), getGameDetail: vi.fn(),
     getGamePlayers: vi.fn(), getHubPlayers: vi.fn().mockResolvedValue([]),
+    // The detail modal's block reads this for its record strip. Not the
+    // subject here, and empty so the strip stays out of these assertions.
+    getTrackRecord: vi.fn().mockResolvedValue([]),
   },
 }));
 

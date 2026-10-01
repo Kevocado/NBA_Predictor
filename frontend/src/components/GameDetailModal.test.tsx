@@ -475,15 +475,29 @@ describe("GameDetailModal and the plain-English panel", () => {
     expect(explain).toHaveBeenCalledTimes(1);
   });
 
-  it("draws the moneyline split and no spread or total tile", async () => {
+  it("leaves every figure to the block once the summary is in", async () => {
+    // The summary is prose and nothing else. It used to re-render the tiles, the
+    // bar, the legend and the record beside the block that already drew them,
+    // so one figure was on screen twice — and a de-duplication pass would have
+    // had to guess which copy was the real one.
     openPregame();
     vi.mocked(api.explainGame).mockResolvedValue(nbaSummary as never);
     render(<GameDetailModal gameId="g1" onClose={() => {}} />);
     await userEvent.click(await screen.findByRole("button", { name: /ai summary/i }));
     const summary = await screen.findByTestId("fixture-summary");
-    expect(within(summary).getByTestId("tile-moneyline")).toBeInTheDocument();
-    expect(within(summary).queryByTestId("tile-spread")).toBeNull();
-    expect(within(summary).queryByTestId("tile-total")).toBeNull();
+
+    // No figure inside the summary...
+    expect(within(summary).queryByTestId("tile-moneyline")).toBeNull();
+    expect(within(summary).queryAllByTestId("pbar-fill")).toHaveLength(0);
+    expect(within(summary).queryByTestId("pbar-legend")).toBeNull();
+    expect(within(summary).queryByTestId("record-fill")).toBeNull();
+    // ...and exactly one of each in the panel, which the block owns. The game
+    // carries no spread or total line, so those tiles are never drawn at all.
+    const block = screen.getByTestId("instant-block");
+    expect(within(block).getAllByTestId("tile-moneyline")).toHaveLength(1);
+    expect(screen.getAllByTestId("tile-moneyline")).toHaveLength(1);
+    expect(within(block).queryByTestId("tile-spread")).toBeNull();
+    expect(within(block).queryByTestId("tile-total")).toBeNull();
   });
 
   it("shows the flow with no request made when the explainer is unreachable", async () => {

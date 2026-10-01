@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, afterEach, beforeEach } from "vitest";
 import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import GameDetailModal from "./GameDetailModal";
 import { api, type TrackRecord } from "../api/client";
 
@@ -86,6 +87,40 @@ async function renderOffline(detail: unknown) {
  *  is what tells two records apart if this page ever grows a second one. */
 function recordStrip() {
   return screen.getByText("Winner pick made before tip-off").parentElement as HTMLElement;
+}
+
+/** A summary, shaped the way the service sends one. The prose is the only thing
+ *  it carries: `pick` is deliberately absent, because a service that named a
+ *  pick the bundle does not would put a second claim on the page. */
+const summaryAnswer = {
+  verdict: "Boston is the pick at home.",
+  band: "moderate",
+  factors: [{ key: "moneyline", direction: "up", headline: "Home edge", text: "Boston at home." }],
+  source: "template" as const,
+  model: "",
+  generated_at: new Date().toISOString(),
+  sport: "nba",
+  pick_timing: "pre_kickoff" as const,
+};
+
+/** Press the button and wait for the summary to land. */
+async function pressAiSummary() {
+  await userEvent.click(screen.getByRole("button", { name: /ai summary/i }));
+  return screen.findByTestId("fixture-summary");
+}
+
+/** The fill colour each bar segment is painted in, in bar order.
+ *
+ *  `ProbabilityBar` resolves the pick's index itself and paints that segment
+ *  `var(--color-pr-accent)`; jsdom carries the custom property through as text,
+ *  which is what makes the accent assertable rather than merely visible. */
+function segmentFills() {
+  const fills = screen.getAllByTestId("pbar-fill");
+  const labels = screen.getAllByTestId("pbar-label").map((el) => el.getAttribute("data-seg"));
+  return fills.map((el, i) => ({
+    label: labels[i],
+    accent: (el.getAttribute("style") ?? "").includes("var(--color-pr-accent)"),
+  }));
 }
 
 describe("GameDetailModal instant block", () => {
@@ -252,10 +287,142 @@ describe("GameDetailModal instant block", () => {
   it("still says plainly that no pick was made", async () => {
     await renderOffline({ ...preTip, prediction: null });
 
-    expect(screen.getByText("Celtics is the pick.")).toBeNull();
+    expect(screen.queryByText("Celtics is the pick.")).toBeNull();
     expect(screen.getByText(/No pick was made for this fixture\./)).toBeInTheDocument();
     // No pick is not no facts: the block still carries what the site has.
     expect(screen.getByTestId("instant-block")).toBeInTheDocument();
+    vi.unstubAllGlobals();
+  });
+
+  // ---- The reviewer's four, for this site -------------------------------
+
+  it("REQUIRED: shows the block before the button, having asked for nothing", async () => {
+    const fetchSpy = await renderOffline(preTip);
+
+    const block = await screen.findByTestId("instant-block");
+    const button = screen.getByRole("button", { name: /ai summary/i });
+
+    // The block is finished before the button is even on the page: it is above
+    // it, and it is the reason the button is optional rather than the price of
+    // admission.
+    expect(
+      block.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING,
+      "the block must render above the summary button",
+    ).toBeTruthy();
+
+    // Every figure the block shows is on screen with no request spent...
+    expect(within(block).getByTestId("tile-moneyline")).toBeInTheDocument();
+    expect(within(block).getAllByTestId("pbar-fill")).toHaveLength(2);
+    expect(within(block).getByTestId("record-fill")).toBeInTheDocument();
+    expect(within(block).getByText("Celtics is the pick.")).toBeInTheDocument();
+
+    // ...and nothing was asked for to get them.
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(api.explainGame).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it("REQUIRED: each figure appears exactly once after the button is pressed", async () => {
+    await renderOffline(preTip);
+    vi.mocked(api.explainGame).mockResolvedValue(summaryAnswer as never);
+    const summary = await pressAiSummary();
+
+    // The block is the only place the figures live, so each is on screen once.
+    // Counted across the whole panel, not inside the block: a second copy
+    // outside it — in the summary, in a footer, in the flow — is the overlap
+    // this phase exists to remove, and scoping the count to the block would
+    // report green while the duplicate stood next to it.
+    expect(screen.getAllByTestId("tile-moneyline")).toHaveLength(1);
+    expect(screen.getAllByTestId("pbar-fill")).toHaveLength(2);
+    expect(screen.getAllByTestId("pbar-label")).toHaveLength(2);
+    expect(screen.getAllByTestId("record-fill")).toHaveLength(1);
+    expect(screen.getAllByText("Celtics is the pick.")).toHaveLength(1);
+    expect(screen.getAllByText("22/40")).toHaveLength(1);
+
+    // And the old duplicate sections are gone from the summary state: it used
+    // to re-render the tiles, the bar, the legend and the record.
+    expect(within(summary).queryByTestId("tile-moneyline")).toBeNull();
+    expect(within(summary).queryAllByTestId("pbar-fill")).toHaveLength(0);
+    expect(within(summary).queryByTestId("pbar-legend")).toBeNull();
+    expect(within(summary).queryByTestId("record-fill")).toBeNull();
+    // The prose is still there — the summary is what the button buys.
+    expect(within(summary).getByText("Boston is the pick at home.")).toBeInTheDocument();
+    vi.unstubAllGlobals();
+  });
+
+  it("REQUIRED: accents the bar segment the bundle's pick names", async () => {
+    await renderOffline(preTip);
+
+    // The bundle's pick is "BOS" and the segments are labelled with this site's
+    // own team codes, so the label matches exactly and one segment is accented.
+    // The accent is derived from `bundle.pick` inside the block; a site whose
+    // pick label matched nothing would accent nothing at all, which is the
+    // fail-closed behaviour — so this asserts the accent, not just the absence
+    // of a crash.
+    const segments = segmentFills();
+    expect(segments.map((s) => s.label)).toEqual(["BOS", "MIA"]);
+    expect(segments.filter((s) => s.accent).map((s) => s.label)).toEqual(["BOS"]);
+
+    // The accent is on the segment the verdict names, which is the whole point:
+    // the emphasis and the sentence must agree about which side was picked.
+    const accented = segments.find((s) => s.accent)!;
+    expect(screen.getByText("Celtics is the pick.")).toBeInTheDocument();
+    expect(accented.label).toBe("BOS");
+    vi.unstubAllGlobals();
+  });
+
+  it("REQUIRED: accents the away segment when the away team is the pick", async () => {
+    // The companion to the test above, and the one that could actually pass by
+    // accident: with MIA the favourite the accent has to move to the SECOND
+    // segment. A bar that painted whichever segment came first would satisfy
+    // the previous test and fail this one.
+    await renderOffline({
+      ...preTip,
+      prediction: { home_win_probability: 0.38, predicted_margin: -3.5, predicted_total: 224.5 },
+    });
+
+    const segments = segmentFills();
+    expect(segments.map((s) => s.label)).toEqual(["BOS", "MIA"]);
+    expect(segments.filter((s) => s.accent).map((s) => s.label)).toEqual(["MIA"]);
+    vi.unstubAllGlobals();
+  });
+
+  it("REQUIRED: draws no bar, and so accents nothing, when the model has no split", async () => {
+    // There is no probability to split, so there is no bar. Nothing to accent
+    // is the honest outcome here rather than a failure to accent: the block
+    // fails closed instead of pointing at the widest segment it can see.
+    await renderOffline({ ...preTip, prediction: null });
+
+    expect(screen.queryByTestId("pbar-fill")).toBeNull();
+    expect(screen.queryByTestId("pbar-label")).toBeNull();
+    expect(screen.getByText(/No pick was made for this fixture\./)).toBeInTheDocument();
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps the record on a fixture the model made no pick for", async () => {
+    // A record is a fact about the season, not about this fixture's pick, so it
+    // stands on its own. An earlier guard that required a verdict dropped it
+    // silently whenever the bundle had no pick.
+    await renderOffline({ ...preTip, prediction: null });
+
+    expect(screen.getByText(/No pick was made for this fixture\./)).toBeInTheDocument();
+    expect(screen.getByTestId("record-fill")).toBeInTheDocument();
+    expect(screen.getByText("22/40")).toBeInTheDocument();
+    vi.unstubAllGlobals();
+  });
+
+  it("puts the block above the summary once the summary is in", async () => {
+    await renderOffline(preTip);
+    vi.mocked(api.explainGame).mockResolvedValue(summaryAnswer as never);
+    const summary = await pressAiSummary();
+
+    // Facts first, interpretation after: the block is the finished "what", so
+    // the summary reads as what it adds and never as a second copy of the page.
+    // The flow is mounted throughout, so the panel is never empty.
+    expect(
+      screen.getByTestId("instant-block").compareDocumentPosition(summary) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(screen.getByTestId("fixture-flow")).toBeInTheDocument();
     vi.unstubAllGlobals();
   });
 });

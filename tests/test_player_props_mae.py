@@ -146,3 +146,71 @@ def test_the_mae_is_not_rebuilt_from_the_whole_schedule_on_every_request(tmp_pat
     # A different schedule is a different question.
     routes._mae_by_stat(db, schedule + [{"game_id": "3"}])
     assert len(calls) == 3
+
+
+def _reference_resolved(db_path, schedule):
+    """The pre-optimisation algorithm, kept here as the specification: one pair of
+    queries per scheduled game. The bulk version must return exactly this."""
+    from nba_predictor.tracking.player_props import actuals_by_player_stat, picks_by_player_stat
+    out = []
+    for game in schedule:
+        gid = game.get("game_id")
+        if not gid:
+            continue
+        actuals = actuals_by_player_stat(db_path, gid)
+        for key, (pick, rebuilt) in picks_by_player_stat(db_path, gid, game).items():
+            if rebuilt or pick is None:
+                continue
+            actual = actuals.get(key)
+            if actual is None:
+                continue
+            out.append({"stat": key[1], "predicted_value": pick["predicted_value"], "actual_value": actual})
+    return out
+
+
+def _seed(tmp_path):
+    from nba_predictor.tracking import store
+    db = tmp_path / "tracking.db"
+    store.init_db(db)
+    # Game A: pick before tip (counts), a later backtest row (must be ignored), an actual.
+    store.insert_player_prediction(db, game_id="A", player_id="p1", stat="points", predicted_value=20.0, created_at="2026-10-01T10:00:00Z")
+    store.insert_player_prediction(db, game_id="A", player_id="p1", stat="points", predicted_value=99.0, created_at="2026-10-02T10:00:00Z")
+    store.insert_player_outcome(db, game_id="A", player_id="p1", stat="points", actual_value=24.0, recorded_at="2026-10-02T09:00:00Z")
+    # Game B: ONLY a post-tip (rebuilt) row, with an actual -> excluded.
+    store.insert_player_prediction(db, game_id="B", player_id="p2", stat="assists", predicted_value=7.0, created_at="2026-10-03T10:00:00Z")
+    store.insert_player_outcome(db, game_id="B", player_id="p2", stat="assists", actual_value=3.0, recorded_at="2026-10-03T11:00:00Z")
+    # Game C: pick before tip, NO actual yet -> unresolved.
+    store.insert_player_prediction(db, game_id="C", player_id="p3", stat="rebounds", predicted_value=9.0, created_at="2026-10-01T10:00:00Z")
+    # Game D: pick before tip, actual present.
+    store.insert_player_prediction(db, game_id="D", player_id="p4", stat="points", predicted_value=15.0, created_at="2026-10-01T10:00:00Z")
+    store.insert_player_outcome(db, game_id="D", player_id="p4", stat="points", actual_value=18.0, recorded_at="2026-10-02T09:00:00Z")
+    games = {g: {"game_id": g, "game_date": "2026-10-02", "tip_off": "2026-10-02T00:00:00Z"} for g in "ABCD"}
+    # A season's worth of unplayed games with no rows at all.
+    schedule = list(games.values()) + [{"game_id": f"F{i}", "game_date": "2027-03-01"} for i in range(1756)]
+    return db, schedule
+
+
+def test_the_bulk_resolution_returns_exactly_what_the_per_game_algorithm_did(tmp_path):
+    from nba_predictor.tracking.player_props import resolved_player_props
+    db, schedule = _seed(tmp_path)
+    expected = sorted(_reference_resolved(db, schedule), key=lambda r: (r["stat"], r["predicted_value"]))
+    got = sorted(resolved_player_props(db, schedule), key=lambda r: (r["stat"], r["predicted_value"]))
+    assert got == expected
+    assert [(r["stat"], r["predicted_value"], r["actual_value"]) for r in got] == [("points", 15.0, 18.0), ("points", 20.0, 24.0)]
+
+
+def test_resolving_a_full_season_does_not_open_a_connection_per_scheduled_game(tmp_path, monkeypatch):
+    """~1,760 scheduled games used to mean ~3,500 queries, ~50 s on the live site for
+    the first visitor after any database change."""
+    from nba_predictor.tracking import player_props as tp, store
+    db, schedule = _seed(tmp_path)
+    opened = []
+    real = store.get_connection
+
+    def _counting(path):
+        opened.append(1)
+        return real(path)
+
+    monkeypatch.setattr(store, "get_connection", _counting)
+    tp.resolved_player_props(db, schedule)
+    assert len(opened) <= 4, f"{len(opened)} connections opened for a {len(schedule)}-game schedule"

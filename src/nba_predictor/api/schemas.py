@@ -95,6 +95,30 @@ class OutPlayerOut(BaseModel):
     dated: str
 
 
+class DoubtfulPlayerOut(BaseModel):
+    """A player the availability gate flagged as doubtful but kept ranked.
+
+    Flagged in place, NOT removed: the player is still a legitimate call and
+    still appears in /games/{id}/players. This is the note that makes the
+    ranking honest -- before it, a day-to-day player reached no feed at all,
+    which reads as "checked and clear".
+
+    Deliberately the same six fields as OutPlayerOut and no more. ``status`` is
+    the feed's own word ("Day-To-Day"), reported verbatim rather than reworded
+    into a judgement; there is NO probability and NO downgrade coefficient
+    field, because a status is not a number and this repo has no calibrated
+    quantity to pair it with. Nothing here is a recommendation against the
+    player: it states availability, nothing more.
+    """
+
+    player_id: str
+    player_name: str
+    team: str
+    status: str
+    source: str
+    dated: str
+
+
 class TrackRecordOut(BaseModel):
     market: str
     total_predictions: int

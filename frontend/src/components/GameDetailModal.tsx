@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { api, type GameDetail, type PlayerProp, type PlayerHubRow, type MarketPrediction } from "../api/client";
+import { api, type GameDetail, type PlayerProp, type PlayerHubRow, type MarketPrediction, type TrackRecord } from "../api/client";
 import { favourite } from "../lib/pick";
 import { teamName } from "../lib/teams";
 import { ErrorState, FixtureExplainer, Skeleton, kickoff, pct, stat, statusWords } from "../predictor-ui";
@@ -73,20 +73,6 @@ export function marketVerdict(market: MarketPrediction, detail: GameDetail): boo
   return null;
 }
 
-/** What the model said before tip-off, and whether it counts. */
-function PregamePick({ detail }: { detail: GameDetail }) {
-  const p = detail.prediction;
-  const line = !p
-    ? "No pick was made before tip-off."
-    : (() => {
-        const fav = favourite(p, detail.home_team, detail.away_team);
-        return detail.rebuilt
-          ? `Rebuilt after tip-off: ${fav.team} · ${pct(fav.prob)}. Not counted in the record.`
-          : `Pick before tip-off: ${fav.team} · ${pct(fav.prob)}`;
-      })();
-  return <p className="mb-3 text-sm font-semibold text-pr-text">{line}</p>;
-}
-
 function FormBadge({ result }: { result: string }) {
   return (
     <span
@@ -109,6 +95,12 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
   // from the season hub feed. Fetched separately, and allowed to fail: losing
   // the split must not take the game detail down with it.
   const [hubPlayers, setHubPlayers] = useState<PlayerHubRow[]>([]);
+  // The season's winner-pick record, for the block's record strip. Fetched once
+  // with the modal and allowed to fail, like the hub feed above: losing the
+  // record must not take the game detail down, and a record that cannot be read
+  // is better absent than wrong. `null` while loading and after a failure, so
+  // the block is passed no record at all rather than an empty one.
+  const [trackRecord, setTrackRecord] = useState<TrackRecord[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const titleId = useId();
@@ -130,6 +122,15 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
     api.getHubPlayers()
       .then(setHubPlayers)
       .catch(() => setHubPlayers([]));
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getTrackRecord()
+      .then((rows) => { if (!cancelled) setTrackRecord(rows); })
+      .catch(() => { if (!cancelled) setTrackRecord([]); });
+    return () => { cancelled = true; };
   }, []);
 
   // Focus moves into the dialog on open, and back to the card on close.
@@ -169,6 +170,13 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
     return {
       home_team: detail.home_team,
       away_team: detail.away_team,
+      // The codes are this modal's own vocabulary, and the title above already
+      // spells them out with the same helper. The block's verdict sentence reads
+      // far better as "Celtics is the pick." than as "BOS is the pick." — the
+      // shared `verdictSentence` uses these when the pick matches a side, and
+      // falls back to the code when the site does not carry a full name.
+      home_team_full: teamName(detail.home_team),
+      away_team_full: teamName(detail.away_team),
       home_win_prob: hw,
       away_win_prob: aw,
       pick: fav
@@ -201,6 +209,27 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
         : null,
     });
   }, [detail]);
+  // The record the block may quote, or null when there is nothing true to say.
+  //
+  // `game_outcome` is the only row in `/hub/track-record` that settles the pick
+  // the block just named: `hub_service._settle_game_outcome` grades
+  // `home_win_prob >= 0.5` against the real result over `pre_tip_picks`, so
+  // picks rebuilt after tip-off are already excluded and this row is a
+  // pre-tip-only record by construction — which is exactly the record the spec
+  // §F allows to be described as the record. `h2h` is a different claim (the
+  // same probability measured against the bookmaker's price), so quoting it
+  // here would state one pick two ways.
+  //
+  // No row, no record: the block is passed none and draws no strip, which is
+  // the truthful "we have no record for this yet". A row that exists but has
+  // graded nothing is a real record with no numbers in it, and `RecordStrip`
+  // reads that as the dash. Neither path can print a 0/0.
+  const winnerRecord = useMemo(() => {
+    const row = trackRecord?.find((r) => r.market === "game_outcome");
+    return row
+      ? { label: "Winner pick made before tip-off", hits: row.correct_predictions, settled: row.total_predictions }
+      : null;
+  }, [trackRecord]);
   const pickFav = detail?.prediction ? favourite(detail.prediction, detail.home_team, detail.away_team) : null;
   const marginFav = detail?.prediction ? favoredTeam(detail.prediction.predicted_margin, detail.home_team, detail.away_team) : null;
   // The win and margin numbers come from separate models. When they point at
@@ -269,8 +298,6 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
           )
         )}
 
-        {detail && (detail.completed || detail.rebuilt) && <PregamePick detail={detail} />}
-
         {verdict && (
           <div className="mb-5 border-b border-[var(--color-line)] pb-5 text-sm" data-testid="post-match-verdict">
             <div className="mb-2 flex items-center gap-2">
@@ -297,6 +324,10 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
                 defect: the game carries no market line, so the flow says the
                 pick and stops, and the bar below is the model's own split.
 
+                The block above the button carries the same figures as figures:
+                timing (from `pick_timing`, so a rebuilt pick is badged rather
+                than described twice), the verdict, the tiles and the record.
+
                 FixtureExplainer renders the flow itself and adds the button —
                 mounting a bare FixtureFlow alongside it produced two flows and
                 no button, which is how three tests here spent a cycle failing
@@ -306,7 +337,7 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
               state={detail.completed ? "finished" : "pre-game"}
               bundle={flowBundle}
               request={() => api.explainGame(gameId)}
-              extras={{ tiles: panel.tiles, segments: panel.segments }}
+              extras={{ tiles: panel.tiles, segments: panel.segments, record: winnerRecord ?? undefined, moment: "tip-off" }}
             />
           </div>
         )}

@@ -5,7 +5,16 @@ import GameDetailModal from "./GameDetailModal";
 import { api } from "../api/client";
 
 vi.mock("../api/client", () => ({
-  api: { getGameDetail: vi.fn(), getGamePlayers: vi.fn(), getHubPlayers: vi.fn().mockResolvedValue([]), explainGame: vi.fn() },
+  api: {
+    getGameDetail: vi.fn(),
+    getGamePlayers: vi.fn(),
+    getHubPlayers: vi.fn().mockResolvedValue([]),
+    // The block's record strip reads this. These tests are about the game's own
+    // figures, so it stays empty here — the strip is covered in
+    // GameDetailModal.instant.test.tsx.
+    getTrackRecord: vi.fn().mockResolvedValue([]),
+    explainGame: vi.fn(),
+  },
 }));
 
 afterEach(() => {
@@ -18,6 +27,7 @@ afterEach(() => {
 // or the second test onwards calls undefined.then() and every render throws.
 beforeEach(() => {
   vi.mocked(api.getHubPlayers).mockResolvedValue([]);
+  vi.mocked(api.getTrackRecord).mockResolvedValue([]);
 });
 
 const completedDetail = {
@@ -185,7 +195,11 @@ it("shows a correct winner-call verdict when the favorite actually won", async (
   render(<GameDetailModal gameId="g2" onClose={() => {}} />);
 
   expect(await screen.findByText("Called it ✓")).toBeInTheDocument();
-  expect(screen.getByText("Pick before tip-off: BOS · 62%")).toBeInTheDocument();
+  // The pick is stated by the block, as a verdict. The old one-line
+  // "Pick before tip-off: BOS · 62%" is gone: the block's quiet chip already
+  // says the timing, and a second copy of the same fact in a second sentence is
+  // how two figures end up disagreeing.
+  expect(screen.getByText("Celtics is the pick.")).toBeInTheDocument();
 });
 
 it("shows an incorrect winner-call verdict when the underdog actually won", async () => {
@@ -335,8 +349,11 @@ it("labels a pick rebuilt after tip-off and never judges it", async () => {
 
   render(<GameDetailModal gameId="g2" onClose={() => {}} />);
 
-  expect(await screen.findByText(/Rebuilt after tip-off: BOS · 62%/)).toBeInTheDocument();
+  // The badge says it once. The old prose sentence is gone, and this is the
+  // test that holds it gone.
+  expect(await screen.findByText("Rebuilt after tip-off")).toBeInTheDocument();
   expect(screen.getByText(/not counted/i)).toBeInTheDocument();
+  expect(screen.queryByText(/Rebuilt after tip-off:/)).toBeNull();
   expect(screen.queryByText("Called it ✓")).not.toBeInTheDocument();
   expect(screen.queryByTestId("post-match-verdict")).not.toBeInTheDocument();
 });
@@ -347,7 +364,7 @@ it("says so when no pick was made before a final", async () => {
 
   render(<GameDetailModal gameId="g2" onClose={() => {}} />);
 
-  expect(await screen.findByText("No pick was made before tip-off.")).toBeInTheDocument();
+  expect(await screen.findByText("No pick was made for this fixture.")).toBeInTheDocument();
 });
 
 it("names the teams and writes dates in words", async () => {
@@ -406,7 +423,8 @@ it("labels a rebuilt pick on a game that has not finished", async () => {
 
   render(<GameDetailModal gameId="g1" onClose={() => {}} />);
 
-  expect(await screen.findByText(/Rebuilt after tip-off: BOS · 62%/)).toBeInTheDocument();
+  expect(await screen.findByText("Rebuilt after tip-off")).toBeInTheDocument();
+  expect(screen.getByText(/not counted/i)).toBeInTheDocument();
 });
 
 /** The plain-English panel: flow-first, thin by data. The game carries no
@@ -430,12 +448,18 @@ function openPregame() {
 }
 
 describe("GameDetailModal and the plain-English panel", () => {
-  it("says the pick with no line named, the moment worded for tip-off", async () => {
+  it("says the pick with no line named, and words the moment for tip-off", async () => {
     openPregame();
     render(<GameDetailModal gameId="g1" onClose={() => {}} />);
     const flow = await screen.findByTestId("fixture-flow");
-    expect(flow).toHaveTextContent(/BOS/);
-    expect(flow).toHaveTextContent("before tip-off");
+    // The flow keeps the fixture's own name — that is not a claim — and drops
+    // the sentences that were repeating figures the block now states.
+    expect(flow).toHaveTextContent("BOS vs MIA");
+    expect(flow.innerHTML).not.toContain("Win probabilities");
+    expect(flow.innerHTML).not.toContain("The model picks");
+    // The timing is stated once, by the block, in basketball's words.
+    expect(screen.getByText("Made before tip-off")).toBeInTheDocument();
+    // No line is named, because the game carries none.
     expect(flow.innerHTML).not.toContain("market line");
     expect(flow.innerHTML).not.toContain("market-line");
   });
@@ -451,15 +475,29 @@ describe("GameDetailModal and the plain-English panel", () => {
     expect(explain).toHaveBeenCalledTimes(1);
   });
 
-  it("draws the moneyline split and no spread or total tile", async () => {
+  it("leaves every figure to the block once the summary is in", async () => {
+    // The summary is prose and nothing else. It used to re-render the tiles, the
+    // bar, the legend and the record beside the block that already drew them,
+    // so one figure was on screen twice — and a de-duplication pass would have
+    // had to guess which copy was the real one.
     openPregame();
     vi.mocked(api.explainGame).mockResolvedValue(nbaSummary as never);
     render(<GameDetailModal gameId="g1" onClose={() => {}} />);
     await userEvent.click(await screen.findByRole("button", { name: /ai summary/i }));
     const summary = await screen.findByTestId("fixture-summary");
-    expect(within(summary).getByTestId("tile-moneyline")).toBeInTheDocument();
-    expect(within(summary).queryByTestId("tile-spread")).toBeNull();
-    expect(within(summary).queryByTestId("tile-total")).toBeNull();
+
+    // No figure inside the summary...
+    expect(within(summary).queryByTestId("tile-moneyline")).toBeNull();
+    expect(within(summary).queryAllByTestId("pbar-fill")).toHaveLength(0);
+    expect(within(summary).queryByTestId("pbar-legend")).toBeNull();
+    expect(within(summary).queryByTestId("record-fill")).toBeNull();
+    // ...and exactly one of each in the panel, which the block owns. The game
+    // carries no spread or total line, so those tiles are never drawn at all.
+    const block = screen.getByTestId("instant-block");
+    expect(within(block).getAllByTestId("tile-moneyline")).toHaveLength(1);
+    expect(screen.getAllByTestId("tile-moneyline")).toHaveLength(1);
+    expect(within(block).queryByTestId("tile-spread")).toBeNull();
+    expect(within(block).queryByTestId("tile-total")).toBeNull();
   });
 
   it("shows the flow with no request made when the explainer is unreachable", async () => {

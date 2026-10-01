@@ -6,6 +6,7 @@ blocked from some network environments.
 """
 
 import json
+import re
 from pathlib import Path
 
 import requests
@@ -225,10 +226,56 @@ def get_player_boxscore(event_id: str) -> list[dict]:
     return rows
 
 
+# ESPN's injuries endpoint does NOT send athlete.id (measured 2026-10-01: 0 of
+# 65 live entries had one), but every athlete carries links whose href embeds
+# the same ESPN athlete id get_player_boxscore already stores as player_id --
+# https://www.espn.com/nba/player/_/id/5105571/henri-veesaar, or
+# sportscenter://...?uid=s:40~l:2~a:5105571. Reading it back is an exact key
+# match against player_id, so no player name is ever compared to another. That
+# matters: the injuries feed keys by name and props key by id, and a name join
+# can resolve to the wrong person, which would remove the wrong player from a
+# ranking. Verified against the live payload -- of the 65 entries, the 52 whose
+# displayName was also in data/cache/hub/players.json had ids matching that
+# player's player_id in 52 of 52 cases.
+_PLAYERCARD_ID = re.compile(r"/nba/player/(?:_/)?id/(\d+)")
+# ESPN's playercard link is the first link on the athlete and carries the id
+# plainly. The uid form is a fallback, and only where a: follows one of the
+# delimiters the uid actually uses -- the live href reads
+# "...?uid=s:40~l:46~a:5105571&section=stats" -- so a word ending in "a:"
+# inside some other parameter cannot be read as an id.
+_SPORTSCENTER_UID = re.compile(r"[?&~]a:(\d+)(?![0-9])")
+
+
+def athlete_id_from_links(links: list[dict] | None) -> str:
+    """The ESPN athlete id from an athlete's own links, or "" when absent.
+
+    "" means "could not resolve", never "unknown player": the caller treats it
+    as resolving to nobody, which is the safe direction to fail.
+    """
+    for pattern in (_PLAYERCARD_ID, _SPORTSCENTER_UID):
+        for link in links or ():
+            found = pattern.search(link.get("href") or "")
+            if found:
+                return found.group(1)
+    return ""
+
+
+def _cached_injuries_have_ids(rows) -> bool:
+    """A report cached before ids existed must not be reused: it would carry
+    no resolvable id for every row and silently disable the availability gate,
+    which is the one thing decision 6 forbids. Refetch instead."""
+    return all(isinstance(row, dict) and "player_id" in row for row in rows)
+
+
 def get_injuries() -> list[dict]:
-    """League-wide current injury report."""
+    """League-wide current injury report.
+
+    Rows carry the ESPN athlete id (see athlete_id_from_links) so the
+    availability gate can exclude an out player by exact key. Names are kept
+    for display only.
+    """
     cached = _load_cache("injuries", "current")
-    if cached is not None:
+    if cached is not None and _cached_injuries_have_ids(cached.get("injuries")):
         return cached["injuries"]
 
     data = _fetch_json(f"{ESPN_SITE_BASE}/injuries")
@@ -241,8 +288,13 @@ def get_injuries() -> list[dict]:
             injuries.append(
                 {
                     "team": team_abbr,
+                    "player_id": athlete_id_from_links(athlete.get("links")),
                     "player_name": athlete.get("displayName", ""),
                     "status": entry.get("status", ""),
+                    # ESPN stamps each entry with when the report was updated.
+                    # Reported verbatim; a blank date stays blank rather than
+                    # being backfilled with "today", which would be a fiction.
+                    "dated": entry.get("date", ""),
                 }
             )
 

@@ -1,165 +1,47 @@
+"""NEUTRALISED. This module used to fabricate injury data and now refuses.
+
+What it did, on main up to 2026-09-30: get_current_injuries() returned a
+hardcoded list containing a literal injury for a named real player ("LeBron
+James", Questionable, "Out with right knee soreness"), get_player_injury_history
+returned a hardcoded "Ankle sprain" dated 2023-01-15, and _fetch_player_stats
+returned {} -- all behind a module docstring reading "Uses nbainjuries / NBA
+official injury report with caching and retry logic", and a "# Fetch from API
+(using sample data as placeholder)" comment where the fetch should have been.
+
+It was not dead code either. nba_predictor/data/__init__.py imported it, so
+importing the data package reached the fabrications, and
+features/injuries.py called get_missing_player_value by default, summing a
+fabricated 0.0 for every missing player -- a number that reads exactly like a
+measured zero. Any production path that had used this module would have
+reported an injury that does not exist, attributed to a real person.
+
+Every entry point now raises NotImplementedError. It is kept, rather than
+deleted, so the import in features/injuries.py and data/__init__.py resolves
+and a future caller fails loudly at the call instead of silently importing a
+fake. tests/test_data_injuries.py pins the refusal and asserts the fabricated
+strings are gone from this source.
+
+THE REAL SOURCE for availability is nba_predictor.data.espn.get_injuries(),
+which fetches ESPN's live report and resolves each row to the same ESPN
+athlete id the prop rows are keyed by.
 """
-Injury report module for fetching NBA injury data from the official injury report.
-Uses nbainjuries / NBA official injury report with caching and retry logic.
-"""
-
-import json
-import os
-import time
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
-from typing import Optional
-
-import requests
-
-from nba_predictor.config import CACHE_DIR
-
-# Cache directory for injuries data
-INJURIES_CACHE_DIR = CACHE_DIR / "injuries"
-
-# Retry configuration
-MAX_RETRIES = 5
-INITIAL_BACKOFF = 1.0  # seconds
 
 
-def _get_cache_path(filename: str) -> Path:
-    """Get the full path for a cache file."""
-    return INJURIES_CACHE_DIR / filename
-
-
-def _read_cache(cache_file: Path) -> Optional[dict]:
-    """Read cached data from a file."""
-    try:
-        if cache_file.exists():
-            with open(cache_file, "r") as f:
-                return json.load(f)
-    except (json.JSONDecodeError, IOError):
-        pass
-    return None
-
-
-def _write_cache(cache_file: Path, data: dict) -> None:
-    """Write data to cache file."""
-    cache_file.parent.mkdir(parents=True, exist_ok=True)
-    with open(cache_file, "w") as f:
-        json.dump(data, f)
-
-
-def _fetch_with_retry(url: str, max_retries: int = MAX_RETRIES) -> dict:
-    """Fetch data from URL with exponential backoff retry logic."""
-    backoff = INITIAL_BACKOFF
-    for attempt in range(max_retries):
-        try:
-            response = requests.get(url, timeout=30)
-            response.raise_for_status()
-            return response.json()
-        except requests.RequestException as e:
-            if attempt < max_retries - 1:
-                time.sleep(backoff)
-                backoff *= 2
-            else:
-                raise
-
-
-def _fetch_injury_report() -> list[dict]:
-    """Fetch current injury report from NBA official source."""
-    now = datetime.now(timezone.utc)
-    sample_injuries = [
-        {
-            "player_id": 203999,
-            "player_name": "LeBron James",
-            "team_id": 1610612747,
-            "team_abbreviation": "LAL",
-            "description": "Lower extremity injury",
-            "status": "Questionable",
-            "date": now.strftime("%Y-%m-%d"),
-            "detail": "Out with right knee soreness"
-        },
-    ]
-    return sample_injuries
+def _refuse(name: str):
+    raise NotImplementedError(
+        f"data/injuries.py.{name} is neutralised: it returned fabricated sample data "
+        "(a hardcoded injury for a named real player), not a real injury report. "
+        "Use nba_predictor.data.espn.get_injuries(), which reads ESPN's live report."
+    )
 
 
 def get_current_injuries() -> list[dict]:
-    """Get current injury report.
-
-    Returns:
-        List of injury report entries
-    """
-    cache_file = _get_cache_path("current_injuries.json")
-    cached = _read_cache(cache_file)
-    if cached is not None:
-        if isinstance(cached, list):
-            return cached
-        if isinstance(cached, dict):
-            return cached.get("injuries", [])
-
-    # Fetch from API (using sample data as placeholder)
-    injuries = _fetch_injury_report()
-    _write_cache(cache_file, {"injuries": injuries})
-    return injuries
+    _refuse("get_current_injuries")
 
 
 def get_player_injury_history(player_id: int) -> list[dict]:
-    """Get injury history for a player.
-
-    Args:
-        player_id: The NBA player ID
-
-    Returns:
-        List of injury history entries
-    """
-    cache_file = _get_cache_path(f"injury_history_{player_id}.json")
-    cached = _read_cache(cache_file)
-    if cached is not None:
-        if isinstance(cached, list):
-            return cached
-        if isinstance(cached, dict):
-            return cached.get("history", [])
-
-    # Fetch from API (using sample data as placeholder)
-    history = [
-        {
-            "date": "2023-01-15",
-            "description": "Ankle sprain",
-            "status": "Out",
-        }
-    ]
-    _write_cache(cache_file, {"history": history})
-    return history
+    _refuse("get_player_injury_history")
 
 
 def get_missing_player_value(player_id: int, season: int) -> float:
-    """Compute production value for missing player.
-
-    Args:
-        player_id: The NBA player ID
-        season: The NBA season year
-
-    Returns:
-        Float representing the production value of the missing player
-    """
-    cache_file = _get_cache_path(f"missing_value_{player_id}_{season}.json")
-    cached = _read_cache(cache_file)
-    if cached is not None:
-        if isinstance(cached, dict):
-            return float(cached.get("value", 0.0))
-        return float(cached)
-
-    # Fetch stats (using sample data as placeholder)
-    stats = _fetch_player_stats(player_id, season)
-    value = 0.0
-    if stats and "stats" in stats:
-        s = stats["stats"]
-        value = float(s.get("points_per_game", 0)) + float(s.get("rebounds_per_game", 0)) + float(s.get("assists_per_game", 0))
-
-    _write_cache(cache_file, {"value": value})
-    return value
-
-
-def _fetch_player_stats(player_id: int, season: int) -> dict:
-    """Fetch player stats for a season."""
-    return {}
-
-
-if __name__ == "__main__":
-    print("Injuries module loaded successfully")
+    _refuse("get_missing_player_value")

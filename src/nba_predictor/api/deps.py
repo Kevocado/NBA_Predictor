@@ -19,6 +19,32 @@ def get_schedule(schedule_path: Path = Depends(get_schedule_path)) -> list[dict]
     return load_schedule(schedule_path)
 
 
+def get_injury_report() -> list[dict]:
+    """ESPN's live injury report, rows keyed by the ESPN athlete id.
+
+    A dependency rather than a direct call, so the availability gate's feed is
+    substitutable and no test can reach the network through it.
+
+    A feed we cannot read is NOT a report that came back empty, and the two
+    must not look alike: the props route turns this into a 503 rather than
+    serving a ranking nobody checked for availability. Decision 6 of the
+    fixture-insight spec is that NBA picks do not ship without the gate.
+    """
+    from nba_predictor.data import espn
+
+    try:
+        return espn.get_injuries()
+    except Exception as exc:  # noqa: BLE001 - any feed failure fails closed
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Availability could not be checked: ESPN's injury report is "
+                f"unavailable ({type(exc).__name__}). Player picks are withheld "
+                "rather than ranked without an availability gate."
+            ),
+        ) from exc
+
+
 def require_admin() -> None:
     if config.PUBLIC_MODE:
         raise HTTPException(status_code=404, detail="Not found")

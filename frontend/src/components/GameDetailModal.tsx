@@ -167,14 +167,57 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
       detail.home_pts != null && detail.away_pts != null
         ? { home: detail.home_pts, away: detail.away_pts }
         : undefined;
+    /* THE BARE HEADING, and why the sides are spelled two ways here.
+       Measured across the three states rather than assumed:
+         - pre-game  — the flow's ONLY row was the fixture's own name, so the
+                       live modal showed an `MIA vs TOR` heading with nothing
+                       under it, directly above the AI button.
+         - finished  — two REAL sentences (the result, and the pick's
+                       rightness). These are live content and they stay.
+       So this is not a deletion of the flow; it is the heading being
+       conditional on rows existing beneath it, expressed in the only place a
+       site may express it -- the bundle it hands over.
+
+       `FixtureFlow` reads the sides under `home_team`/`away_team` for BOTH its
+       pre-game name row AND its finished result sentence, so one spelling
+       cannot suppress the first without breaking the second. `bundleFacts`
+       (which is what the block's verdict sentence goes through) reads
+       `home_team ?? team_home`, and both spellings are part of that package's
+       documented contract -- its own header names PL's `team_home` and Sports'
+       `home_team` as the two shapes it exists to bridge. So:
+
+         - ALWAYS carry `team_home`/`team_away`, which the block's
+           `fullTeamName` reads to expand "TOR" into "Raptors is the pick."
+           Without this the block would fall back to the bare code.
+         - carry `home_team`/`away_team` ONLY when the flow has a sentence that
+           needs them -- i.e. once there is a score or a result. Pre-game there
+           is no such sentence, and withholding the spelling the name row reads
+           is what leaves the flow empty instead of bare.
+
+       The block's figures do not depend on either key: `panelFacts` is handed
+       this site's own game object, not the bundle, so the tile and the bar are
+       unchanged by which spelling is present. */
+    // The one condition the pre-game name row keys on, and nothing else: only
+    // `home_team`/`away_team` make it exist, and only `in-play`/`finished` rows
+    // need those keys to speak. Pre-game has neither, so withholding the keys
+    // is what makes that row impossible rather than merely unlikely.
+    const namesForSentences = Boolean(score) || detail.completed;
     return {
-      home_team: detail.home_team,
-      away_team: detail.away_team,
+      team_home: detail.home_team,
+      team_away: detail.away_team,
+      ...(namesForSentences
+        ? { home_team: detail.home_team, away_team: detail.away_team }
+        : {}),
       // The codes are this modal's own vocabulary, and the title above already
       // spells them out with the same helper. The block's verdict sentence reads
       // far better as "Celtics is the pick." than as "BOS is the pick." — the
       // shared `verdictSentence` uses these when the pick matches a side, and
       // falls back to the code when the site does not carry a full name.
+      // Spelled under BOTH keys for the reason above: the block reads whichever
+      // alias `fullTeamName` resolves, and the flow's finished sentences read
+      // the `home_team` one.
+      team_home_full: teamName(detail.home_team),
+      team_away_full: teamName(detail.away_team),
       home_team_full: teamName(detail.home_team),
       away_team_full: teamName(detail.away_team),
       home_win_prob: hw,
@@ -230,6 +273,27 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
       ? { label: "Winner pick made before tip-off", hits: row.correct_predictions, settled: row.total_predictions }
       : null;
   }, [trackRecord]);
+  // The flow's state, derived ONCE and used for both the bundle and the prop,
+  // because the bare-heading rule is a rule about the PAIR: the bundle withholds
+  // `home_team` when the flow has nothing to say, and the prop has to be asking
+  // the flow for that same nothing. Two separate derivations of "is this
+  // finished?" is how the two drifted apart in the first place -- a live game
+  // (`completed: false`, score present) took the PRE-GAME branch while the
+  // bundle had already handed over the team names the pre-game name row reads,
+  // which put the bare heading back on screen for exactly the games that have a
+  // score to say.
+  //
+  // `in-play` is not decoration: `FixtureFlow`'s in-play rows are the score
+  // sentence and (where a line exists) how it stands, and this site's data does
+  // carry a partial score on an un-finished game. Those are real sentences, so
+  // a live game asks for them rather than asking for a name.
+  const flowState = !detail
+    ? ("pre-game" as const)
+    : detail.completed
+      ? ("finished" as const)
+      : detail.home_pts != null && detail.away_pts != null
+        ? ("in-play" as const)
+        : ("pre-game" as const);
   const pickFav = detail?.prediction ? favourite(detail.prediction, detail.home_team, detail.away_team) : null;
   const marginFav = detail?.prediction ? favoredTeam(detail.prediction.predicted_margin, detail.home_team, detail.away_team) : null;
   // The win and margin numbers come from separate models. When they point at
@@ -277,17 +341,31 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
           </div>
         ) : (
           detail?.prediction && (
-            <div className="mb-5 grid grid-cols-3 gap-4 border-b border-[var(--color-line)] pb-5">
+            /* THE FIELD-BY-FIELD AUDIT, and the reason this strip is two cells
+               rather than three or none.
+               This used to read `53% TOR to win | TOR by 4.8 | 230.6` ABOVE the
+               instant block, so the pick probability was on the page three
+               times: here, in the block's `moneyline` tile, and on the bar. Per
+               the one-source rule the block owns the figures, so that cell is
+               GONE -- the block's tile states the probability and which side it
+               is, which is what this cell was saying in two pieces.
+
+               The other two are KEPT, and the reason is measured rather than
+               assumed: the game carries no market line (142 of 142 bundles), so
+               `panelFacts` builds no spread tile and no total tile for it. The
+               block therefore has no copy of the projected margin or the
+               projected total, and this strip is their only source on the page.
+               Deleting the strip wholesale would have removed two figures that
+               exist nowhere else -- which is the opposite of the duplication
+               rule, which is about a figure appearing twice, not once.
+
+               Finished games do not render this strip at all (the Final block
+               above owns that state, and the post-match review below states the
+               prediction against what actually happened, which is a different
+               set of figures entirely). */
+            <div className="mb-5 grid grid-cols-2 gap-4 border-b border-[var(--color-line)] pb-5">
               <div>
-                <div className="stat-display text-2xl leading-none text-[var(--color-hardwood-bright)]">
-                  {Math.round((pickFav?.prob ?? 0) * 100)}%
-                </div>
-                <div className="mt-1 text-xs text-[var(--color-net-dim)]">{pickFav?.team} to win</div>
-              </div>
-              <div>
-                <div className="stat-display text-2xl leading-none">
-                  {marginLabel}
-                </div>
+                <div className="stat-display text-2xl leading-none">{marginLabel}</div>
                 <div className="mt-1 text-xs text-[var(--color-net-dim)]">Projected margin</div>
               </div>
               <div>
@@ -334,7 +412,7 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
                 to find "Get the AI summary". */}
             <FixtureExplainer
               sport="nba"
-              state={detail.completed ? "finished" : "pre-game"}
+              state={flowState}
               bundle={flowBundle}
               request={() => api.explainGame(gameId)}
               extras={{ tiles: panel.tiles, segments: panel.segments, record: winnerRecord ?? undefined, moment: "tip-off" }}

@@ -324,15 +324,23 @@ it("names the favoured side for the margin when both models agree", async () => 
   vi.mocked(api.getGameDetail).mockResolvedValue({ ...detail, prediction: { home_win_probability: 0.47, predicted_margin: -4.8, predicted_total: 221.3 } });
   vi.mocked(api.getGamePlayers).mockResolvedValue([]);
   render(<GameDetailModal gameId="g1" onClose={() => {}} />);
-  expect(await screen.findByText("MIA to win")).toBeInTheDocument();
-  expect(screen.getByText("MIA by 4.8")).toBeInTheDocument();
+  // The margin strip names the side it measures. The "TOR to win" line that
+  // used to sit beside it is gone: the pick is the block's, stated once by its
+  // tile, and the strip's own job is the margin.
+  expect(await screen.findByText("MIA by 4.8")).toBeInTheDocument();
+  // ...and the block still states the pick, so removing the header's copy cost
+  // the page nothing: it is here, exactly once. The tile carries the LEADING
+  // side, which at home_win_probability 0.47 is the away side at 53%.
+  expect(screen.getByTestId("tile-moneyline")).toHaveTextContent("53%");
+  expect(screen.getByTestId("tile-moneyline")).toHaveTextContent("MIA");
 });
 
 it("calls the margin a toss-up when it disagrees with the win pick or is under half a point", async () => {
   vi.mocked(api.getGameDetail).mockResolvedValue({ ...detail, prediction: { home_win_probability: 0.52, predicted_margin: -0.6, predicted_total: 221.3 } });
   vi.mocked(api.getGamePlayers).mockResolvedValue([]);
   const { unmount } = render(<GameDetailModal gameId="g1" onClose={() => {}} />);
-  expect(await screen.findByText("BOS to win")).toBeInTheDocument();
+  // The block names the pick; the strip refuses to contradict it.
+  expect(await screen.findByTestId("tile-moneyline")).toHaveTextContent("52%");
   expect(screen.getByText("Toss-up")).toBeInTheDocument();
   expect(screen.queryByText(/MIA by/)).not.toBeInTheDocument();
   unmount();
@@ -452,9 +460,13 @@ describe("GameDetailModal and the plain-English panel", () => {
     openPregame();
     render(<GameDetailModal gameId="g1" onClose={() => {}} />);
     const flow = await screen.findByTestId("fixture-flow");
-    // The flow keeps the fixture's own name — that is not a claim — and drops
-    // the sentences that were repeating figures the block now states.
-    expect(flow).toHaveTextContent("BOS vs MIA");
+    // Before tip-off the flow has nothing to say that the block does not say
+    // better, so it says nothing at all. It used to render the fixture's own
+    // name as a heading here — a bare `BOS vs MIA` with no sentence under it,
+    // directly above the AI button. Asserted as the absence of a heading, so a
+    // rename of the teams cannot let it back through.
+    expect(flow.querySelector("h1, h2, h3, h4, h5, h6")).toBeNull();
+    expect(flow.textContent?.trim()).toBe("");
     expect(flow.innerHTML).not.toContain("Win probabilities");
     expect(flow.innerHTML).not.toContain("The model picks");
     // The timing is stated once, by the block, in basketball's words.
@@ -505,7 +517,11 @@ describe("GameDetailModal and the plain-English panel", () => {
     const explain = vi.mocked(api.explainGame).mockRejectedValue(new Error("unreachable"));
     render(<GameDetailModal gameId="g1" onClose={() => {}} />);
     const flow = await screen.findByTestId("fixture-flow");
-    expect(flow).toHaveTextContent(/BOS vs MIA/);
+    // The panel survives a failed request: the facts are still on screen and the
+    // button offers a retry. The flow is mounted and empty here, which is the
+    // same shape it has pre-game whether or not the summary can be fetched.
+    expect(flow).toBeInTheDocument();
+    expect(flow.querySelector("h1, h2, h3, h4, h5, h6")).toBeNull();
     expect(explain).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: /ai summary/i })).toBeInTheDocument();
     expect(screen.queryByRole("alert")).toBeNull();

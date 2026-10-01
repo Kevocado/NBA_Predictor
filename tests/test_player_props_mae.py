@@ -149,22 +149,37 @@ def test_the_mae_is_not_rebuilt_from_the_whole_schedule_on_every_request(tmp_pat
 
 
 def _reference_resolved(db_path, schedule):
-    """The pre-optimisation algorithm, kept here as the specification: one pair of
-    queries per scheduled game. The bulk version must return exactly this."""
-    from nba_predictor.tracking.player_props import actuals_by_player_stat, picks_by_player_stat
+    """The per-game algorithm, kept here as the specification of the bulk one.
+
+    Rewritten with the bulk version on 2026-10-01 (predictor-hub #66). The old
+    reference went through `picks_by_player_stat` and dropped every `rebuilt`
+    row, so it encoded the exclusion this change removed: for its `_seed` below
+    it returned ONE row (points 20.0 -> 24.0), because game B's only pick was a
+    backtest row. The new reference counts one row per (game, player, stat) --
+    the EARLIEST recorded, whenever it was made -- and returns TWO.
+
+    `picks_by_player_stat` is still the DISPLAY rule (newest pre-tip row, else
+    the newest) and is no longer what the MAE grades. That is deliberate and
+    documented at both definitions.
+    """
+    from nba_predictor.tracking.player_props import actuals_by_player_stat
+    from nba_predictor.tracking.timing import earliest_recorded
+    from nba_predictor.tracking import store
+
     out = []
     for game in schedule:
         gid = game.get("game_id")
         if not gid:
             continue
         actuals = actuals_by_player_stat(db_path, gid)
-        for key, (pick, rebuilt) in picks_by_player_stat(db_path, gid, game).items():
-            if rebuilt or pick is None:
-                continue
-            actual = actuals.get(key)
+        rows = store.get_player_predictions_for_game(db_path, gid)
+        for pick in earliest_recorded(rows):
+            actual = actuals.get((pick["player_id"], pick["stat"]))
             if actual is None:
                 continue
-            out.append({"stat": key[1], "predicted_value": pick["predicted_value"], "actual_value": actual})
+            out.append({"game_id": gid, "player_id": pick["player_id"], "stat": pick["stat"],
+                        "predicted_value": pick["predicted_value"], "actual_value": actual,
+                        "created_at": pick["created_at"]})
     return out
 
 
@@ -172,11 +187,14 @@ def _seed(tmp_path):
     from nba_predictor.tracking import store
     db = tmp_path / "tracking.db"
     store.init_db(db)
-    # Game A: pick before tip (counts), a later backtest row (must be ignored), an actual.
+    # Game A: a pre-tip pick (counts), a later rerun of it (history, not graded),
+    # and an actual. The rerun is the better guess (99.0 vs 20.0) and must not
+    # be the graded one, or re-running the model until it looked right is free.
     store.insert_player_prediction(db, game_id="A", player_id="p1", stat="points", predicted_value=20.0, created_at="2026-10-01T10:00:00Z")
     store.insert_player_prediction(db, game_id="A", player_id="p1", stat="points", predicted_value=99.0, created_at="2026-10-02T10:00:00Z")
     store.insert_player_outcome(db, game_id="A", player_id="p1", stat="points", actual_value=24.0, recorded_at="2026-10-02T09:00:00Z")
-    # Game B: ONLY a post-tip (rebuilt) row, with an actual -> excluded.
+    # Game B: only a post-tip (rebuilt) row, with an actual. Excluded before
+    # 2026-10-01; a recorded pick now.
     store.insert_player_prediction(db, game_id="B", player_id="p2", stat="assists", predicted_value=7.0, created_at="2026-10-03T10:00:00Z")
     store.insert_player_outcome(db, game_id="B", player_id="p2", stat="assists", actual_value=3.0, recorded_at="2026-10-03T11:00:00Z")
     # Game C: pick before tip, NO actual yet -> unresolved.
@@ -195,8 +213,18 @@ def test_the_bulk_resolution_returns_exactly_what_the_per_game_algorithm_did(tmp
     db, schedule = _seed(tmp_path)
     expected = sorted(_reference_resolved(db, schedule), key=lambda r: (r["stat"], r["predicted_value"]))
     got = sorted(resolved_player_props(db, schedule), key=lambda r: (r["stat"], r["predicted_value"]))
-    assert got == expected
-    assert [(r["stat"], r["predicted_value"], r["actual_value"]) for r in got] == [("points", 15.0, 18.0), ("points", 20.0, 24.0)]
+    assert [{k: v for k, v in r.items() if k != "made_before_tip"} for r in got] == expected
+    # Three rows, one per (game, player, stat): game A's EARLIEST points pick
+    # (20.0, not the 99.0 rerun), game B's post-tip assists, game D's points.
+    # The old rule returned two of these -- points 20.0 and points 15.0 -- and
+    # dropped game B entirely.
+    assert [(r["game_id"], r["stat"], r["predicted_value"], r["actual_value"]) for r in got] == [
+        ("B", "assists", 7.0, 3.0),      # sorted by (stat, predicted_value)
+        ("D", "points", 15.0, 18.0),
+        ("A", "points", 20.0, 24.0),     # A's EARLIEST pick, not the 99.0 rerun
+    ]
+    # And the disclosure is on the row, so the two figures need no second pass.
+    assert {(r["game_id"], r["made_before_tip"]) for r in got} == {("A", True), ("B", False), ("D", True)}
 
 
 def test_resolving_a_full_season_does_not_open_a_connection_per_scheduled_game(tmp_path, monkeypatch):

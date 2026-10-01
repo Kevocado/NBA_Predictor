@@ -72,12 +72,31 @@ class PlayerPropOut(BaseModel):
     actual_value: float | None = None
     # Built after tip-off (the retrain backtest): shown, never judged.
     rebuilt: bool = False
-    # In-sample mean absolute error for this stat over resolved rows only (see
+    # In-sample mean absolute error for this stat (see
     # models.player_props.in_sample_mae_by_stat). None when nothing has been
     # resolved for the stat yet -- never 0.0, which would claim the model never
     # missed by a tenth of a point. The site renders this as "+/- N" next to
     # the projection, or says it has no error estimate yet.
+    #
+    # This is the HEADLINE: over every COUNTED pick for this stat -- one per
+    # (game, player, stat), the earliest recorded, whenever it was made. Before
+    # 2026-10-01 (predictor-hub #66) it was the pre-tip-only figure and a game
+    # whose only pick came from the retrain backtest contributed nothing, which
+    # is how a projection could sit on the page for a season with no error
+    # estimate at all. The name is unchanged, so every reader of it now sees
+    # the fuller record.
     mae: float | None = None
+    # The same error estimate over the picks made BEFORE tip-off only: what the
+    # model would have said on the night. Published beside `mae` because the
+    # two differ, and a reader comparing a model against a book needs to know
+    # which one they are reading. None when no counted pick for this stat was
+    # made in time -- never 0.0, for the same reason as `mae`.
+    mae_pre_tip: float | None = None
+    # The n behind each figure. An error estimate with no count beside it is a
+    # number nobody can weigh, and the pre-tip figure is the one most likely to
+    # be thin -- so both travel with it rather than being reconstructed.
+    mae_n: int = 0
+    mae_n_pre_tip: int = 0
 
 
 class OutPlayerOut(BaseModel):
@@ -119,26 +138,105 @@ class DoubtfulPlayerOut(BaseModel):
     dated: str
 
 
+class TrackRecordTallyOut(BaseModel):
+    """The secondary figure: the same tally over the picks made BEFORE tip-off.
+
+    A whole sub-record rather than three loose numbers, so the pre-tip figure
+    carries its own n, its own rate and its own week table exactly as the
+    headline does. Its `n` is the size of that subset by construction -- it is
+    the same summariser over the same counted rows, filtered by the derivation
+    in `tracking.timing.made_before_tip`, not a figure reconciled by hand.
+    """
+    total_predictions: int
+    correct_predictions: int
+    # None when nothing in the subset graded: 0.0 would claim every one missed.
+    hit_rate: float | None = None
+    n_push: int = 0
+    # The same window as the headline's, filled by compute_track_record.
+    weekly: list["TrackRecordWeekOut"] = []
+
+
+class TrackRecordPickOut(BaseModel):
+    """One recorded pick for one market, with when it was made.
+
+    Disclosure is per pick, not only in aggregate: `made_before_tip` is derived
+    on every read from this row's own `created_at` against the game's tip-off,
+    compared as UTC instants and failing closed to False, and `created_at` is
+    published next to it so a reader can check the derivation rather than take
+    it on trust. A pick made after tip-off is never presented as one made
+    before.
+
+    `counted` says whether this row is the one the headline scored. A rerun
+    that lost the earliest-pick contest is still here -- recorded stays
+    recorded -- and is marked `counted: false` so the rows a reader tallies are
+    exactly the rows that produced the number above them.
+    """
+    game_id: str
+    market: str
+    # What the model backed, in words, with the line it was priced at.
+    pick: str
+    # What actually happened, in the same words.
+    actual: str
+    # None for a push or a row with no line: nobody won it, so it is not a miss.
+    hit: bool | None = None
+    made_before_tip: bool
+    created_at: str
+    counted: bool = True
+    gameday: str | None = None
+
+
 class TrackRecordOut(BaseModel):
     market: str
     total_predictions: int
     correct_predictions: int
     # None when nothing was graded: 0.0 would claim every graded pick missed,
     # which is a different statement from "never measured".
+    #
+    # These three are the HEADLINE: every COUNTED pick, whenever it was made.
+    # One counted pick per (game, market) -- the EARLIEST recorded, so a rerun
+    # of the model neither replaces the pick nor grades a second time. Before
+    # 2026-10-01 (predictor-hub #66) they were the pre-tip-only figures and a
+    # game whose every pick came from a rerun was reported as `n_rebuilt` and
+    # left out of all three; the names are unchanged, so every existing reader
+    # now sees the fuller record without being renamed out of it.
     hit_rate: float | None = None
-    # Final games whose only picks were made after tip-off: left out above.
+    # RENAMED IN MEANING, name kept: this used to count finals LEFT OUT of the
+    # record. It is now the number of graded counted picks made at or after
+    # their own tip-off, which makes it the reconciliation between the two
+    # figures -- `total_predictions == pre_tip.total_predictions + n_rebuilt` --
+    # rather than a confession that a third of the record was withheld. A
+    # reader who wants to know how much of the headline is the rerun rather
+    # than the night subtracts; a reader who wants the night reads `pre_tip`.
     n_rebuilt: int = 0
+    # The size of the pre-tip subset, for a one-number read without descending
+    # into `pre_tip`. Equal to `pre_tip.total_predictions` by construction.
+    n_pre_tip: int = 0
     # Picks left out of the rate because there was nothing to grade them
     # against: the margin landed exactly on the line (a push), or the row
-    # carried no line. Counted, never scored as a miss.
+    # carried no line. Counted, never scored as a miss. In `n_push` for both
+    # the headline and the pre-tip figure, so the reconciliation above holds
+    # across a push.
     n_push: int = 0
+    # Counted picks the schedule cannot date (no game_date and no tip_off), so
+    # they are in the headline and in `per_pick` but in no week row. Stated
+    # rather than dropped: a week table that sums to `total - n_unplaced` reads
+    # as a broken identity until the difference is named.
+    n_unplaced: int = 0
     # False when this repo has no rule for judging the market (or no results
     # to judge it against). The site shows the stored count and says so, and
-    # never a fabricated 0%.
+    # never a fabricated 0%. An unsettled row has no pre-tip figure: there is
+    # no rule to apply it with.
     settled: bool = True
+    # The pre-tip subset beside the headline: what the model would have said on
+    # the night. None only where `settled` is false.
+    pre_tip: TrackRecordTallyOut | None = None
+    # Every recorded pick for this market, counted or not, with its own
+    # timestamp and its own pre-tip label.
+    per_pick: list[TrackRecordPickOut] = []
     # Every week from the first tracked week through this week, gaps filled in
     # with tracked=false so a week with no picks reads as "not tracked"
     # instead of vanishing. Empty when the tracking DB has nothing to date.
+    # This is the HEADLINE's week table: its n adds up to `total_predictions`.
     weekly: list["TrackRecordWeekOut"] = []
 
 

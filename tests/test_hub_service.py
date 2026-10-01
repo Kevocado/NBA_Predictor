@@ -150,7 +150,19 @@ def test_compute_track_record_settles_h2h_market_predictions(tmp_path):
     assert h2h.hit_rate == 1.0
 
 
-def test_track_record_counts_only_picks_made_before_tip_off(tmp_path):
+def test_track_record_counts_a_pick_made_after_tip_off_with_the_pre_tip_subset_beside_it(tmp_path):
+    """The old rule, rewritten: g2's backtest row was left out of every rate.
+
+    This test was `test_track_record_counts_only_picks_made_before_tip_off` and
+    asserted `total_predictions == 1` / `n_rebuilt == 1` for this fixture: g1
+    has a pre-tip pick it got right, g2 has only a backtest row it also got
+    right, and g2 was dropped because the model was rerun on it after the game.
+    That is the "with every model change it will stop tracking" failure.
+
+    Now both count -- 2/2 -- and the pre-tip subset beside them is the 1/1 the
+    old headline showed, with its own n. `n_rebuilt` is no longer the count of
+    what was withheld; it is the reconciliation between the two figures.
+    """
     from nba_predictor.services.hub_service import compute_track_record
     from nba_predictor.tracking import store
 
@@ -165,7 +177,8 @@ def test_track_record_counts_only_picks_made_before_tip_off(tmp_path):
         db_path, game_id="g1", created_at="2026-09-20T08:00:00+00:00", model_version="v2",
         home_win_prob=0.3, predicted_margin=-2.0, predicted_total=220.0,
     )
-    # g2: only a backtest row, rebuilt after the game. Never counted.
+    # g2: only a backtest row, written after the game. Counted now, and never
+    # presented as a pre-game pick.
     store.insert_prediction(
         db_path, game_id="g2", created_at="2026-09-20T08:00:00+00:00", model_version="v2",
         home_win_prob=0.4, predicted_margin=-3.0, predicted_total=215.0,
@@ -177,12 +190,30 @@ def test_track_record_counts_only_picks_made_before_tip_off(tmp_path):
 
     game_outcome = next(r for r in compute_track_record(db_path, schedule) if r.market == "game_outcome")
 
-    assert game_outcome.total_predictions == 1
-    assert game_outcome.correct_predictions == 1
+    assert game_outcome.total_predictions == 2
+    assert game_outcome.correct_predictions == 2
+    # The pre-tip subset is the figure the old headline published.
+    assert game_outcome.n_pre_tip == 1
+    assert game_outcome.pre_tip.total_predictions == 1
+    assert game_outcome.pre_tip.correct_predictions == 1
     assert game_outcome.n_rebuilt == 1
+    assert game_outcome.total_predictions == game_outcome.pre_tip.total_predictions + game_outcome.n_rebuilt
+    # Disclosure is per pick, and g1's counted pick is the pre-tip one even
+    # though the backtest row for it is the better guess.
+    assert {p.game_id: p.made_before_tip for p in game_outcome.per_pick if p.counted} == {
+        "g1": True, "g2": False,
+    }
 
 
-def test_track_record_h2h_ignores_market_rows_made_after_tip_off(tmp_path):
+def test_track_record_h2h_counts_a_market_row_written_after_tip_off(tmp_path):
+    """The old rule, rewritten: this market row was graded by nobody.
+
+    It was `test_track_record_h2h_ignores_market_rows_made_after_tip_off` and
+    asserted `total_predictions == 0` for a single h2h row written after
+    tip-off: the whole market was absent from the record because a model change
+    had been run on it. Now the row is the counted pick for that (game, market),
+    the verdict is graded, and it is labelled not-pre-tip.
+    """
     from nba_predictor.services.hub_service import compute_track_record
     from nba_predictor.tracking import store
 
@@ -197,8 +228,11 @@ def test_track_record_h2h_ignores_market_rows_made_after_tip_off(tmp_path):
 
     h2h = next(r for r in compute_track_record(db_path, schedule) if r.market == "h2h")
 
-    assert h2h.total_predictions == 0
-    assert h2h.correct_predictions == 0
+    assert h2h.total_predictions == 1
+    assert h2h.correct_predictions == 0, "MIA was picked and BOS won"
+    assert h2h.n_pre_tip == 0
+    assert h2h.pre_tip.total_predictions == 0
+    assert h2h.per_pick[0].made_before_tip is False
 
 
 def test_track_record_settles_spread_picks_against_the_closing_line(tmp_path):

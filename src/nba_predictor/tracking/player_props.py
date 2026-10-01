@@ -1,25 +1,46 @@
-"""Player props: the pre-tip pick per player+stat, and the resolved MAE.
+"""Player props: the COUNTED pick per player+stat, and the resolved MAE.
 
 The MAE is computed from RESOLVED rows only -- rows with both a prediction and
-a recorded actual. It grades the same pick the endpoint serves (the newest
-made before tip-off, else the newest, flagged rebuilt), because a "+/-" beside
-a projection must describe the number being shown, not some other snapshot of
-it.
+a recorded actual. It grades the same pick the track record counts: the
+EARLIEST recorded one for that (game, player, stat), whenever it was made
+(`track-record-counts-every-pick`, predictor-hub #66, 2026-10-01). A backtest
+row -- a prediction written after the game was played and scored against that
+game's result -- is a recorded pick, so it counts, and it is labelled
+`made_before_tip: False` rather than dropped.
 
-A backtest row -- a prediction written after the game was played and scored
-against that game's result -- contributes nothing. Same reason CFB's track
-record has to stop counting post-kickoff picks: judging a look-forward pick
-makes the error estimate smaller than the error a real bettor would have seen.
+Before that decision this module graded "the newest row made before tip-off,
+else the newest, flagged rebuilt" and skipped the rebuilt ones outright. The
+docstring here used to argue for that exclusion by appealing to CFB's track
+record. It no longer does, because CFB's track record reversed too (CFB #27):
+the exclusion was not accuracy, it was a record that stopped tracking.
+
+**What did not change, deliberately:** `picks_by_player_stat` -- what the
+site shows beside a box score -- still serves the newest pre-tip row, because
+a projection printed next to a game's result has to be the freshest thing the
+model said about it, not the first. The record and the display answer two
+different questions and are built from two different helpers, each documented
+at its own definition.
 """
 
 from pathlib import Path
 
 from nba_predictor.tracking import store
-from nba_predictor.tracking.timing import latest_by_instant, latest_pre_tip
+from nba_predictor.tracking.timing import (
+    earliest_recorded,
+    latest_by_instant,
+    latest_pre_tip,
+    made_before_tip,
+)
 
 
 def _picks_from_rows(rows, game: dict) -> dict[tuple[str, str], dict]:
-    """{(player_id, stat): (pick_row, rebuilt)} from one game's snapshot rows."""
+    """{(player_id, stat): (pick_row, rebuilt)} from one game's snapshot rows.
+
+    The serving rule, unchanged: the newest row made before tip-off, else the
+    newest row at all with `rebuilt` set. `rebuilt` means "this row was written
+    after the game started", which is a statement about time, not about
+    counting -- the track record counts rebuilt rows and says so per pick.
+    """
     by_key: dict[tuple[str, str], list] = {}
     for row in rows:
         by_key.setdefault((row["player_id"], row["stat"]), []).append(row)
@@ -33,7 +54,7 @@ def _picks_from_rows(rows, game: dict) -> dict[tuple[str, str], dict]:
 
 
 def picks_by_player_stat(db_path: Path, game_id: str, game: dict) -> dict[tuple[str, str], dict]:
-    """{(player_id, stat): (pick_row, rebuilt)} for one game."""
+    """{(player_id, stat): (pick_row, rebuilt)} for one game -- the DISPLAYED pick."""
     return _picks_from_rows(store.get_player_predictions_for_game(db_path, game_id), game)
 
 
@@ -49,16 +70,33 @@ _IN_CHUNK = 500
 
 
 def resolved_player_props(db_path: Path, schedule: list[dict]) -> list[dict]:
-    """Every (stat, prediction, actual) that was actually gradeable.
+    """Every (stat, prediction, actual) that was actually gradeable, one per
+    (game, player, stat) -- the EARLIEST recorded prediction, whenever it was
+    made.
 
-    Same pick rule as the endpoint, and rebuilt rows are left out: a prediction
-    written after the fact is not evidence about how wrong the model was on
-    information it did not have.
+    The counting key is (game, PLAYER, stat), not (game, stat): a points pick
+    is one pick per player per game, and collapsing a game's rotation into a
+    single pick would delete the player record rather than deduplicate it.
+    `test_player_props_are_keyed_by_game_player_and_stat_not_by_game_alone`
+    puts two players on one stat in one game and requires both to survive,
+    because the collapse is silent -- the MAE would still be a number, just
+    the wrong one.
 
-    Only a game that already has a recorded outcome can contribute, and that is a
-    handful of a season's ~1,760 scheduled games. So the outcomes are read once, and
-    predictions are read only for those games, in bulk. The per-game version ran two
-    queries for EVERY scheduled game (about 3,500) and took ~50 s on the live site.
+    A rerun of the same player prop on the same game is history: it stays in
+    `player_prediction_snapshots` and is not graded. Otherwise re-running the
+    models until the numbers looked right would be free.
+
+    Every returned row carries `made_before_tip`, DERIVED from its own
+    `created_at` against the game's tip-off as UTC instants and failing closed
+    to False, so the caller can publish the headline MAE over every counted row
+    and the honest pre-tip MAE over the subset without a second pass and
+    without the two disagreeing about which rows are which.
+
+    Only a game that already has a recorded outcome can contribute, and that is
+    a handful of a season's ~1,760 scheduled games. So the outcomes are read
+    once, and predictions are read only for those games, in bulk. The per-game
+    version ran two queries for EVERY scheduled game (about 3,500) and took
+    ~50 s on the live site.
     """
     games = {g.get("game_id"): g for g in schedule if g.get("game_id")}
     actuals_by_game: dict[str, dict[tuple[str, str], float]] = {}
@@ -83,17 +121,19 @@ def resolved_player_props(db_path: Path, schedule: list[dict]) -> list[dict]:
         if not game_id or game_id not in actuals_by_game:
             continue
         actuals = actuals_by_game[game_id]
-        for key, (pick, rebuilt) in _picks_from_rows(rows_by_game.get(game_id, []), game).items():
-            if rebuilt or pick is None:
-                continue
-            actual = actuals.get(key)
+        for pick in earliest_recorded(rows_by_game.get(game_id, [])):
+            actual = actuals.get((pick["player_id"], pick["stat"]))
             if actual is None:
                 continue
             resolved.append(
                 {
-                    "stat": key[1],
+                    "game_id": game_id,
+                    "player_id": pick["player_id"],
+                    "stat": pick["stat"],
                     "predicted_value": pick["predicted_value"],
                     "actual_value": actual,
+                    "made_before_tip": made_before_tip(pick["created_at"], game),
+                    "created_at": pick["created_at"],
                 }
             )
     return resolved

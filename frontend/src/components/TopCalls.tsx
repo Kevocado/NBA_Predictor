@@ -50,12 +50,33 @@ const CATEGORIES = [
  */
 const rowDetail = (heading: string) => `${heading} projection, not a probability`;
 
-/** The honest provenance sentence for a row whose stat has an error estimate. */
-function provenanceWithMae(mae: number, heading: string): string {
+/**
+ * The honest provenance sentence for a row whose stat has an error estimate.
+ *
+ * Two figures now travel with every projection, and the sentence names both
+ * rather than quietly picking one: `mae` is the in-sample error over every
+ * counted pick for the stat -- one per (game, player, stat), the earliest
+ * recorded, whenever it was made -- and `mae_pre_tip` is the same estimate over
+ * the picks made before their own tip-off. They differ whenever a model was
+ * re-run on a game that had already been played, which is most of the time,
+ * and a reader weighing the model against a book has to know which one is on
+ * the row.
+ */
+function provenanceWithMae(
+  heading: string,
+  preTipMae: number | null | undefined,
+  n: number | undefined,
+  nPreTip: number | undefined,
+): string {
+  const scope = `on ${(n ?? 0).toLocaleString("en-US")} resolved ${heading.toLowerCase()} rows across the league`;
+  const preTip =
+    typeof preTipMae === "number" && Number.isFinite(preTipMae)
+      ? ` Of those, the ${(nPreTip ?? 0).toLocaleString("en-US")} made before their own tip-off put it at ±${preTipMae.toFixed(1)}.`
+      : " No pick for this stat was made before its game's tip-off, so there is no pre-tip figure beside it.";
   return (
-    `Model projection. The ± is the in-sample MAE (mean absolute error) on resolved ` +
-    `${heading.toLowerCase()} rows across the league -- a per-stat aggregate, not this player's own ` +
-    `error. No graded per-player record yet.`
+    `Model projection. The ± is the in-sample MAE (mean absolute error) ${scope} -- a per-stat ` +
+    `aggregate, not this player's own error, and it counts picks made on a re-run of the model ` +
+    `as well as picks made on the night.${preTip} No graded per-player record yet.`
   );
 }
 
@@ -108,7 +129,9 @@ export function buildTopCalls(props: PlayerProp[], out: OutPlayer[]): TopCallsDa
         // into "no error estimate yet"; a 0 becomes "± 0.0".
         margin: typeof p.mae === "number" && Number.isFinite(p.mae) ? p.mae : undefined,
         provenance:
-          typeof p.mae === "number" && Number.isFinite(p.mae) ? provenanceWithMae(p.mae, heading) : provenanceWithoutMae,
+          typeof p.mae === "number" && Number.isFinite(p.mae)
+            ? provenanceWithMae(heading, p.mae_pre_tip, p.mae_n, p.mae_n_pre_tip)
+            : provenanceWithoutMae,
       }));
     return { category: heading, rows };
   }).filter((c) => c.rows.length > 0);

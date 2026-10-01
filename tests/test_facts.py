@@ -113,7 +113,15 @@ def api(monkeypatch):
     monkeypatch.setattr(facts_mod, "_player_rows", lambda game_id: [
         _player_row(), _player_row(player_id="p2", player_name="Bam Adebayo", stat="rebounds", predicted_value=11.2),
     ])
-    monkeypatch.setattr(facts_mod, "_track_record", lambda: {"total_predictions": 88, "correct_predictions": 55, "hit_rate": 0.625, "n_rebuilt": 4})
+    # The shape compute_track_record sends since 2026-10-01: the headline over
+    # every counted pick, and the pre-tip subset beside it. The two differ on
+    # purpose, and the record block must read the second.
+    monkeypatch.setattr(facts_mod, "_track_record", lambda: {
+        "market": "game_outcome",
+        "total_predictions": 132, "correct_predictions": 81, "hit_rate": 0.614,
+        "n_rebuilt": 44, "n_pre_tip": 88,
+        "pre_tip": {"total_predictions": 88, "correct_predictions": 55, "hit_rate": 0.625},
+    })
     return TestClient(create_app())
 
 
@@ -220,10 +228,35 @@ def test_players_are_the_top_three_by_projection(api, monkeypatch):
     assert [p["name"] for p in body["players"]] == ["B", "C", "A"]
 
 
-def test_record_uses_the_game_outcome_row(api):
+def test_record_uses_the_pre_tip_subset_not_the_headline(api):
+    """The block is labelled "Picks made before tip-off", so it reads `pre_tip`.
+
+    The fixture carries a headline of 132 at 61.4% and a pre-tip subset of 88
+    at 62.5%. Publishing the headline here would put 44 picks the model made
+    after the game started under a label that says it made them before -- the
+    one mislabelling the 2026-10-01 decision still forbids.
+    """
     body = api.get(f"/facts/{GAME_ID}").json()
 
     assert body["record"] == {"label": "Picks made before tip-off", "hits": 55, "settled": 88}
+
+
+def test_the_record_block_is_omitted_rather_than_mislabelled(api, monkeypatch):
+    """A payload with no `pre_tip` sub-record yields no record block at all.
+
+    An omission is recoverable; a post-tip figure wearing a pre-tip label is
+    not. Before the reversal there was no `pre_tip` to read, so this is also
+    what an older payload gets -- and the numbers on the page stop rather than
+    being relabelled.
+    """
+    monkeypatch.setattr(facts_mod, "_track_record", lambda: {
+        "market": "game_outcome", "total_predictions": 132,
+        "correct_predictions": 81, "hit_rate": 0.614, "n_pre_tip": 0,
+    })
+
+    body = api.get(f"/facts/{GAME_ID}").json()
+
+    assert body["record"] is None
 
 
 def test_context_is_omitted_when_the_schedule_has_no_rest_fields(api):

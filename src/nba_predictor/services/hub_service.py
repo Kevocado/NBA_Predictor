@@ -5,6 +5,8 @@ from pathlib import Path
 
 from nba_predictor.api.schemas import (
     TrackRecordOut,
+    TrackRecordPickOut,
+    TrackRecordTallyOut,
     TrackRecordWeekOut,
     VsMarketOut,
     VsMarketScopeOut,
@@ -12,7 +14,12 @@ from nba_predictor.api.schemas import (
 )
 from nba_predictor.tracking import store
 from nba_predictor.tracking.store import get_connection
-from nba_predictor.tracking.timing import latest_pre_tip
+from nba_predictor.tracking.timing import (
+    earliest_recorded,
+    earliest_run,
+    latest_pre_tip,
+    made_before_tip,
+)
 
 
 def load_hub_cache(path: Path) -> list[dict]:
@@ -28,61 +35,198 @@ def load_player_name_map(path: Path) -> dict[str, str]:
     return {row["player_id"]: row["player_name"] for row in rows}
 
 
-def pre_tip_picks(db_path: Path, schedule: list[dict]) -> tuple[list[tuple[dict, dict]], int]:
-    """(game, latest pick made before tip-off) for every completed game, plus
-    how many completed games have only picks rebuilt after tip-off. The
-    backtest writes completed games into the same table long after they were
-    played; those rows are never judged."""
+def counted_picks(db_path: Path, schedule: list[dict]) -> list[tuple[dict, list]]:
+    """(game, [COUNTED pick, *reruns]) for every completed game.
+
+    The counted pick is the EARLIEST recorded row for that game; the reruns are
+    the later rows it displaced. The counting key here is the game.
+    `predictions` holds one probability per game -- the model's own winner call,
+    which is the `game_outcome` market -- so there is nothing else to key on.
+    The odds tables are keyed on (game, market) and player props on
+    (game, player, stat); see `_settle_market_predictions` and
+    `tracking/player_props.py`.
+
+    Every completed game with a recorded pick is in this list, whenever the pick
+    was made. Before 2026-10-01 (predictor-hub #66) this function returned only
+    the LATEST row made before tip-off and counted a game whose every row came
+    from the retrain backtest as `n_rebuilt`, outside every rate. That is the
+    "with every model change it will stop tracking" failure: re-running the
+    models made the record worse, not longer.
+
+    The reruns are returned rather than dropped because rule 1 is that
+    recorded stays recorded, and the per-pick list is where a reader sees the
+    history. They are never graded.
+
+    Returns the picks as stored; `made_before_tip` is derived per pick at read
+    time, so nothing here decides or records when a pick was made.
+    """
     schedule_by_id = {g["game_id"]: g for g in schedule}
     by_game: dict[str, list] = {}
     with get_connection(db_path) as conn:
         for row in conn.execute("SELECT * FROM predictions"):
             by_game.setdefault(row["game_id"], []).append(row)
 
-    picks: list[tuple[dict, dict]] = []
-    rebuilt = 0
+    picks: list[tuple[dict, list]] = []
     for game_id, rows in by_game.items():
         game = schedule_by_id.get(game_id)
         if game is None or not game.get("completed") or game.get("home_pts") is None:
             continue
-        pick = latest_pre_tip(rows, game)
-        if pick is None:
-            rebuilt += 1
-        else:
-            picks.append((game, pick))
-    return picks, rebuilt
+        ordered = earliest_recorded(rows)
+        if ordered:
+            counted_stamp = ordered[0]["created_at"]
+            picks.append((game, [ordered[0]] + [r for r in rows if r["created_at"] != counted_stamp]))
+    return picks
 
 
-def _settle_game_outcome(db_path: Path, schedule: list[dict]) -> tuple[TrackRecordOut | None, list[tuple[date, bool]]]:
+def pre_tip_picks(db_path: Path, schedule: list[dict]) -> list[tuple[dict, dict]]:
+    """The counted picks whose own timestamps prove they were made before
+    tip-off -- the honest read of what the model would have said on the night.
+
+    This is the secondary figure beside the headline, and the population
+    `compute_model_calibration` grades. It is NOT a filter on the record: the
+    record counts every counted pick, and this is a subset of that same
+    counted set, so the two cannot describe different games.
+
+    One counted pick per game, then filtered -- not "the newest pre-tip row per
+    game". Those differ when the model was rerun before tip-off, and letting
+    each view pick its own row is how two figures on one page end up counting
+    two different runs of the same game.
+    """
+    return [(game, rows[0]) for game, rows in counted_picks(db_path, schedule)
+            if made_before_tip(rows[0]["created_at"], game)]
+
+
+def _settle_game_outcome(
+    db_path: Path, schedule: list[dict]
+) -> tuple[TrackRecordOut | None, list[tuple[date, bool]], list[tuple[date, bool]]]:
     """Settles the model's own win/loss call (predictions.home_win_prob >= 0.5)
-    against each game's actual result, using only the pick made before
-    tip-off. Every result is a real completed game, joined via the schedule
-    cache's home_pts/away_pts (populated by pipeline/ingest.py).
+    against each game's actual result, for every COUNTED pick. Every result is
+    a real completed game, joined via the schedule cache's home_pts/away_pts
+    (populated by pipeline/ingest.py).
 
-    Returns the row and its graded picks as (game_date, correct) pairs, which
-    is what the weekly breakdown is built from -- one list, one rule, so a
-    week can never be graded more loosely than the headline above it."""
-    picks, rebuilt = pre_tip_picks(db_path, schedule)
-    if not picks and not rebuilt:
-        return None, []
+    Two figures come out of one pass over one list, computed by the same code
+    over two frames: the headline over every counted pick, and `pre_tip` over
+    the subset whose own stamp proves it was made before tip-off. They cannot
+    then disagree about a game, a grade or a week.
+
+    Returns the row, its graded picks as (game_date, correct) pairs -- which is
+    what the weekly breakdown is built from, so a week can never be graded more
+    loosely than the headline above it -- and the same pairs for the pre-tip
+    subset, which is the second week table."""
+    picks = counted_picks(db_path, schedule)
+    if not picks:
+        return None, [], []
 
     graded: list[tuple[date, bool]] = []
-    for game, pick in picks:
+    pre_tip_graded: list[tuple[date, bool]] = []
+    per_pick: list[TrackRecordPickOut] = []
+    n_rebuilt = 0
+    n_unplaced = 0
+    unplaced_correct = 0
+    for game, rows in picks:
+        pick = rows[0]
         day = _game_date(game)
+        before = made_before_tip(pick["created_at"], game)
+        correct = (pick["home_win_prob"] >= 0.5) == (game["home_pts"] > game["away_pts"])
         if day is None:
-            # Untimed and undated: `made_before_tip` cannot have judged it
-            # pre-tip either, but if it somehow graded, dropping it here would
-            # break the weekly-to-headline identity the panel reconciles with.
-            continue
-        graded.append((day, (pick["home_win_prob"] >= 0.5) == (game["home_pts"] > game["away_pts"])))
+            # The schedule holds neither a game_date nor a tip_off, so there is
+            # no week to file this pick under. It still COUNTS -- rule 1 has no
+            # exception for a pick nobody dated -- and it is published per pick
+            # with `gameday: null`. What it cannot do is appear in a week table,
+            # so `n_unplaced` states the size of that gap and the week table's
+            # identity is `total - n_unplaced`, not `total`.
+            n_unplaced += 1
+            unplaced_correct += 1 if correct else 0
+            # `pick_cutoff` cannot read a game with no game_date and no
+            # tip_off, so `made_before_tip` failed closed to False for it: it
+            # is a not-pre-tip pick, and counting it here is what keeps
+            # `total == pre_tip.total + n_rebuilt` true with unplaced picks in
+            # the headline.
+            n_rebuilt += 1
+        else:
+            graded.append((day, correct))
+            if before:
+                pre_tip_graded.append((day, correct))
+            else:
+                n_rebuilt += 1
+        per_pick.append(_winner_pick_row(game, pick, correct, before, day))
+        for rerun in rows[1:]:
+            per_pick.append(_winner_pick_row(
+                game, rerun,
+                (rerun["home_win_prob"] >= 0.5) == (game["home_pts"] > game["away_pts"]),
+                made_before_tip(rerun["created_at"], game), day, counted=False,
+            ))
 
-    correct = sum(1 for _, ok in graded if ok)
-    total = len(graded)
+    return _tally(
+        market="game_outcome", graded=graded, pre_tip_graded=pre_tip_graded,
+        n_rebuilt=n_rebuilt, n_unplaced=n_unplaced, unplaced_correct=unplaced_correct,
+        per_pick=_sorted_picks(per_pick),
+    ), graded, pre_tip_graded
+
+
+def _sorted_picks(per_pick: list[TrackRecordPickOut]) -> list[TrackRecordPickOut]:
+    """Published oldest-stamp-first, so the list reads as the record's history."""
+    return sorted(per_pick, key=lambda p: (p.created_at, p.game_id))
+
+
+def _winner_pick_row(game: dict, pick, correct: bool, before: bool, day: date | None,
+                     counted: bool = True) -> TrackRecordPickOut:
+    """One disclosed pick for `game_outcome`, in words a reader can check."""
+    side = game["home_team"] if pick["home_win_prob"] >= 0.5 else game["away_team"]
+    actual = game["home_team"] if game["home_pts"] > game["away_pts"] else game["away_team"]
+    return TrackRecordPickOut(
+        game_id=game["game_id"], market="game_outcome", pick=side, actual=actual,
+        hit=correct, made_before_tip=before, created_at=pick["created_at"],
+        counted=counted, gameday=day.isoformat() if day else None,
+    )
+
+
+def _tally(
+    *, market: str, graded: list[tuple[date, bool]], pre_tip_graded: list[tuple[date, bool]],
+    n_rebuilt: int, n_push: int = 0, n_unplaced: int = 0, unplaced_correct: int = 0,
+    per_pick: list[TrackRecordPickOut] | None = None, window: list[date] | None = None,
+) -> TrackRecordOut:
+    """One market's record: the headline, the pre-tip subset beside it, and the
+    per-pick disclosure.
+
+    `total_predictions`, `correct_predictions` and `hit_rate` keep their names
+    and now mean the headline -- every counted pick, whenever it was made. What
+    changed is which picks that is, so a site reading `hit_rate` reads the
+    fuller record and nothing has to be renamed.
+
+    `n_rebuilt` keeps its name and changes meaning: it is no longer a count of
+    finals left out, it is the count of graded counted picks made at or after
+    their own tip-off. That keeps it the reconciliation between the two
+    figures -- `total_predictions == pre_tip.total_predictions + n_rebuilt` --
+    which is the identity a reader needs to see how much of the headline is
+    the rerun rather than the night. Pushes are in `n_push` for both figures
+    and in neither rate, so the identity survives one.
+
+    `n_unplaced` counts counted picks the schedule cannot date, so they appear
+    in the headline and in `per_pick` but in no week. It is stated rather than
+    absorbed: a week table that quietly sums to `total - n_unplaced` reads as a
+    broken identity until the difference is named.
+
+    `pre_tip` is a whole sub-record rather than three loose numbers, so the
+    secondary figure carries its own n, its own rate and its own week table
+    exactly as the headline does.
+    """
+    correct = sum(1 for _, ok in graded if ok) + unplaced_correct
+    total = len(graded) + n_unplaced
+    pre_correct = sum(1 for _, ok in pre_tip_graded if ok)
+    pre_total = len(pre_tip_graded)
     return TrackRecordOut(
-        market="game_outcome", total_predictions=total, correct_predictions=correct,
-        hit_rate=round(correct / total, 3) if total else None, n_rebuilt=rebuilt,
+        market=market, total_predictions=total, correct_predictions=correct,
+        hit_rate=round(correct / total, 3) if total else None,
+        n_rebuilt=n_rebuilt, n_push=n_push, n_pre_tip=pre_total, n_unplaced=n_unplaced,
         settled=True,
-    ), graded
+        pre_tip=TrackRecordTallyOut(
+            total_predictions=pre_total, correct_predictions=pre_correct,
+            hit_rate=round(pre_correct / pre_total, 3) if pre_total else None,
+            n_push=n_push, weekly=_weekly_rows(pre_tip_graded, window or []),
+        ),
+        per_pick=per_pick or [],
+    )
 
 
 def _grade_market_row(row, game: dict) -> bool | None:
@@ -138,15 +282,28 @@ def _grade_market_row(row, game: dict) -> bool | None:
 
 def _settle_market_predictions(
     db_path: Path, schedule: list[dict], market: str
-) -> tuple[TrackRecordOut | None, list[tuple[date, bool]]]:
+) -> tuple[TrackRecordOut | None, list[tuple[date, bool]], list[tuple[date, bool]]]:
     """Settles one priced market against actual results, once per game.
 
-    Odds refresh stores both selections for every bookmaker on every run, so
-    judging every row would pin the rate near 50%: per game, take the latest
-    run made before tip-off and its selection with the higher model
-    probability, then grade that one pick. Returns (None, []) when the
-    schedule holds no finished game for this market -- the caller then
-    reports the stored rows as unsettled rather than as 0%.
+    **Counting key: (game, market).** The query already narrows to one market,
+    so the key reduces to the game, and that is the market's own unit -- one
+    graded pick per game per market. It is NOT (game, selection) or (game,
+    bookmaker): odds refresh writes both sides for every bookmaker on every
+    run, so keying any finer would grade the same game four times over and pin
+    the rate near 50%.
+
+    **Which run:** the EARLIEST recorded one (`earliest_run`), and within it
+    the selection the model priced highest -- that row is the model's call. The
+    rule used to be "the latest run made before tip-off", which meant a market
+    re-run after a game stopped counting at all, and a model changed twice
+    before tip-off was graded on its second opinion. Reversing that is rule 2
+    of the 2026-10-01 spec, and it is the same rule `earliest_recorded`
+    applies to the other two tables, so one rerun can never be graded twice
+    across the three markets.
+
+    Returns (None, [], []) when the schedule holds no finished game for this
+    market -- the caller then reports the stored rows as unsettled rather than
+    as 0%.
     """
     schedule_by_id = {g["game_id"]: g for g in schedule}
     with get_connection(db_path) as conn:
@@ -160,35 +317,97 @@ def _settle_market_predictions(
 
     completed_games = 0
     graded: list[tuple[date, bool]] = []
+    pre_tip_graded: list[tuple[date, bool]] = []
+    per_pick: list[TrackRecordPickOut] = []
+    n_rebuilt = 0
     n_push = 0
     for game_id, game_rows in by_game.items():
         game = schedule_by_id.get(game_id)
         if game is None or not game.get("completed") or game.get("home_pts") is None:
             continue
         completed_games += 1
-        latest = latest_pre_tip(game_rows, game)
-        if latest is None:
-            continue
         day = _game_date(game)
         if day is None:
             continue
-        run = [r for r in game_rows if r["created_at"] == latest["created_at"]]
-        pick = max(run, key=lambda r: r["model_probability"])
+        pick, history = _counted_market_pick(game, game_rows, market)
+        if pick is None:
+            continue
+        before = made_before_tip(pick["created_at"], game)
         verdict = _grade_market_row(pick, game)
         if verdict is None:
+            # A push, or a row with no line: nobody won it, so it is counted
+            # in `n_push` and stays out of BOTH rates rather than becoming a
+            # miss. It is still published per pick, because it is a pick.
             n_push += 1
-            continue
-        graded.append((day, verdict))
+        else:
+            graded.append((day, verdict))
+            if before:
+                pre_tip_graded.append((day, verdict))
+            else:
+                n_rebuilt += 1
+        per_pick.append(_market_pick_row(game, pick, market, verdict, before, day))
+        # Every other recorded row for this game+market: a later rerun, kept as
+        # history. It stays in the table, stays in this list, and is marked
+        # `counted: false` so the rows a reader tallies are exactly the rows
+        # that produced the headline.
+        for row in history:
+            per_pick.append(_market_pick_row(game, row, market, _grade_market_row(row, game),
+                                             made_before_tip(row["created_at"], game), day,
+                                             counted=False))
 
     if completed_games == 0:
+        return None, [], []
+    return _tally(
+        market=market, graded=graded, pre_tip_graded=pre_tip_graded,
+        n_rebuilt=n_rebuilt, n_push=n_push, per_pick=_sorted_picks(per_pick),
+    ), graded, pre_tip_graded
+
+
+def _counted_market_pick(game: dict, game_rows: list, market: str):
+    """The counted pick for one (game, market), and the reruns it displaced.
+
+    The counted pick is the model's own call inside the EARLIEST recorded run:
+    the selection the model priced highest, which is the side it backed and the
+    line it priced it at. Everything else recorded for this game and market is
+    history -- returned, never deleted, never graded.
+    """
+    run = earliest_run(game_rows)
+    if not run:
         return None, []
-    correct = sum(1 for _, ok in graded if ok)
-    total = len(graded)
-    return TrackRecordOut(
-        market=market, total_predictions=total, correct_predictions=correct,
-        hit_rate=round(correct / total, 3) if total else None,
-        n_push=n_push, settled=True,
-    ), graded
+    counted_stamp = run[0]["created_at"]
+    pick = max(run, key=lambda r: r["model_probability"])
+    history = [r for r in game_rows if r["created_at"] != counted_stamp]
+    return pick, history
+
+
+def _market_pick_row(game: dict, row, market: str, verdict: bool | None, before: bool,
+                     day: date | None, counted: bool = True) -> TrackRecordPickOut:
+    """One disclosed priced pick, in words a reader can check against the score."""
+    return TrackRecordPickOut(
+        game_id=game["game_id"], market=market, pick=_pick_words(row, market),
+        actual=_actual_words(game, market, row), hit=verdict, made_before_tip=before,
+        created_at=row["created_at"], counted=counted,
+        gameday=day.isoformat() if day else None,
+    )
+
+
+def _pick_words(row, market: str) -> str:
+    """What the model backed, with the line it was priced at."""
+    point = row["point"]
+    if market in ("spread", "total") and point is not None:
+        return f"{row['selection']} {float(point):+.1f}"
+    return str(row["selection"])
+
+
+def _actual_words(game: dict, market: str, row) -> str:
+    """What actually happened, in the same words as the pick."""
+    home_pts, away_pts = game["home_pts"], game["away_pts"]
+    if market == "h2h":
+        return game["home_team"] if home_pts > away_pts else game["away_team"]
+    if market == "spread":
+        margin = home_pts - away_pts
+        return f"{game['home_team']} by {abs(margin)}"
+    return f"{home_pts + away_pts} points"
 
 
 # The markets this repo has a grading rule for. Anything else in
@@ -292,6 +511,7 @@ def compute_track_record(
     rows: list[TrackRecordOut] = []
     settled_rows: dict[str, TrackRecordOut] = {}
     graded_by_market: dict[str, list[tuple[date, bool]]] = {}
+    pre_tip_by_market: dict[str, list[tuple[date, bool]]] = {}
 
     with get_connection(db_path) as conn:
         market_counts = conn.execute(
@@ -299,10 +519,11 @@ def compute_track_record(
         ).fetchall()
 
     for market in _SETTLED_MARKETS:
-        row, graded = _settle_market_predictions(db_path, schedule, market)
+        row, graded, pre_tip_graded = _settle_market_predictions(db_path, schedule, market)
         if row is not None:
             settled_rows[market] = row
             graded_by_market[market] = graded
+            pre_tip_by_market[market] = pre_tip_graded
 
     for row in market_counts:
         settled_row = settled_rows.get(row["market"])
@@ -317,19 +538,24 @@ def compute_track_record(
                 correct_predictions=0, hit_rate=None, settled=False,
             ))
 
-    game_outcome, outcome_graded = _settle_game_outcome(db_path, schedule)
+    game_outcome, outcome_graded, outcome_pre_tip = _settle_game_outcome(db_path, schedule)
     if game_outcome is not None:
         settled_rows["game_outcome"] = game_outcome
         graded_by_market["game_outcome"] = outcome_graded
+        pre_tip_by_market["game_outcome"] = outcome_pre_tip
         rows.append(game_outcome)
 
     # Every settled market gets the SAME window, so the weekly tables align
-    # row for row on the page without the frontend inventing a join.
+    # row for row on the page without the frontend inventing a join -- and the
+    # pre-tip week table gets the same window, or the two figures would be laid
+    # out over different spans and invite a comparison that is not one.
     window = _tracking_window(db_path, schedule, today)
     if window:
         for row in rows:
             if row.settled:
                 row.weekly = _weekly_rows(graded_by_market.get(row.market, []), window)
+                if row.pre_tip is not None:
+                    row.pre_tip.weekly = _weekly_rows(pre_tip_by_market.get(row.market, []), window)
 
     return rows
 
@@ -385,13 +611,24 @@ def compute_vs_market(
 ) -> VsMarketOut:
     """The model's moneyline pick beside the price it was measured against.
 
-    Per finished game: the latest pre-tip odds run, the row with the higher
-    model probability (one pick per game -- the same rule the h2h record
-    grades with), and the price carried by that row. Eligible means a result
-    to judge it against, a market_probability on the pick, and the other side
-    priced at the SAME bookmaker in the same run: a price with only one side
-    stored cannot be said to have favoured either side, and the disagreement
-    test below would be reading a sum-to-100% that was never summed.
+    **Not relaxed by the 2026-10-01 track-record reversal, deliberately, and
+    for the same reason `compute_model_calibration` is not.** This block is a
+    comparison with a PRICE, not a track record: the whole point of it is what
+    the model said against what the book said at the same moment. A row written
+    after tip-off carries a price that did not exist when the reader could have
+    taken it, and averaging those in would measure the model against a
+    backtest. So the run is still the latest one made before tip-off, and
+    "one pick per game -- the same rule the h2h record grades with" now refers
+    to one pick per game, not to which run that pick came from: the record
+    counts the earliest run (rule 2) while this keeps the last pre-tip price,
+    because a price comparison has to be made against a price that was live.
+
+    Per finished game: that run, the row with the higher model probability, and
+    the price carried by that row. Eligible means a result to judge it
+    against, a market_probability on the pick, and the other side priced at the
+    SAME bookmaker in the same run: a price with only one side stored cannot be
+    said to have favoured either side, and the disagreement test below would be
+    reading a sum-to-100% that was never summed.
 
     `edge` is model minus price in percentage points on the model's own side.
     The disagreement cohort is `price < 0.5` -- the price fancied the other

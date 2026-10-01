@@ -236,9 +236,21 @@ def _drop_mae_entries(db_path: Path) -> None:
         del _MAE_CACHE[stale]
 
 
-def _mae_by_stat(db_path: Path, schedule: list[dict], *, now=time.monotonic) -> dict[str, float | None]:
-    """In-sample MAE per stat over resolved rows only. None when a stat has
-    been resolved never -- see models.player_props.in_sample_mae_by_stat.
+def _mae_record(db_path: Path, schedule: list[dict], *, now=time.monotonic) -> dict[str, dict]:
+    """The props error estimate per stat, as BOTH figures, in one pass.
+
+    ``{"all": {stat: mae}, "pre_tip": {stat: mae}, "n_all": {...}, "n_pre_tip": {...}}``
+
+    `all` is the headline: every COUNTED pick, one per (game, player, stat) --
+    the earliest recorded, whenever it was made (predictor-hub #66,
+    2026-10-01). `pre_tip` is the same summariser over the subset whose own
+    timestamps prove they were made before tip-off, which is the honest read of
+    what the model would have said on the night.
+
+    Both come from ONE `resolved_player_props` call, not two: they are two
+    frames of the same rows, filtered by the `made_before_tip` each row
+    already carries, so they cannot disagree about which rows exist and the
+    per-database-state cache stays worth having.
 
     ``now`` is a clock, injected so the age bound is testable without sleeping.
     A recompute that fails propagates, and drops the entry on the way out: a
@@ -260,7 +272,14 @@ def _mae_by_stat(db_path: Path, schedule: list[dict], *, now=time.monotonic) -> 
         if cached is not None and now() - cached[0] < MAE_CACHE_TTL_SECONDS:
             return cached[1]
         try:
-            result = in_sample_mae_by_stat(resolved_player_props(db_path, schedule))
+            rows = resolved_player_props(db_path, schedule)
+            pre_tip_rows = [r for r in rows if r["made_before_tip"]]
+            result = {
+                "all": in_sample_mae_by_stat(rows),
+                "pre_tip": in_sample_mae_by_stat(pre_tip_rows),
+                "n_all": _rows_per_stat(rows),
+                "n_pre_tip": _rows_per_stat(pre_tip_rows),
+            }
         except Exception:
             _drop_mae_entries(db_path)
             raise
@@ -270,6 +289,30 @@ def _mae_by_stat(db_path: Path, schedule: list[dict], *, now=time.monotonic) -> 
     finally:
         if waited:
             _MAE_COMPUTE_LOCK.release()
+
+
+def _rows_per_stat(rows: list[dict]) -> dict[str, int]:
+    """How many resolved rows each stat's MAE was computed from.
+
+    An error estimate with no n beside it is a number nobody can weigh, and the
+    pre-tip figure is the one most likely to be thin -- so the n travels with
+    both, on the wire and in the provenance sentence the site prints.
+    """
+    counts: dict[str, int] = {}
+    for row in rows:
+        counts[row["stat"]] = counts.get(row["stat"], 0) + 1
+    return counts
+
+
+def _mae_by_stat(db_path: Path, schedule: list[dict], *, now=time.monotonic) -> dict[str, float | None]:
+    """The HEADLINE in-sample MAE per stat: every counted pick, whenever made.
+
+    Kept under this name and this shape because it is what `PlayerPropOut.mae`
+    carries and what every existing caller reads. What changed is the
+    population behind it -- see `_mae_record`, which is where both figures and
+    their n are built.
+    """
+    return _mae_record(db_path, schedule, now=now)["all"]
 
 
 def warm_mae_cache(db_path: Path, schedule: list[dict], *, now=time.monotonic) -> bool:
@@ -357,7 +400,11 @@ def get_game_players(
     # removes nobody -- see api/availability.py for why that asymmetry.
     out_ids = {entry["player_id"] for entry in resolve_out_players(injuries, {key[0] for key in picks})}
 
-    mae_by_stat = _mae_by_stat(db_path, schedule)
+    mae_record = _mae_record(db_path, schedule)
+    mae_by_stat = mae_record["all"]
+    mae_pre_tip_by_stat = mae_record["pre_tip"]
+    n_by_stat = mae_record["n_all"]
+    n_pre_tip_by_stat = mae_record["n_pre_tip"]
 
     props = []
     for (player_id, stat), (pick, rebuilt) in picks.items():
@@ -372,6 +419,9 @@ def get_game_players(
                 actual_value=actual_by_key.get((player_id, stat)),
                 rebuilt=rebuilt,
                 mae=mae_by_stat.get(stat),
+                mae_pre_tip=mae_pre_tip_by_stat.get(stat),
+                mae_n=n_by_stat.get(stat, 0),
+                mae_n_pre_tip=n_pre_tip_by_stat.get(stat, 0),
             )
         )
     return props

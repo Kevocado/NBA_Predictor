@@ -94,17 +94,74 @@ describe("TrackRecordPanel", () => {
     expect(screen.getByText("58/100")).toBeInTheDocument();
   });
 
-  it("says pre-tip picks only, and counts rebuilt finals and pushes out loud", async () => {
+  it("counts every recorded pick, says how many were made after tip-off, and shows the pre-tip subset", async () => {
+    // The old test was "says pre-tip picks only, and counts rebuilt finals and
+    // pushes out loud", and asserted the strings "Only picks made before
+    // tip-off count" and "1,200 finals had only a pick rebuilt after tip-off, so
+    // they are left out." Both are gone: nothing is withheld any more, and a
+    // figure that is counted is not described as left out.
     vi.mocked(api.getTrackRecord).mockResolvedValue([
-      row({ market: "game_outcome", total_predictions: 40, correct_predictions: 26, hit_rate: 0.65, n_rebuilt: 1200, n_push: 2 }),
+      row({
+        market: "game_outcome", total_predictions: 1240, correct_predictions: 806, hit_rate: 0.65,
+        n_rebuilt: 1200, n_push: 2, n_pre_tip: 40,
+        pre_tip: { total_predictions: 40, correct_predictions: 26, hit_rate: 0.65 },
+      }),
     ]);
     render(<TrackRecordPanel />);
 
     expect(await screen.findByText("Winner pick accuracy")).toBeInTheDocument();
-    expect(screen.getByText(/Only picks made before tip-off count/)).toBeInTheDocument();
-    expect(screen.getByText(/1,200 finals had only a pick rebuilt after tip-off, so they are left out\./)).toBeInTheDocument();
-    // A push is left out of the rate, not scored as a miss.
+    expect(screen.getByText(/Every recorded pick counts, whenever it was made/)).toBeInTheDocument();
+    // Disclosure, not exclusion: the count is named as part of the headline.
+    expect(screen.getByTestId("timing-note")).toHaveTextContent(
+      "1,200 of these 1,240 picks were recorded at or after their own tip-off",
+    );
+    // The old copy is gone, both halves of it.
+    expect(screen.queryByText(/Only picks made before tip-off count/)).toBeNull();
+    expect(screen.queryByText(/had only a pick rebuilt after tip-off/)).toBeNull();
+    expect(screen.queryByText(/not counted here/)).toBeNull();
+    // A push is still left out of the rate, not scored as a miss.
     expect(screen.getByText(/2 picks landed on the line and were left out of the rate, not scored as a miss\./)).toBeInTheDocument();
+    // And the secondary figure carries its own n, beside the headline.
+    const PRE_TIP = "Accuracy on picks made before tip-off";
+    await screen.findByText(PRE_TIP);
+    const preTipRow = rowWith(PRE_TIP, "Winner pick");
+    expect(preTipRow).toHaveTextContent("40");
+    expect(preTipRow).toHaveTextContent("26/40");
+    expect(preTipRow).toHaveTextContent("65%");
+  });
+
+  it("says nothing was made after tip-off when the two figures are the same picks", async () => {
+    vi.mocked(api.getTrackRecord).mockResolvedValue([
+      row({
+        market: "game_outcome", total_predictions: 40, correct_predictions: 26, hit_rate: 0.65,
+        n_rebuilt: 0, n_push: 0, n_pre_tip: 40,
+        pre_tip: { total_predictions: 40, correct_predictions: 26, hit_rate: 0.65 },
+      }),
+    ]);
+    render(<TrackRecordPanel />);
+
+    expect(await screen.findByTestId("timing-note")).toHaveTextContent(
+      "Every pick in this record was made before its game tipped off",
+    );
+  });
+
+  it("never prints a rate for a market with no pre-tip figure to compare", async () => {
+    // A settled market whose pre-tip subset graded nothing reads as a dash,
+    // never 0% -- "never measured" is not "measured at zero".
+    vi.mocked(api.getTrackRecord).mockResolvedValue([
+      row({
+        market: "h2h", total_predictions: 300, correct_predictions: 150, hit_rate: 0.5,
+        n_rebuilt: 300, n_pre_tip: 0,
+        pre_tip: { total_predictions: 0, correct_predictions: 0, hit_rate: null },
+      }),
+    ]);
+    render(<TrackRecordPanel />);
+
+    const PRE_TIP = "Accuracy on picks made before tip-off";
+    await screen.findByText(PRE_TIP);
+    const preTipRow = rowWith(PRE_TIP, "Moneyline");
+    expect(preTipRow).toHaveTextContent("—");
+    expect(preTipRow.textContent).not.toMatch(/%/);
   });
 
   it("never prints a rate for a market the backend has not settled", async () => {

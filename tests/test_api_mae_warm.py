@@ -69,7 +69,12 @@ def _counting(monkeypatch, result=None, raises=None):
         if raises is not None:
             raise raises
         return result if result is not None else [
-            {"stat": "points", "predicted_value": 20.0, "actual_value": 24.0}
+            # `made_before_tip` is carried on every row the real
+            # `resolved_player_props` returns, so a stand-in that omits it is
+            # not a stand-in -- routes._mae_record reads it to split the
+            # headline from the pre-tip figure.
+            {"stat": "points", "predicted_value": 20.0, "actual_value": 24.0,
+             "made_before_tip": True},
         ]
 
     monkeypatch.setattr(routes, "resolved_player_props", _resolved)
@@ -167,7 +172,8 @@ def test_an_entry_past_the_age_bound_is_not_served(tmp_path, monkeypatch):
 
     def _resolved(db_path, schedule):
         seen.append(1)
-        return [{"stat": "points", "predicted_value": 20.0, "actual_value": 20.0 + len(seen)}]
+        return [{"stat": "points", "predicted_value": 20.0, "actual_value": 20.0 + len(seen),
+                 "made_before_tip": True}]
 
     monkeypatch.setattr(routes, "resolved_player_props", _resolved)
     clock = FakeClock()
@@ -187,7 +193,8 @@ def test_an_expired_entry_is_dropped_even_when_the_rewarm_fails(tmp_path, monkey
     the recompute fails, the request gets the failure, not the expired value."""
     db = _db(tmp_path)
     monkeypatch.setattr(routes, "resolved_player_props", lambda *a: [
-        {"stat": "points", "predicted_value": 20.0, "actual_value": 21.0}
+        {"stat": "points", "predicted_value": 20.0, "actual_value": 21.0,
+         "made_before_tip": True}
     ])
     clock = FakeClock()
     schedule = [{"game_id": "g1"}]
@@ -275,7 +282,8 @@ def test_a_write_whose_rewarm_fails_leaves_the_pre_write_mae_in_place(tmp_path, 
     """It must not: the old number would then read as current."""
     db = _db(tmp_path)
     monkeypatch.setattr(routes, "resolved_player_props", lambda *a: [
-        {"stat": "points", "predicted_value": 20.0, "actual_value": 21.0}
+        {"stat": "points", "predicted_value": 20.0, "actual_value": 21.0,
+         "made_before_tip": True}
     ])
     schedule = [{"game_id": "g1"}]
     routes.warm_mae_cache(db, schedule)
@@ -305,7 +313,8 @@ def test_a_request_arriving_during_the_warm_does_not_start_a_second_compute(tmp_
         calls.append(1)
         inside.set()
         release.wait(timeout=10)
-        return [{"stat": "points", "predicted_value": 20.0, "actual_value": 24.0}]
+        return [{"stat": "points", "predicted_value": 20.0, "actual_value": 24.0,
+                 "made_before_tip": True}]
 
     monkeypatch.setattr(routes, "resolved_player_props", _slow)
 

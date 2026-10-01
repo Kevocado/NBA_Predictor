@@ -47,6 +47,12 @@ POST_TIP = "2026-09-20T08:00:00+00:00"  # after it: a backtest row
 UPCOMING = "2026-11-01T00:00:00+00:00"  # before g2's tip-off
 
 
+# Holds the pristine feed function while a test has it replaced, so the fixture
+# can put it back. A one-slot list rather than a global scalar so no test has to
+# know about another test's patch.
+_PATCHED_FEED = [None]
+
+
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     db_path = tmp_path / "tracking.db"
@@ -77,10 +83,52 @@ def client(tmp_path, monkeypatch):
 
     yield TestClient(app)
     app.dependency_overrides.clear()
+    # Restore the feed function the feed-down tests replace, so a test that makes
+    # the feed unreadable cannot hand the next test a permanently broken feed
+    # (which surfaces as an unexplained 503 far from its cause). A direct
+    # assignment is undone here, not through monkeypatch, because monkeypatch's
+    # own teardown would then re-apply the broken value.
+    from nba_predictor.data import espn as espn_module
+
+    if _PATCHED_FEED[0] is not None:
+        espn_module.get_injuries, _PATCHED_FEED[0] = _PATCHED_FEED[0], None
 
 
 def _injuries(*rows):
     app.dependency_overrides[deps.get_injury_report] = lambda: list(rows)
+
+
+def _unreadable_feed():
+    """Make the real dependency run against a feed that cannot be read.
+
+    Overriding the dependency is not how the real feed fails -- the real failure
+    is inside deps.get_injury_report, which is what has to convert it into a 503
+    rather than serve an empty list. The original is stashed in ``_PATCHED_FEED``
+    and put back by the client fixture's teardown.
+    """
+    def _boom():
+        raise RuntimeError("injury feed unreachable")
+
+    import nba_predictor.data.espn as espn_module
+
+    _PATCHED_FEED[0] = espn_module.get_injuries
+    espn_module.get_injuries = _boom
+    app.dependency_overrides.pop(deps.get_injury_report, None)
+
+
+def _get_unoverridden(client, path):
+    """GET with the injury dependency override removed, restoring it after.
+
+    The feed-down state is the one state that cannot be produced by a stub
+    override, so these helpers are careful to put the fixture's overrides back:
+    a leaked override would silently convert a 503 into a 200 for the next test.
+    """
+    saved = app.dependency_overrides.pop(deps.get_injury_report, None)
+    try:
+        return client.get(path)
+    finally:
+        if saved is not None:
+            app.dependency_overrides[deps.get_injury_report] = saved
 
 
 def _seed_resolved(db_path):
@@ -374,3 +422,258 @@ def test_an_empty_injury_report_is_served_normally_not_refused(tmp_path, monkeyp
 
     assert response.status_code == 200
     assert len(response.json()) == 1
+
+
+# ---------------------------------------------------------------------------
+# DOUBTFUL on the wire.
+#
+# Placement, decided from the code rather than taste: beside the out entries,
+# on their OWN feed, and not on the prop row.
+#
+#   * Not on the row. /games/{id}/players is a bare PlayerProp[] the frontend
+#     already types (client.ts getGamePlayers). Widening the row would make the
+#     ranking carry feed data with a 15-minute TTL and an external attribution,
+#     and one player has up to four stat rows -- the same status repeated four
+#     times on a payload that is deliberately a projection and nothing else.
+#   * Not on the OUT feed either, and this is the sharp one: TopCalls.tsx
+#     (NBA#22) builds `outIds` from every row of the out feed and filters the
+#     ranking by it. Putting doubtful players on that feed would make the
+#     shipped frontend delete all 52 of them -- reintroducing this very defect
+#     from a backend change no frontend PR had asked for. The out feed is a
+#     removal instruction; a doubtful player must never be one.
+#
+# So: a third feed, /games/{id}/players/doubtful. The frontend attaches the
+# note by joining on player_id, which is exact for the same reason the gate is.
+# ---------------------------------------------------------------------------
+
+
+def test_a_day_to_day_player_stays_in_the_ranking_and_carries_the_status(client, tmp_path):
+    # The headline, asserted from both ends at once: still ranked, and named on
+    # the doubtful feed with its source and date. Neither half is optional --
+    # ranking without the status is the bug, and the status without the ranking
+    # would be removal wearing a different hat.
+    db_path = tmp_path / "tracking.db"
+    store.insert_player_prediction(
+        db_path, game_id="g2", player_id="5105571", stat="points",
+        predicted_value=25.0, created_at=UPCOMING,
+    )
+    _injuries({"team": "BOS", "player_id": "5105571", "player_name": "Jayson Tatum",
+               "status": "Day-To-Day", "dated": "2026-09-21T19:50Z"})
+
+    rows = client.get("/games/g2/players").json()
+    doubtful = client.get("/games/g2/players/doubtful").json()
+
+    assert [r["player_id"] for r in rows] == ["5105571"]
+    assert rows[0]["predicted_value"] == 25.0  # the projection is untouched
+    assert len(doubtful) == 1
+    assert doubtful[0]["player_id"] == "5105571"
+    assert doubtful[0]["status"] == "Day-To-Day"
+    assert "ESPN" in doubtful[0]["source"]
+    assert doubtful[0]["dated"] == "2026-09-21T19:50Z"
+    # And it is emphatically not on the out feed, which is a removal order.
+    assert client.get("/games/g2/players/out").json() == []
+
+
+def test_a_day_to_day_player_with_four_stat_rows_is_ranked_and_named_once(client, tmp_path):
+    # Per player, not per row: the feed is keyed by athlete id, so four stat
+    # rows yield one note. Four copies of one player's status is noise.
+    db_path = tmp_path / "tracking.db"
+    for stat in ("points", "rebounds", "assists", "threes"):
+        store.insert_player_prediction(
+            db_path, game_id="g2", player_id="5105571", stat=stat,
+            predicted_value=25.0, created_at=UPCOMING,
+        )
+    _injuries({"team": "BOS", "player_id": "5105571", "player_name": "Jayson Tatum",
+               "status": "Day-To-Day", "dated": "2026-09-21T19:50Z"})
+
+    rows = client.get("/games/g2/players").json()
+    doubtful = client.get("/games/g2/players/doubtful").json()
+
+    assert len(rows) == 4  # every stat row still ranked
+    assert len(doubtful) == 1  # one player, one note
+
+
+def test_a_day_to_day_flag_does_not_reorder_or_devalue_the_ranking(client, tmp_path):
+    # "may stay ranked, lower" -- but no demotion is implementable here, and
+    # inventing one would be a coefficient ESPN does not publish. The ranking
+    # this player gets is byte-identical to an unflagged player's.
+    db_path = tmp_path / "tracking.db"
+    for player_id in ("5105571", "203999"):
+        store.insert_player_prediction(
+            db_path, game_id="g2", player_id=player_id, stat="points",
+            predicted_value=25.0, created_at=UPCOMING,
+        )
+    _injuries({"team": "BOS", "player_id": "5105571", "player_name": "Jayson Tatum",
+               "status": "Day-To-Day", "dated": "2026-09-21T19:50Z"})
+
+    rows = {r["player_id"]: r for r in client.get("/games/g2/players").json()}
+
+    assert set(rows) == {"5105571", "203999"}
+    # Identical on every model-relevant field. player_id/player_name differ
+    # because these are two different people; the flag changes nothing a reader
+    # would weigh as a projection.
+    def _projection_fields(row):
+        return {k: v for k, v in row.items() if k not in ("player_id", "player_name")}
+
+    assert _projection_fields(rows["5105571"]) == _projection_fields(rows["203999"])
+
+
+def test_a_plain_out_player_is_on_neither_the_ranking_nor_the_doubtful_feed(client, tmp_path):
+    # Removal is reserved for Out, and an out player is not also "doubtful":
+    # one player, one feed, or the UI would show them both removed and flagged.
+    db_path = tmp_path / "tracking.db"
+    store.insert_player_prediction(
+        db_path, game_id="g2", player_id="5105571", stat="points",
+        predicted_value=25.0, created_at=UPCOMING,
+    )
+    _injuries({"team": "BOS", "player_id": "5105571", "player_name": "Jayson Tatum",
+               "status": "Out", "dated": "2026-09-21T19:50Z"})
+
+    assert client.get("/games/g2/players").json() == []
+    assert client.get("/games/g2/players/out").json()[0]["player_id"] == "5105571"
+    assert client.get("/games/g2/players/doubtful").json() == []
+
+
+def test_the_three_availability_stays_stay_distinguishable(client, tmp_path):
+    """out / report-listed-nobody / route-unreadable, as three different facts.
+
+    The frontend already words these apart and must not have to guess which it
+    is holding. Each is asserted on its own, and the third is a refusal rather
+    than an empty list -- an empty list on an unreadable feed is the
+    "checked and clear" lie this whole change exists to stop.
+    """
+    db_path = tmp_path / "tracking.db"
+    for player_id in ("5105571", "203999"):
+        store.insert_player_prediction(
+            db_path, game_id="g2", player_id=player_id, stat="points",
+            predicted_value=25.0, created_at=UPCOMING,
+        )
+
+    # 1. the report names somebody out: removed, and named on the out feed
+    _injuries({"team": "BOS", "player_id": "5105571", "player_name": "Jayson Tatum",
+               "status": "Out", "dated": "2026-09-21T19:50Z"})
+    assert client.get("/games/g2/players/out").json() != []
+    assert client.get("/games/g2/players/doubtful").json() == []
+
+    # 2. the report was read and names nobody: empty, but served as empty
+    _injuries()
+    assert client.get("/games/g2/players/out").status_code == 200
+    assert client.get("/games/g2/players/out").json() == []
+    assert client.get("/games/g2/players/doubtful").json() == []
+    assert len(client.get("/games/g2/players").json()) == 2  # ranked, nothing flagged
+
+    # 3. the feed could not be read at all: refused, never an empty list
+    _unreadable_feed()
+    for path in ("/games/g2/players", "/games/g2/players/out", "/games/g2/players/doubtful"):
+        response = _get_unoverridden(client, path)
+        assert response.status_code == 503, path
+        assert "availability" in response.json()["detail"].lower()
+
+
+def test_the_props_row_carries_no_availability_field(client, tmp_path):
+    # The row stays a bare projection: adding the status here is what the
+    # placement decision refuses, so it is asserted rather than left to review.
+    db_path = tmp_path / "tracking.db"
+    store.insert_player_prediction(
+        db_path, game_id="g2", player_id="5105571", stat="points",
+        predicted_value=25.0, created_at=UPCOMING,
+    )
+    _injuries({"team": "BOS", "player_id": "5105571", "player_name": "Jayson Tatum",
+               "status": "Day-To-Day", "dated": "2026-09-21T19:50Z"})
+
+    row = client.get("/games/g2/players").json()[0]
+
+    assert set(row) == {
+        "player_id", "player_name", "stat", "predicted_value",
+        "actual_value", "rebuilt", "mae",
+    }
+    assert not any(
+        token in field.lower() for field in row
+        for token in ("doubt", "status", "injur", "avail", "day", "prob")
+    )
+
+
+def test_the_doubtful_entry_serves_only_provenance_and_no_verdict(client, tmp_path):
+    # Exactly the out entry's six fields. No probability, no coefficient, no
+    # recommendation field: the note states availability and nothing else.
+    db_path = tmp_path / "tracking.db"
+    store.insert_player_prediction(
+        db_path, game_id="g2", player_id="5105571", stat="points",
+        predicted_value=25.0, created_at=UPCOMING,
+    )
+    _injuries({"team": "BOS", "player_id": "5105571", "player_name": "Jayson Tatum",
+               "status": "Day-To-Day", "dated": "2026-09-21T19:50Z"})
+
+    entry = client.get("/games/g2/players/doubtful").json()[0]
+
+    assert set(entry) == {"player_id", "player_name", "team", "status", "source", "dated"}
+    assert not any(
+        token in field.lower() for field in entry
+        for token in ("prob", "pct", "percent", "chance", "odds", "coef", "avoid", "fade", "bet")
+    )
+
+
+def test_the_doubtful_endpoint_404s_an_unknown_game(client):
+    assert client.get("/games/nope/players/doubtful").status_code == 404
+
+
+def test_an_unresolvable_doubtful_injury_flags_nobody(client, tmp_path):
+    # The removal asymmetry applies to flagging too: an entry that cannot be
+    # resolved to a person by exact id resolves to nobody, rather than falling
+    # back to the name and flagging the wrong player.
+    db_path = tmp_path / "tracking.db"
+    store.insert_player_prediction(
+        db_path, game_id="g2", player_id="5105571", stat="points",
+        predicted_value=25.0, created_at=UPCOMING,
+    )
+    _injuries({"team": "BOS", "player_id": "", "player_name": "Jayson Tatum",
+               "status": "Day-To-Day", "dated": "2026-09-21T19:50Z"})
+
+    assert len(client.get("/games/g2/players").json()) == 1
+    assert client.get("/games/g2/players/doubtful").json() == []
+
+
+def test_a_doubtful_injury_for_someone_not_in_this_game_flags_nobody(client, tmp_path):
+    db_path = tmp_path / "tracking.db"
+    store.insert_player_prediction(
+        db_path, game_id="g2", player_id="5105571", stat="points",
+        predicted_value=25.0, created_at=UPCOMING,
+    )
+    _injuries({"team": "LAL", "player_id": "9999999", "player_name": "LeBron James",
+               "status": "Day-To-Day", "dated": "2026-09-21T19:50Z"})
+
+    assert len(client.get("/games/g2/players").json()) == 1
+    assert client.get("/games/g2/players/doubtful").json() == []
+
+
+def test_the_live_shaped_report_renders_52_doubtful_notes_over_52_ranked_rows(client, tmp_path):
+    """The count this change is for, from the fixture and not from a hand-pick.
+
+    Shaped like the live feed measured 2026-10-01 -- 65 entries, 52 Day-To-Day
+    and 13 Out -- with every one of the 65 ranked for this game. The endpoint
+    reports what the feed actually contains: 13 removed and named on the out
+    feed, 52 still ranked AND named on the doubtful feed. Before this change
+    those 52 appeared on no feed at all.
+    """
+    db_path = tmp_path / "tracking.db"
+    for i in range(65):
+        store.insert_player_prediction(
+            db_path, game_id="g2", player_id=str(1000 + i), stat="points",
+            predicted_value=25.0, created_at=UPCOMING,
+        )
+    _injuries(*(
+        {"team": "BOS", "player_id": str(1000 + i), "player_name": f"Player {i}",
+         "status": "Day-To-Day" if i < 52 else "Out", "dated": "2026-09-21T19:50Z"}
+        for i in range(65)
+    ))
+
+    rows = client.get("/games/g2/players").json()
+    out = client.get("/games/g2/players/out").json()
+    doubtful = client.get("/games/g2/players/doubtful").json()
+
+    assert len(rows) == 52           # the 13 out players are gone
+    assert len(out) == 13
+    assert len(doubtful) == 52       # and the 52 that stayed are all named
+    assert {r["player_id"] for r in rows} == {d["player_id"] for d in doubtful}
+    assert not {r["player_id"] for r in rows} & {o["player_id"] for o in out}
+    assert {d["status"] for d in doubtful} == {"Day-To-Day"}

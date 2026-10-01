@@ -9,7 +9,7 @@ from pathlib import Path
 import pandas as pd
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 
-from nba_predictor.api.availability import resolve_out_players
+from nba_predictor.api.availability import resolve_doubtful_players, resolve_out_players
 from nba_predictor.api.deps import (
     get_db_path,
     get_injury_report,
@@ -21,6 +21,7 @@ from nba_predictor.api.deps import (
     require_admin,
 )
 from nba_predictor.api.schemas import (
+    DoubtfulPlayerOut,
     GameDetailOut,
     GameOut,
     HeadToHeadMeetingOut,
@@ -400,6 +401,44 @@ def get_game_out_players(
     name_by_id = load_player_name_map(config.DATA_DIR / "cache" / "hub" / "players.json")
     return [
         OutPlayerOut(**{**entry, "player_name": name_by_id.get(entry["player_id"], entry["player_name"])})
+        for entry in entries
+    ]
+
+
+@router.get("/games/{game_id}/players/doubtful", response_model=list[DoubtfulPlayerOut])
+def get_game_doubtful_players(
+    game_id: str,
+    schedule: list[dict] = Depends(get_schedule),
+    db_path: Path = Depends(get_db_path),
+    injuries: list[dict] = Depends(get_injury_report),
+) -> list[DoubtfulPlayerOut]:
+    """Players the gate flagged as doubtful, each STILL RANKED.
+
+    A separate feed from /players/out on purpose, not duplication. /out is a
+    removal instruction: TopCalls.tsx builds its out-id set from every row it is
+    handed and filters the ranking by it. Putting doubtful players there would
+    make the shipped frontend delete all 52 of them, which is the defect this
+    feed exists to close rather than a rendering of it. The frontend joins this
+    feed to the ranking on player_id -- an exact key, for the same reason the
+    gate is -- and renders a subordinate note beside the pick. Nobody is removed.
+
+    Like the out feed it depends on the real availability dependency, so a feed
+    we cannot read refuses with 503 instead of serving an empty list. An empty
+    list here means "the report was read and names nobody doubtful", which is a
+    different fact from "nobody checked" and must never look alike.
+    """
+    game = get_game(schedule, game_id)
+    if game is None:
+        raise HTTPException(status_code=404, detail=f"Unknown game: {game_id}")
+
+    picks = picks_by_player_stat(db_path, game_id, game)
+    entries = resolve_doubtful_players(injuries, {key[0] for key in picks})
+
+    # The roster's own name for the id, the same source the ranking uses, so
+    # the note and the row it attaches to never disagree on who this is.
+    name_by_id = load_player_name_map(config.DATA_DIR / "cache" / "hub" / "players.json")
+    return [
+        DoubtfulPlayerOut(**{**entry, "player_name": name_by_id.get(entry["player_id"], entry["player_name"])})
         for entry in entries
     ]
 

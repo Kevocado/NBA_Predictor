@@ -18,18 +18,23 @@ from nba_predictor.tracking import store
 from nba_predictor.tracking.timing import latest_by_instant, latest_pre_tip
 
 
-def picks_by_player_stat(db_path: Path, game_id: str, game: dict) -> dict[tuple[str, str], dict]:
-    """{(player_id, stat): (pick_row, rebuilt)} for one game."""
+def _picks_from_rows(rows, game: dict) -> dict[tuple[str, str], dict]:
+    """{(player_id, stat): (pick_row, rebuilt)} from one game's snapshot rows."""
     by_key: dict[tuple[str, str], list] = {}
-    for row in store.get_player_predictions_for_game(db_path, game_id):
+    for row in rows:
         by_key.setdefault((row["player_id"], row["stat"]), []).append(row)
 
     picks = {}
-    for key, rows in by_key.items():
-        pick = latest_pre_tip(rows, game)
+    for key, key_rows in by_key.items():
+        pick = latest_pre_tip(key_rows, game)
         rebuilt = pick is None
-        picks[key] = (pick if pick is not None else latest_by_instant(rows), rebuilt)
+        picks[key] = (pick if pick is not None else latest_by_instant(key_rows), rebuilt)
     return picks
+
+
+def picks_by_player_stat(db_path: Path, game_id: str, game: dict) -> dict[tuple[str, str], dict]:
+    """{(player_id, stat): (pick_row, rebuilt)} for one game."""
+    return _picks_from_rows(store.get_player_predictions_for_game(db_path, game_id), game)
 
 
 def actuals_by_player_stat(db_path: Path, game_id: str) -> dict[tuple[str, str], float]:
@@ -39,20 +44,46 @@ def actuals_by_player_stat(db_path: Path, game_id: str) -> dict[tuple[str, str],
     }
 
 
+# SQLite caps the number of bound parameters per statement; stay well under it.
+_IN_CHUNK = 500
+
+
 def resolved_player_props(db_path: Path, schedule: list[dict]) -> list[dict]:
     """Every (stat, prediction, actual) that was actually gradeable.
 
     Same pick rule as the endpoint, and rebuilt rows are left out: a prediction
     written after the fact is not evidence about how wrong the model was on
     information it did not have.
+
+    Only a game that already has a recorded outcome can contribute, and that is a
+    handful of a season's ~1,760 scheduled games. So the outcomes are read once, and
+    predictions are read only for those games, in bulk. The per-game version ran two
+    queries for EVERY scheduled game (about 3,500) and took ~50 s on the live site.
     """
+    games = {g.get("game_id"): g for g in schedule if g.get("game_id")}
+    actuals_by_game: dict[str, dict[tuple[str, str], float]] = {}
+    rows_by_game: dict[str, list] = {}
+    with store.get_connection(db_path) as conn:
+        for row in conn.execute("SELECT game_id, player_id, stat, actual_value FROM game_player_outcomes"):
+            if row["game_id"] in games:
+                actuals_by_game.setdefault(row["game_id"], {})[(row["player_id"], row["stat"])] = row["actual_value"]
+        ids = list(actuals_by_game)
+        for i in range(0, len(ids), _IN_CHUNK):
+            chunk = ids[i : i + _IN_CHUNK]
+            marks = ",".join("?" * len(chunk))
+            for row in conn.execute(
+                f"SELECT * FROM player_prediction_snapshots WHERE game_id IN ({marks}) ORDER BY created_at",
+                chunk,
+            ):
+                rows_by_game.setdefault(row["game_id"], []).append(row)
+
     resolved = []
-    for game in schedule:
+    for game in schedule:  # schedule order, exactly as before
         game_id = game.get("game_id")
-        if not game_id:
+        if not game_id or game_id not in actuals_by_game:
             continue
-        actuals = actuals_by_player_stat(db_path, game_id)
-        for key, (pick, rebuilt) in picks_by_player_stat(db_path, game_id, game).items():
+        actuals = actuals_by_game[game_id]
+        for key, (pick, rebuilt) in _picks_from_rows(rows_by_game.get(game_id, []), game).items():
             if rebuilt or pick is None:
                 continue
             actual = actuals.get(key)

@@ -110,3 +110,39 @@ def test_actual_only_row_does_not_disturb_the_other_resolved_rows():
     ]
 
     assert player_props.in_sample_mae_by_stat(rows)["assists"] == pytest.approx(3.0)
+
+
+def test_the_mae_is_not_rebuilt_from_the_whole_schedule_on_every_request(tmp_path, monkeypatch):
+    """/games/{id}/players called resolved_player_props over the ENTIRE schedule per
+    request: one outcomes query and one predictions query per scheduled game (about
+    3,500 queries) with nothing cached (CodeRabbit on NBA#18). The result only changes
+    when the tracking database does, so it is computed once per database state."""
+    import os
+    from nba_predictor.api import routes
+
+    db = tmp_path / "tracking.db"
+    db.write_text("x")
+    calls = []
+
+    def _resolved(db_path, schedule):
+        calls.append(1)
+        return []
+
+    monkeypatch.setattr(routes, "resolved_player_props", _resolved)
+    routes._MAE_CACHE.clear()
+    schedule = [{"game_id": "1"}, {"game_id": "2"}]
+    routes._mae_by_stat(db, schedule)
+    routes._mae_by_stat(db, schedule)
+    routes._mae_by_stat(db, schedule)
+    assert len(calls) == 1, f"the MAE was recomputed {len(calls)} times for an unchanged database"
+
+    # The database changed (a game resolved): the next request recomputes, once.
+    db.write_text("xy")
+    os.utime(db, None)
+    routes._mae_by_stat(db, schedule)
+    routes._mae_by_stat(db, schedule)
+    assert len(calls) == 2, "a changed tracking database must invalidate the cached MAE"
+
+    # A different schedule is a different question.
+    routes._mae_by_stat(db, schedule + [{"game_id": "3"}])
+    assert len(calls) == 3

@@ -1,3 +1,23 @@
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _clear_dependency_overrides():
+    """This module installs app-level dependency overrides and, before this
+    fixture, never removed them -- they leaked into whatever test ran next. The
+    players routes also depend on the availability gate, whose feed is ESPN's
+    live injury report: with no override, every /games/{id}/players test here
+    reached the real network and answered 503 when it was blocked. The gate's
+    feed is a dependency precisely so it can be substituted (see
+    api/deps.get_injury_report), so an empty report is substituted: no test in
+    this repo touches the network.
+    """
+    from nba_predictor.api.app import app
+
+    yield
+    app.dependency_overrides.clear()
+
+
 def _client_with_overrides(tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
 
@@ -15,6 +35,7 @@ def _client_with_overrides(tmp_path, monkeypatch):
 
     app.dependency_overrides[deps.get_db_path] = lambda: db_path
     app.dependency_overrides[deps.get_schedule_path] = lambda: schedule_path
+    app.dependency_overrides[deps.get_injury_report] = lambda: []
 
     client = TestClient(app)
     return client, db_path
@@ -158,6 +179,7 @@ def _client_with_week_schedule(tmp_path, monkeypatch):
 
     app.dependency_overrides[deps.get_db_path] = lambda: db_path
     app.dependency_overrides[deps.get_schedule_path] = lambda: schedule_path
+    app.dependency_overrides[deps.get_injury_report] = lambda: []
 
     return TestClient(app)
 
@@ -247,6 +269,7 @@ def _client_with_final(tmp_path):
     )
     app.dependency_overrides[deps.get_db_path] = lambda: db_path
     app.dependency_overrides[deps.get_schedule_path] = lambda: schedule_path
+    app.dependency_overrides[deps.get_injury_report] = lambda: []
     return TestClient(app), db_path
 
 

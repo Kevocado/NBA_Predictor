@@ -1,4 +1,8 @@
 import json
+import logging
+import os
+import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -59,6 +63,8 @@ from nba_predictor.tracking.player_props import (
 )
 from nba_predictor.tracking.timing import latest_by_instant, latest_pre_tip, made_before_tip
 from nba_predictor import config
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -169,7 +175,34 @@ def get_game_detail(
 # computing it ran two queries per scheduled game (about 3,500 for a full season) on
 # EVERY /games/{id}/players call. It changes only when a game resolves, i.e. when the
 # database file changes, so it is computed once per (file state, schedule size).
-_MAE_CACHE: dict[tuple, dict[str, float | None]] = {}
+#
+# Computed, it is not free: about a second of bulk reads over the resolved rows, so
+# charging it to whichever visitor arrives first after the database changed is the
+# whole of the cost this cache leaves behind. Two things remove that charge from the
+# request path, and both have to hold:
+#
+#   * the entry is WARMED at startup and re-warmed on a database change
+#     (start_mae_warmer / note_database_changed below), so the first request after
+#     either already finds the value;
+#   * the entry has an explicit age bound, because the file-state key is a
+#     best-effort signal and a cache that can never expire is how the availability
+#     gate ended up reading one frozen injury report on every request (NBA#18). Past
+#     the bound the value is recomputed, and if the recompute FAILS the request gets
+#     the failure -- an expired number is never served quietly.
+_MAE_CACHE: dict[tuple, tuple[float, dict[str, float | None]]] = {}
+
+# Fifteen minutes, the same bound as the injury report. The database state key
+# invalidates this cache far more often than that in practice (every ingest, every
+# refresh-odds); the TTL is the backstop for a change the key somehow misses, so it
+# is short and never unbounded. Env-overridable like INJURY_CACHE_TTL_SECONDS.
+MAE_CACHE_TTL_SECONDS = int(os.getenv("MAE_CACHE_TTL_SECONDS", "900"))
+
+# How often the background warmer checks whether the database moved. Cheap: one
+# stat() per tick, and a bulk read only when the state differs from the last warm.
+# This is the backstop for a write made outside this process (a mounted volume
+# updated elsewhere, a restore); the write paths this process owns re-warm
+# themselves via note_database_changed, so the window is only ever this long.
+MAE_WARM_POLL_SECONDS = float(os.getenv("MAE_WARM_POLL_SECONDS", "10"))
 
 
 def _db_state(db_path: Path) -> tuple[int, int]:
@@ -180,20 +213,122 @@ def _db_state(db_path: Path) -> tuple[int, int]:
         return (-1, -1)
 
 
-def _mae_by_stat(db_path: Path, schedule: list[dict]) -> dict[str, float | None]:
+# One bulk read at a time. A visitor arriving while the startup warm is still
+# running used to start a SECOND identical read, and the two then serialised on
+# the tracking store's global lock -- measurably worse than either alone (2.96 s
+# for the first local request against 1.09 s cold and 1.0 s warm, tests/
+# test_api_mae_warm.py). Taking this lock and re-checking the cache under it means
+# the late request waits for the warm it was about to duplicate and reuses it.
+# The wait is bounded by MAE_COMPUTE_WAIT_SECONDS, after which the request
+# computes for itself rather than waiting on a hung warm: serving must never
+# block indefinitely on the cache.
+_MAE_COMPUTE_LOCK = threading.Lock()
+MAE_COMPUTE_WAIT_SECONDS = float(os.getenv("MAE_COMPUTE_WAIT_SECONDS", "30"))
+
+
+def _drop_mae_entries(db_path: Path) -> None:
+    """Every entry for one database. One entry per database is kept: an older
+    state of the same file can never be asked for again, so holding it would only
+    grow the dict -- and holding it past a failed refresh is worse than growing."""
+    prefix = str(db_path)
+    for stale in [k for k in _MAE_CACHE if k[0] == prefix]:
+        del _MAE_CACHE[stale]
+
+
+def _mae_by_stat(db_path: Path, schedule: list[dict], *, now=time.monotonic) -> dict[str, float | None]:
     """In-sample MAE per stat over resolved rows only. None when a stat has
-    been resolved never -- see models.player_props.in_sample_mae_by_stat."""
+    been resolved never -- see models.player_props.in_sample_mae_by_stat.
+
+    ``now`` is a clock, injected so the age bound is testable without sleeping.
+    A recompute that fails propagates, and drops the entry on the way out: a
+    request must never be handed a value it already knows is past its bound.
+    """
     key = (str(db_path), *_db_state(db_path), len(schedule))
     cached = _MAE_CACHE.get(key)
-    if cached is not None:
-        return cached
-    result = in_sample_mae_by_stat(resolved_player_props(db_path, schedule))
-    # One entry per database: an older state of the same file can never be asked for
-    # again, so keeping it would only grow the dict.
-    for stale in [k for k in _MAE_CACHE if k[0] == key[0]]:
-        del _MAE_CACHE[stale]
-    _MAE_CACHE[key] = result
-    return result
+    if cached is not None and now() - cached[0] < MAE_CACHE_TTL_SECONDS:
+        return cached[1]
+
+    # Wait for an in-flight compute (the startup warm, most likely) rather than
+    # duplicating it, then re-check: the entry that compute produced is the one we
+    # wanted. Bounded, so a warm that hangs costs this request its own compute
+    # instead of its availability.
+    waited = _MAE_COMPUTE_LOCK.acquire(timeout=MAE_COMPUTE_WAIT_SECONDS)
+    try:
+        key = (str(db_path), *_db_state(db_path), len(schedule))
+        cached = _MAE_CACHE.get(key)
+        if cached is not None and now() - cached[0] < MAE_CACHE_TTL_SECONDS:
+            return cached[1]
+        try:
+            result = in_sample_mae_by_stat(resolved_player_props(db_path, schedule))
+        except Exception:
+            _drop_mae_entries(db_path)
+            raise
+        _drop_mae_entries(db_path)
+        _MAE_CACHE[key] = (now(), result)
+        return result
+    finally:
+        if waited:
+            _MAE_COMPUTE_LOCK.release()
+
+
+def warm_mae_cache(db_path: Path, schedule: list[dict], *, now=time.monotonic) -> bool:
+    """Fill the MAE cache for the current database state, off the request path.
+
+    Returns whether it succeeded and never raises: a warm that fails must not take
+    the API down, and must not leave the previous database's number behind looking
+    current. It logs the failure instead of swallowing it, because a warm that
+    silently never succeeds is a cold path nobody is told about.
+    """
+    try:
+        _mae_by_stat(db_path, schedule, now=now)
+    except Exception as exc:  # noqa: BLE001 - reported, not raised: see docstring
+        logger.error("MAE cache warm failed for %s: %s: %s", db_path, type(exc).__name__, exc)
+        return False
+    return True
+
+
+def note_database_changed(db_path: Path, schedule: list[dict]) -> bool:
+    """The write path's own re-warm. run_ingest is what writes predictions and
+    outcomes, so it knows the MAE has changed; it says so here instead of waiting
+    for the poller to notice. Reuses the existing (mtime, size) invalidation --
+    no second notion of "the database changed" is introduced."""
+    return warm_mae_cache(db_path, schedule)
+
+
+def start_mae_warmer(
+    db_path: Path,
+    schedule_path: Path,
+    *,
+    clock=time.monotonic,
+    sleep=time.sleep,
+    should_stop=None,
+) -> threading.Thread:
+    """Warm the MAE cache now, then re-warm it whenever the database changes.
+
+    A daemon thread, started from the app's lifespan: serving begins whether or not
+    the warm finishes, and a warm that hangs cannot hold shutdown either. ``clock``,
+    ``sleep`` and ``should_stop`` are injected so the loop is testable without
+    waiting on a real 30-second tick.
+
+    The invalidation signal is _db_state -- (mtime_ns, size) of the tracking
+    database, the key this cache already keys on. An unchanged database costs one
+    stat() per tick and nothing else.
+    """
+    db_path, schedule_path = Path(db_path), Path(schedule_path)
+
+    def _run() -> None:
+        last_state: tuple[int, int] | None = None
+        while should_stop is None or not should_stop():
+            state = _db_state(db_path)
+            if state != last_state:
+                schedule = load_schedule(schedule_path)
+                warm_mae_cache(db_path, schedule, now=clock)
+                last_state = state
+            sleep(MAE_WARM_POLL_SECONDS)
+
+    thread = threading.Thread(target=_run, name="mae-warmer", daemon=True)
+    thread.start()
+    return thread
 
 
 @router.get("/games/{game_id}/players", response_model=list[PlayerPropOut])
@@ -410,6 +545,10 @@ def refresh_odds(
 ) -> dict:
     margin_std, total_std = _market_stds_from_manifest(models_dir)
     stored = refresh_market_predictions(schedule, db_path, margin_std=margin_std, total_std=total_std)
+    # This wrote to the tracking database, which is what invalidates the cached
+    # MAE -- even though these market rows are not what the MAE is computed from.
+    # Re-warm here so the next visitor is not charged for a change we made.
+    note_database_changed(db_path, schedule)
     return {"status": "ok", "market_predictions_stored": stored}
 
 
@@ -437,6 +576,11 @@ def _run_ingest_background(db_path: Path, schedule_path: Path, models_dir: Path)
         summary["market_predictions_stored"] = refresh_market_predictions(
             schedule, db_path, margin_std=margin_std, total_std=total_std
         )
+        # Both passes above wrote to the tracking database, which is what
+        # invalidates the cached MAE, so this is the moment to replace it rather
+        # than leave the next visitor to pay for it. warm_mae_cache never raises,
+        # so this cannot turn a successful ingest into a failed one.
+        note_database_changed(db_path, schedule)
         _ingest_status["last_result"] = summary
     except Exception as exc:  # noqa: BLE001 - reported via status endpoint, not re-raised (background task)
         _ingest_status["last_error"] = str(exc)

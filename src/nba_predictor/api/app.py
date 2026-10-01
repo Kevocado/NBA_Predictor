@@ -1,12 +1,16 @@
+import logging
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import Scope
 
 from nba_predictor import config
+from nba_predictor.api.deps import get_schedule_path
 from nba_predictor.api.explain import router as explain_router
 from nba_predictor.api.facts import router as facts_router
-from nba_predictor.api.routes import router
+from nba_predictor.api.routes import router, start_mae_warmer
 from nba_predictor.tracking.store import init_db
 
 
@@ -29,10 +33,27 @@ class SPAStaticFiles(StaticFiles):
             raise
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Warm the player-props MAE cache off the startup path.
+
+    The first GET /games/{game_id}/players after any deploy or database change
+    otherwise costs the visitor about a second of bulk reads that belong to the
+    process, not to them. The warmer is a daemon thread started here and its
+    failures are logged inside warm_mae_cache, so a database that cannot be read
+    yet at boot delays nothing and takes nothing down.
+    """
+    try:
+        start_mae_warmer(config.TRACKING_DB_PATH, get_schedule_path())
+    except Exception:  # noqa: BLE001 - a warm that cannot start must not stop the app
+        logging.getLogger(__name__).exception("MAE cache warmer could not start")
+    yield
+
+
 def create_app() -> FastAPI:
     init_db(config.TRACKING_DB_PATH)
 
-    app = FastAPI(title="NBA Predictor API")
+    app = FastAPI(title="NBA Predictor API", lifespan=lifespan)
     app.include_router(router)
     # The explainer service calls {SPORT_API}/facts/{id} on the API root, so
     # this router carries no /api prefix. Registered before the SPA mount

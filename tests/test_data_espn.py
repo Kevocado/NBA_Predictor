@@ -241,7 +241,17 @@ def test_get_injuries_maps_team_display_name_to_abbreviation(mock_fetch, clear_c
 
     injuries = espn.get_injuries()
 
-    assert injuries == [{"team": "BOS", "player_name": "Jayson Tatum", "status": "Day-To-Day"}]
+    # player_id is blank here: this fixture has no athlete links to read an id
+    # from, and an unreadable id must resolve to nobody rather than guess.
+    assert injuries == [
+        {
+            "team": "BOS",
+            "player_id": "",
+            "player_name": "Jayson Tatum",
+            "status": "Day-To-Day",
+            "dated": "",
+        }
+    ]
 
 
 @patch("nba_predictor.data.espn._fetch_json")

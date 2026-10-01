@@ -62,10 +62,37 @@ class PlayerPropOut(BaseModel):
     player_id: str
     player_name: str
     stat: str
+    # A projection, in the stat's own unit -- points, rebounds, assists, made
+    # threes. Deliberately not a probability: models/player_props.py is an
+    # XGBRegressor returning a raw point total, and this repo has no calibrated
+    # probability for it to serve. predict_double_double_probability exists and
+    # has zero callers; shipping it is not this change. Do not add a
+    # probability field here without calibration evidence.
     predicted_value: float
     actual_value: float | None = None
     # Built after tip-off (the retrain backtest): shown, never judged.
     rebuilt: bool = False
+    # In-sample mean absolute error for this stat over resolved rows only (see
+    # models.player_props.in_sample_mae_by_stat). None when nothing has been
+    # resolved for the stat yet -- never 0.0, which would claim the model never
+    # missed by a tenth of a point. The site renders this as "+/- N" next to
+    # the projection, or says it has no error estimate yet.
+    mae: float | None = None
+
+
+class OutPlayerOut(BaseModel):
+    """A player the availability gate removed from the ranking.
+
+    Removed, not flagged in place: no list, no bar, no rank position. Shown
+    once, below the lists, attributed and dated.
+    """
+
+    player_id: str
+    player_name: str
+    team: str
+    status: str
+    source: str
+    dated: str
 
 
 class TrackRecordOut(BaseModel):

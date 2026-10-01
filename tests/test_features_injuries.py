@@ -14,11 +14,18 @@ def test_missing_players_value_empty_list_is_zero():
     assert missing_players_value([], season=2026) == 0.0
 
 
-def test_missing_players_value_uses_real_data_module_by_default(monkeypatch):
+def test_missing_players_value_has_no_default_data_path():
+    # This test used to monkeypatch data/injuries.py and assert the feature
+    # summed 2.5 per player through it -- i.e. it asserted that the stub WAS
+    # the default source. That stub returned {} from _fetch_player_stats and
+    # 0.0 per player, so the number it produced was fabricated while reading as
+    # measured. It is now neutralised (see tests/test_data_injuries.py) and the
+    # feature has no default at all: a caller with real values passes a
+    # value_fn, and a caller without one is told so rather than handed an
+    # invented total. Assert the refusal instead.
+    import pytest
+
     from nba_predictor.features import injuries as injuries_feature
-    from nba_predictor.data import injuries as injuries_data
 
-    monkeypatch.setattr(injuries_data, "get_missing_player_value", lambda player_id, season: 2.5)
-
-    total = injuries_feature.missing_players_value([1, 2, 3], season=2026)
-    assert total == 7.5
+    with pytest.raises(NotImplementedError):
+        injuries_feature.missing_players_value([1, 2, 3], season=2026)

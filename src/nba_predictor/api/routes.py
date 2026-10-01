@@ -5,8 +5,10 @@ from pathlib import Path
 import pandas as pd
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 
+from nba_predictor.api.availability import resolve_out_players
 from nba_predictor.api.deps import (
     get_db_path,
+    get_injury_report,
     get_models_dir,
     get_schedule,
     get_schedule_path,
@@ -19,6 +21,7 @@ from nba_predictor.api.schemas import (
     GameOut,
     HeadToHeadMeetingOut,
     MarketPredictionOut,
+    OutPlayerOut,
     PlayerPropOut,
     PredictionOut,
     SeasonBoundsOut,
@@ -26,6 +29,7 @@ from nba_predictor.api.schemas import (
     TrackRecordOut,
     VsMarketOut,
 )
+from nba_predictor.models.player_props import in_sample_mae_by_stat
 from nba_predictor.data.team_reference import TEAMS, get_team
 from nba_predictor.odds.value_bets import std_from_mae
 from nba_predictor.pipeline.ingest import run_ingest
@@ -48,6 +52,11 @@ from nba_predictor.services.schedule_repository import (
     load_schedule,
 )
 from nba_predictor.tracking import store
+from nba_predictor.tracking.player_props import (
+    actuals_by_player_stat,
+    picks_by_player_stat,
+    resolved_player_props,
+)
 from nba_predictor.tracking.timing import latest_by_instant, latest_pre_tip, made_before_tip
 from nba_predictor import config
 
@@ -156,29 +165,43 @@ def get_game_detail(
     )
 
 
+def _mae_by_stat(db_path: Path, schedule: list[dict]) -> dict[str, float | None]:
+    """In-sample MAE per stat over resolved rows only. None when a stat has
+    been resolved never -- see models.player_props.in_sample_mae_by_stat."""
+    return in_sample_mae_by_stat(resolved_player_props(db_path, schedule))
+
+
 @router.get("/games/{game_id}/players", response_model=list[PlayerPropOut])
 def get_game_players(
-    game_id: str, schedule: list[dict] = Depends(get_schedule), db_path: Path = Depends(get_db_path)
+    game_id: str,
+    schedule: list[dict] = Depends(get_schedule),
+    db_path: Path = Depends(get_db_path),
+    injuries: list[dict] = Depends(get_injury_report),
 ) -> list[PlayerPropOut]:
+    """One projection per player and stat, with an out player left out.
+
+    The out player's rows are ABSENT from this ranking rather than flagged in
+    place; they are served once by /games/{game_id}/players/out, attributed
+    and dated.
+    """
     game = get_game(schedule, game_id)
     if game is None:
         raise HTTPException(status_code=404, detail=f"Unknown game: {game_id}")
 
     name_by_id = load_player_name_map(config.DATA_DIR / "cache" / "hub" / "players.json")
-    outcomes = store.get_player_outcomes_for_game(db_path, game_id)
-    actual_by_key = {(row["player_id"], row["stat"]): row["actual_value"] for row in outcomes}
+    picks = picks_by_player_stat(db_path, game_id, game)
+    actual_by_key = actuals_by_player_stat(db_path, game_id)
 
-    # One prop per player and stat: the latest made before tip-off, else the
-    # latest (a retrain backtest), flagged rebuilt so it is never judged.
-    by_key: dict[tuple[str, str], list] = {}
-    for row in store.get_player_predictions_for_game(db_path, game_id):
-        by_key.setdefault((row["player_id"], row["stat"]), []).append(row)
+    # Resolve availability before ranking anything. Anything unresolvable here
+    # removes nobody -- see api/availability.py for why that asymmetry.
+    out_ids = {entry["player_id"] for entry in resolve_out_players(injuries, {key[0] for key in picks})}
+
+    mae_by_stat = _mae_by_stat(db_path, schedule)
 
     props = []
-    for (player_id, stat), rows in by_key.items():
-        pick = latest_pre_tip(rows, game)
-        rebuilt = pick is None
-        pick = pick if pick is not None else latest_by_instant(rows)
+    for (player_id, stat), (pick, rebuilt) in picks.items():
+        if player_id in out_ids:
+            continue
         props.append(
             PlayerPropOut(
                 player_id=player_id,
@@ -187,9 +210,38 @@ def get_game_players(
                 predicted_value=pick["predicted_value"],
                 actual_value=actual_by_key.get((player_id, stat)),
                 rebuilt=rebuilt,
+                mae=mae_by_stat.get(stat),
             )
         )
     return props
+
+
+@router.get("/games/{game_id}/players/out", response_model=list[OutPlayerOut])
+def get_game_out_players(
+    game_id: str,
+    schedule: list[dict] = Depends(get_schedule),
+    db_path: Path = Depends(get_db_path),
+    injuries: list[dict] = Depends(get_injury_report),
+) -> list[OutPlayerOut]:
+    """Players removed from this game's ranking by the availability gate.
+
+    One entry per player, whatever their number of stat rows, each carrying
+    the feed it came from and the date on that feed.
+    """
+    game = get_game(schedule, game_id)
+    if game is None:
+        raise HTTPException(status_code=404, detail=f"Unknown game: {game_id}")
+
+    picks = picks_by_player_stat(db_path, game_id, game)
+    entries = resolve_out_players(injuries, {key[0] for key in picks})
+
+    # Prefer the roster's own name for the id, the same source the ranking
+    # uses, so the out line and the ranking never disagree on who this is.
+    name_by_id = load_player_name_map(config.DATA_DIR / "cache" / "hub" / "players.json")
+    return [
+        OutPlayerOut(**{**entry, "player_name": name_by_id.get(entry["player_id"], entry["player_name"])})
+        for entry in entries
+    ]
 
 
 @router.get("/hub/teams")

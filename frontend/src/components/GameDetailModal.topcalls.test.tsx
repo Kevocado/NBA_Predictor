@@ -49,7 +49,9 @@ it("renders the model's top calls inside the game modal", async () => {
   await open();
   await waitFor(() => expect(screen.getByTestId("picks-list")).toBeInTheDocument());
   expect(screen.getByTestId("picks-title")).toHaveTextContent("Model's top calls");
-  expect(screen.getByText("± 4.2")).toBeInTheDocument();
+  // The row is the player and the figure. The ± the API sent is not on it.
+  expect(screen.getByText("31.0")).toBeInTheDocument();
+  expect(document.body.textContent).not.toContain("±");
 });
 
 it("still renders the box score: this adds a block, it does not replace one", async () => {

@@ -196,13 +196,16 @@ describe("GameDetailModal instant block", () => {
   it("replaces the PregamePick sentence with the timing badge, and never both", async () => {
     await renderOffline({ ...completed, rebuilt: true });
 
-    // The badge says it once: rebuilt, and the sport's own moment.
-    expect(screen.getByText("Rebuilt after tip-off")).toBeInTheDocument();
-    expect(screen.getByText(/not counted/i)).toBeInTheDocument();
+    // The badge says it once: when the pick was made, in the sport's own
+    // moment. (predictor-ui reworded `Rebuilt after tip-off` to
+    // `Made after tip-off` and dropped the "not counted" claim; the key
+    // `rebuilt` and its meaning are unchanged.)
+    expect(screen.getByText("Made after tip-off")).toBeInTheDocument();
     // The old prose is gone. If it were still here a reader would meet the
     // same fact twice, in two different sentences.
     expect(screen.queryByText(/Rebuilt after tip-off:/)).toBeNull();
     expect(screen.queryByText(/Not counted in the record\./)).toBeNull();
+    expect(screen.queryByText(/not counted/i)).toBeNull();
     // ...and a rebuilt pick is still not judged.
     expect(screen.queryByTestId("post-match-verdict")).toBeNull();
     vi.unstubAllGlobals();
@@ -213,7 +216,7 @@ describe("GameDetailModal instant block", () => {
 
     expect(screen.getByText("Made before tip-off")).toBeInTheDocument();
     // A pick made in time is not a badge case, and must not be dressed as one.
-    expect(screen.queryByText("Rebuilt after tip-off")).toBeNull();
+    expect(screen.queryByText("Made after tip-off")).toBeNull();
     expect(screen.queryByText(/not counted/i)).toBeNull();
     vi.unstubAllGlobals();
   });

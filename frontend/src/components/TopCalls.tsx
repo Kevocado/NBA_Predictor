@@ -1,7 +1,12 @@
 /**
  * The NBA game's "Model's top calls": four category lists of projections, each
- * row carrying the model's own number, the ± it deserves, and where that ± came
- * from.
+ * row carrying the player and the model's own number for that number's category.
+ *
+ * That is the whole row. Kevin, 2026-10-01: a top call is simple -- the player,
+ * the team and the prediction. So no row carries a provenance sentence, a ±
+ * margin, a "no graded record" line, a calibration note or availability text,
+ * and a stat with no error estimate is not given a sentence saying so; it just
+ * shows its figure.
  *
  * This is a **presenter**, not a second ranked list. The ranking rules -- the
  * three-row ceiling, the removal of out players, the refusal to draw a
@@ -11,20 +16,17 @@
  *
  *  * **There is no probability to show.** `models/player_props.py` is an
  *    XGBRegressor returning a raw point total, and no calibrated probability is
- *    served anywhere in this repo. Every row is therefore `kind: "projection"`
- *    and says "projection, not a probability" on its face, so nobody reads a
- *    27.5 as a 2750% share. Inventing a probability to fill a bar is the one
- *    thing this block must not do.
- *  * **The ± is a per-stat aggregate, not this player's error.** NBA has no
- *    per-player graded ledger: `predict_double_double_probability` exists with
- *    zero callers and nothing grades an individual player's props. So each row
- *    says so in words, and carries only the in-sample MAE for its own stat --
- *    never another stat's, which would be a number borrowed from a different
- *    unit of analysis.
- *  * **A missing MAE is `null`, not zero.** The backend sends `null` when a stat
- *    has no resolved rows. Passing that through as `0` would render "± 0.0",
- *    which claims the model has never missed; `undefined` renders the honest
- *    sentence instead.
+ *    served anywhere in this repo. Every row is therefore `kind: "projection"`,
+ *    which is what stops PicksList drawing a 27.5 as a 2750% share. Inventing a
+ *    probability to fill a bar is the one thing this block must not do.
+ *  * **`mae` is not carried.** The API sends a per-stat in-sample MAE and NBA has
+ *    no per-player graded ledger, so the figure was never this player's own error.
+ *    It is not rendered anywhere now and the row does not pass it: a ± nobody
+ *    asked for, next to a number it does not belong to, is the kind of thing the
+ *    simplification is for.
+ *  * **The category is the list's heading, not a sentence on the row.** `detail`
+ *    is the bare category name, so the row says which stat it is and nothing
+ *    about how confident anyone is about it.
  */
 import { PicksList, MAX_ROWS_PER_CATEGORY, type OutPlayer as RowOutPlayer, type PickRow } from "../predictor-ui";
 import type { OutPlayer, PlayerProp } from "../api/client";
@@ -38,52 +40,6 @@ const CATEGORIES = [
   { stat: "assists", heading: "Assists" },
   { stat: "threes", heading: "Threes" },
 ] as const;
-
-/**
- * What the row's number is, in words, on the row itself.
- *
- * Not optional context: a reader who lands on "27.5" with no unit has to be told
- * it is a projection and not a chance of something, and the plan requires the
- * row to carry that label rather than the page to imply it once in a header.
- * The heading goes in too, so the label also asserts which of the four lists the
- * figure belongs to.
- */
-const rowDetail = (heading: string) => `${heading} projection, not a probability`;
-
-/**
- * The honest provenance sentence for a row whose stat has an error estimate.
- *
- * Two figures now travel with every projection, and the sentence names both
- * rather than quietly picking one: `mae` is the in-sample error over every
- * counted pick for the stat -- one per (game, player, stat), the earliest
- * recorded, whenever it was made -- and `mae_pre_tip` is the same estimate over
- * the picks made before their own tip-off. They differ whenever a model was
- * re-run on a game that had already been played, which is most of the time,
- * and a reader weighing the model against a book has to know which one is on
- * the row.
- */
-function provenanceWithMae(
-  heading: string,
-  preTipMae: number | null | undefined,
-  n: number | undefined,
-  nPreTip: number | undefined,
-): string {
-  const scope = `on ${(n ?? 0).toLocaleString("en-US")} resolved ${heading.toLowerCase()} rows across the league`;
-  const preTip =
-    typeof preTipMae === "number" && Number.isFinite(preTipMae)
-      ? ` Of those, the ${(nPreTip ?? 0).toLocaleString("en-US")} made before their own tip-off put it at ±${preTipMae.toFixed(1)}.`
-      : " No pick for this stat was made before its game's tip-off, so there is no pre-tip figure beside it.";
-  return (
-    `Model projection. The ± is the in-sample MAE (mean absolute error) ${scope} -- a per-stat ` +
-    `aggregate, not this player's own error, and it counts picks made on a re-run of the model ` +
-    `as well as picks made on the night.${preTip} No graded per-player record yet.`
-  );
-}
-
-/** And for a row whose stat has none. Never "± 0": that is a different claim. */
-const provenanceWithoutMae =
-  "Model projection. No error estimate yet for this stat -- nothing has been resolved to measure " +
-  "against, so there is no ± to show rather than a ±0. No graded per-player record yet.";
 
 export interface TopCallsData {
   categories: { category: string; rows: PickRow[] }[];
@@ -122,16 +78,9 @@ export function buildTopCalls(props: PlayerProp[], out: OutPlayer[]): TopCallsDa
         // score. Left off rather than guessed -- PicksList renders `team`
         // optionally, and a wrong abbreviation next to a real name is worse
         // than none.
-        detail: rowDetail(heading),
+        detail: heading,
         value: p.predicted_value,
         kind: "projection",
-        // `undefined`, not 0, when the API sent null. PicksList turns undefined
-        // into "no error estimate yet"; a 0 becomes "± 0.0".
-        margin: typeof p.mae === "number" && Number.isFinite(p.mae) ? p.mae : undefined,
-        provenance:
-          typeof p.mae === "number" && Number.isFinite(p.mae)
-            ? provenanceWithMae(heading, p.mae_pre_tip, p.mae_n, p.mae_n_pre_tip)
-            : provenanceWithoutMae,
       }));
     return { category: heading, rows };
   }).filter((c) => c.rows.length > 0);

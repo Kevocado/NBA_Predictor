@@ -211,9 +211,23 @@ def test_the_mae_does_not_change_when_an_unresolved_prediction_is_added(client, 
     assert client.get("/games/g2/players").json()[0]["mae"] == before == pytest.approx(3.0)
 
 
-def test_a_backtest_row_graded_after_the_fact_does_not_reach_the_mae(client, tmp_path):
-    # The same look-forward leak the CFB record has: a prediction written after
-    # the game was played, scored against that game's result. Judged nowhere.
+def test_a_backtest_row_graded_after_the_fact_reaches_the_mae_and_not_the_pre_tip_one(client, tmp_path):
+    """The old rule, stated so the reversal is visible: "Judged nowhere."
+
+    Before 2026-10-01 (predictor-hub #66) this test asserted
+    `mae is None` -- a prediction written after the game was played, scored
+    against that game's result, reached no error estimate at all. That was the
+    rule arguing that a look-forward row must not be judged, on the grounds
+    that CFB's track record did the same. CFB reversed it too (CFB #27),
+    because the exclusion was not accuracy: it meant a season of projections
+    could sit on the page with no error estimate at all, since every pick in it
+    came from a rerun.
+
+    Now: the row is a recorded pick, so it counts -- `mae` is |50 - 10| = 40 --
+    and it is never presented as a pre-game one, so `mae_pre_tip` is None and
+    `mae_n` says 1. The look-forward concern is answered by the label, not by
+    the count.
+    """
     db_path = tmp_path / "tracking.db"
     store.insert_player_prediction(
         db_path, game_id="g1", player_id="5105571", stat="points",
@@ -228,28 +242,53 @@ def test_a_backtest_row_graded_after_the_fact_does_not_reach_the_mae(client, tmp
         predicted_value=25.0, created_at=UPCOMING,
     )
 
-    assert client.get("/games/g2/players").json()[0]["mae"] is None
+    row = client.get("/games/g2/players").json()[0]
+
+    assert row["mae"] == pytest.approx(40.0), "a recorded pick was dropped from the record"
+    assert row["mae_n"] == 1
+    # And it is not dressed up as a pre-game pick: no pre-tip subset exists.
+    assert row["mae_pre_tip"] is None
+    assert row["mae_n_pre_tip"] == 0
 
 
-def test_only_the_latest_pre_tip_prediction_is_graded(client, tmp_path):
-    # The MAE describes the number the endpoint actually serves, so it grades
-    # the same pick the row shows, not every snapshot ever written.
+def test_the_counted_prop_is_the_earliest_recorded_one_not_the_latest_pre_tip_row(client, tmp_path):
+    """The old rule was "only the LATEST pre-tip prediction is graded".
+
+    Two pre-tip snapshots of one player prop: the first (2026-02-16) predicted
+    1.0, a rerun the next day predicted 2.0, and the actual was 20.0. Under the
+    old rule the rerun was graded and the MAE was |2 - 20| = 18.0 -- the model
+    was measured on its second opinion, so a model change silently restated the
+    record.
+
+    Under the current rule the EARLIEST recorded pick is the counted one, so it
+    is |1 - 20| = 19.0, graded once. A rule that counted both would give
+    (19 + 18) / 2 = 18.5, which is the error this test exists to make
+    impossible. The rerun is history: still in the table, never graded.
+    """
     db_path = tmp_path / "tracking.db"
-    for created_at, predicted in ((PRE_TIP, 1.0), ("2026-02-15T00:00:00+00:00", 2.0)):
+    for created_at, predicted in ((PRE_TIP, 1.0), ("2026-02-17T00:00:00+00:00", 2.0)):
         store.insert_player_prediction(
             db_path, game_id="g1", player_id="5105571", stat="points",
             predicted_value=predicted, created_at=created_at,
         )
     store.insert_player_outcome(
         db_path, game_id="g1", player_id="5105571", stat="points",
-        actual_value=20.0, recorded_at="2026-02-17T00:00:00+00:00",
+        actual_value=20.0, recorded_at="2026-02-18T00:00:00+00:00",
     )
     store.insert_player_prediction(
         db_path, game_id="g2", player_id="203999", stat="points",
         predicted_value=25.0, created_at=UPCOMING,
     )
 
-    assert client.get("/games/g2/players").json()[0]["mae"] == pytest.approx(19.0)
+    row = client.get("/games/g2/players").json()[0]
+
+    # |1 - 20| = 19, graded once. The old rule said 18.0; counting both says 18.5.
+    assert row["mae"] == pytest.approx(19.0)
+    assert row["mae_n"] == 1
+    # Both snapshots were pre-tip, so the secondary figure is the same number
+    # over the same one row: the two figures agree only when nothing was late.
+    assert row["mae_pre_tip"] == pytest.approx(19.0)
+    assert row["mae_n_pre_tip"] == 1
 
 
 def test_an_out_players_row_is_absent_from_the_ranking(client, tmp_path):
@@ -348,9 +387,15 @@ def test_a_row_serves_no_probability_field(client, tmp_path):
 
     row = client.get("/games/g2/players").json()[0]
 
+    # The exact set, and it is still exactly a projection plus its error
+    # estimate. `mae_pre_tip` / `mae_n` / `mae_n_pre_tip` are the two figures
+    # and their counts (predictor-hub #66): `mae` is the headline over every
+    # counted pick, `mae_pre_tip` the same estimate over the picks made before
+    # tip-off. None of them is a probability, and none of them is a
+    # recommendation.
     assert set(row) == {
         "player_id", "player_name", "stat", "predicted_value",
-        "actual_value", "rebuilt", "mae",
+        "actual_value", "rebuilt", "mae", "mae_pre_tip", "mae_n", "mae_n_pre_tip",
     }
     assert not any(
         token in field.lower() for field in row for token in ("prob", "pct", "percent", "chance", "odds")
@@ -585,7 +630,7 @@ def test_the_props_row_carries_no_availability_field(client, tmp_path):
 
     assert set(row) == {
         "player_id", "player_name", "stat", "predicted_value",
-        "actual_value", "rebuilt", "mae",
+        "actual_value", "rebuilt", "mae", "mae_pre_tip", "mae_n", "mae_n_pre_tip",
     }
     assert not any(
         token in field.lower() for field in row

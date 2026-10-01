@@ -86,8 +86,13 @@ def _player_rows(game_id: str) -> list:
 
 
 def _track_record() -> dict | None:
-    """The model's own win/loss call, settled against real completed games
-    from pre-tip picks only (services/hub_service._settle_game_outcome)."""
+    """The model's own win/loss call against real completed games.
+
+    Served whole, headline and pre-tip subset both, because two call sites read
+    it for two different questions: `_record()` takes the `pre_tip` sub-record
+    (its block is labelled "Picks made before tip-off") and nothing else may.
+    See services/hub_service.compute_track_record for which picks count.
+    """
     for row in hub_service.compute_track_record(_db_path(), _schedule()):
         if getattr(row, "market", None) == "game_outcome":
             return row.model_dump() if hasattr(row, "model_dump") else dict(row)
@@ -272,15 +277,33 @@ def _context(game: dict, schedule: list[dict]) -> dict:
 
 
 def _record() -> dict | None:
+    """The PRE-TIP record, under a label that says so.
+
+    Since 2026-10-01 the track record's headline counts every recorded pick,
+    including ones the model made after tip-off (`track-record-counts-every-
+    pick`, merged as predictor-hub #66). So this must read the `pre_tip`
+    sub-record, not the headline: the number on this block is labelled "Picks
+    made before tip-off", and putting an all-picks figure under that label is
+    exactly the mislabelling the spec still forbids ("nothing computed after
+    the start may be labelled 'made before kickoff'").
+
+    The pre-tip subset is what this block showed before the rule changed, so
+    the figures in the explainer are unchanged. A payload with no `pre_tip` at
+    all yields None rather than a mislabelled record -- an omission is
+    recoverable, a wrong label is not.
+    """
     row = _track_record()
     if not row:
         return None
-    settled = int(row.get("total_predictions") or 0)
+    before_tip = row.get("pre_tip")
+    if not isinstance(before_tip, dict):
+        return None
+    settled = int(before_tip.get("total_predictions") or 0)
     if settled <= 0:
         return None
     return {
         "label": "Picks made before tip-off",
-        "hits": int(row.get("correct_predictions") or 0),
+        "hits": int(before_tip.get("correct_predictions") or 0),
         "settled": settled,
     }
 

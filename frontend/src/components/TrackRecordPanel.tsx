@@ -338,8 +338,18 @@ export default function TrackRecordPanel() {
   const sorted = [...rows].sort((a, b) => rank(a.market) - rank(b.market));
   const settled = sorted.filter((row) => row.settled);
   const unsettled = sorted.filter((row) => !row.settled);
-  const rebuilt = rows.reduce((n, r) => n + (r.n_rebuilt ?? 0), 0);
+  // The headline counts every recorded pick, whenever it was made, so
+  // `n_rebuilt` is no longer what was withheld -- it is how much of the
+  // headline is the rerun rather than the night, and the reconciliation between
+  // the two figures. `n_pre_tip` is the honest read of live performance.
+  const afterTip = rows.reduce((n, r) => n + (r.n_rebuilt ?? 0), 0);
+  const preTip = rows.reduce((n, r) => n + (r.n_pre_tip ?? r.pre_tip?.total_predictions ?? 0), 0);
+  const graded = rows.reduce((n, r) => n + r.total_predictions, 0);
   const pushes = rows.reduce((n, r) => n + (r.n_push ?? 0), 0);
+  const unplaced = rows.reduce((n, r) => n + (r.n_unplaced ?? 0), 0);
+  // Only rows that actually carry a pre-tip figure: an unsettled market has no
+  // rule to apply one with, and a row with none is not a zero.
+  const preTipRows = settled.filter((row) => row.pre_tip);
   const weeklyRows = buildWeeklyRows(settled);
   // The bar column: the model's own winner call, else the first settled
   // market. One bar per row -- four would be a wall, not a comparison.
@@ -372,20 +382,24 @@ export default function TrackRecordPanel() {
   return (
     <div className="flex flex-col gap-6">
       <p className="max-w-prose text-sm text-pr-text-dim">
-        Only picks made before tip-off count.
-        {rebuilt > 0 && ` ${plural(rebuilt, "final")} had only a pick rebuilt after tip-off, so ${rebuilt === 1 ? "it is" : "they are"} left out.`}
+        Every recorded pick counts, whenever it was made. When a pick was made
+        still matters, so the figure beside each rate is the pre-tip subset with
+        its own count.
+        {afterTip > 0 &&
+          ` ${graded.toLocaleString("en-US")} picks are graded here: ${preTip.toLocaleString("en-US")} were made before their game tipped off, and ${afterTip.toLocaleString("en-US")} at or after it, on a re-run of the model.`}
       </p>
 
       <Section
         id="tr-record"
         title="Record"
-        blurb="How good the model has been, in aggregate. Every rate counts only picks made before tip-off, and every rate carries the number of picks behind it."
+        blurb="How good the model has been, in aggregate. Every rate carries the number of picks behind it, and one counted pick per game and market — the first one recorded, so a re-run of the model neither replaces it nor is counted twice."
       >
-        <p data-testid="rebuilt-note" className="max-w-3xl rounded-pr border border-pr-rule bg-pr-panel px-3 py-2 text-sm text-pr-text-dim">
-          {rebuilt === 0
-            ? "Every pick in this record was made before its game tipped off."
-            : `${plural(rebuilt, "final")} had only a rebuilt pick and ${rebuilt === 1 ? "is" : "are"} not counted here.`}
+        <p data-testid="timing-note" className="max-w-3xl rounded-pr border border-pr-rule bg-pr-panel px-3 py-2 text-sm text-pr-text-dim">
+          {afterTip === 0
+            ? "Every pick in this record was made before its game tipped off, so the pre-tip table below is the same number over the same picks."
+            : `${afterTip.toLocaleString("en-US")} of these ${graded.toLocaleString("en-US")} picks were recorded at or after their own tip-off — a re-run of the model, not a pre-game call. They are counted, and every pick row the API sends carries its own timestamp and says which it was.`}
           {pushes > 0 && ` ${plural(pushes, "pick")} landed on the line and ${pushes === 1 ? "was" : "were"} left out of the rate, not scored as a miss.`}
+          {unplaced > 0 && ` ${plural(unplaced, "pick")} ${unplaced === 1 ? "has" : "have"} no game date, so ${unplaced === 1 ? "it appears" : "they appear"} in no week below.`}
         </p>
 
         {settled.length === 0 ? (
@@ -401,6 +415,48 @@ export default function TrackRecordPanel() {
                 testId={`accuracy-bar-${row.market}`}
               />
             ))}
+          </div>
+        )}
+
+        {preTipRows.length > 0 && (
+          <div className="mt-4">
+            <h3 className="mb-2 font-pr-display text-sm font-semibold uppercase tracking-wide text-pr-text-dim">
+              Made before tip-off
+            </h3>
+            <p className="mb-2 max-w-prose text-xs leading-relaxed text-pr-text-dim">
+              The same markets over the picks that were made before their own
+              tip-off — what the model would have said on the night. Read this
+              for live performance: the cards above also count picks taken on a
+              re-run afterwards, and the two figures differ by exactly the number
+              named above.
+            </p>
+            <StatTable
+              rows={preTipRows}
+              rowKey={(r) => r.market}
+              caption="Accuracy on picks made before tip-off"
+              columns={[
+                { key: "market", label: "Market", value: (r) => r.market, render: (r) => labelFor(r.market) },
+                {
+                  key: "picks", label: "Picks", numeric: true,
+                  value: (r) => r.pre_tip?.total_predictions ?? 0,
+                  render: (r) => <span className="tabular-nums">{(r.pre_tip?.total_predictions ?? 0).toLocaleString("en-US")}</span>,
+                },
+                {
+                  key: "hits", label: "Record", numeric: true,
+                  value: (r) => r.pre_tip?.total_predictions ?? 0,
+                  render: (r) => (r.pre_tip && r.pre_tip.total_predictions > 0
+                    ? <span className="tabular-nums">{record(r.pre_tip.correct_predictions, r.pre_tip.total_predictions)}</span>
+                    : <span className="text-pr-text-faint">—</span>),
+                },
+                {
+                  key: "rate", label: "Accuracy", numeric: true, firstDir: "desc",
+                  value: (r) => (r.pre_tip?.total_predictions ? r.pre_tip.hit_rate : null),
+                  render: (r) => (r.pre_tip && r.pre_tip.total_predictions > 0 && r.pre_tip.hit_rate !== null
+                    ? pct(r.pre_tip.hit_rate)
+                    : <span className="text-pr-text-faint">—</span>),
+                },
+              ]}
+            />
           </div>
         )}
 

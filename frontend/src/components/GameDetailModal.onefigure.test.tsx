@@ -35,6 +35,9 @@ vi.mock("../api/client", () => ({
   api: {
     getGameDetail: vi.fn(),
     getGamePlayers: vi.fn(),
+    // The gate's sibling route. Empty here: these tests count figures on the
+    // page, and the ranking block's absence is TopCalls' own test to cover.
+    getGameOutPlayers: vi.fn().mockResolvedValue([]),
     getHubPlayers: vi.fn(),
     getTrackRecord: vi.fn(),
     explainGame: vi.fn(),
@@ -78,6 +81,7 @@ const winnerPick: TrackRecord = {
 beforeEach(() => {
   vi.mocked(api.getHubPlayers).mockResolvedValue([]);
   vi.mocked(api.getGamePlayers).mockResolvedValue([]);
+  vi.mocked(api.getGameOutPlayers).mockResolvedValue([]);
   vi.mocked(api.getTrackRecord).mockResolvedValue([winnerPick]);
 });
 afterEach(() => {

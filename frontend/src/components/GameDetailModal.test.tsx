@@ -8,6 +8,10 @@ vi.mock("../api/client", () => ({
   api: {
     getGameDetail: vi.fn(),
     getGamePlayers: vi.fn(),
+    // The gate's own sibling route, fetched separately. These tests are about
+    // the game's figures, so it resolves empty: an unreadable feed would (rightly)
+    // withhold the ranking block, and that is TopCalls' own test to cover.
+    getGameOutPlayers: vi.fn().mockResolvedValue([]),
     getHubPlayers: vi.fn().mockResolvedValue([]),
     // The block's record strip reads this. These tests are about the game's own
     // figures, so it stays empty here — the strip is covered in
@@ -28,6 +32,9 @@ afterEach(() => {
 beforeEach(() => {
   vi.mocked(api.getHubPlayers).mockResolvedValue([]);
   vi.mocked(api.getTrackRecord).mockResolvedValue([]);
+  // Same re-arm for the gate's sibling route: a wiped mock would make every
+  // render call undefined.then() and take the whole modal down.
+  vi.mocked(api.getGameOutPlayers).mockResolvedValue([]);
 });
 
 const completedDetail = {

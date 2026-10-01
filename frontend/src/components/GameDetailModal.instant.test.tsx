@@ -8,6 +8,10 @@ vi.mock("../api/client", () => ({
   api: {
     getGameDetail: vi.fn(),
     getGamePlayers: vi.fn(),
+    // The gate's sibling route. Empty here: these tests assert each figure
+    // appears exactly once, and the ranking block would add figures to the page.
+    // Its own rendering is covered in TopCalls.test.tsx.
+    getGameOutPlayers: vi.fn().mockResolvedValue([]),
     getHubPlayers: vi.fn(),
     getTrackRecord: vi.fn(),
     explainGame: vi.fn(),
@@ -68,6 +72,7 @@ afterEach(() => {
 beforeEach(() => {
   vi.mocked(api.getHubPlayers).mockResolvedValue([]);
   vi.mocked(api.getGamePlayers).mockResolvedValue([]);
+  vi.mocked(api.getGameOutPlayers).mockResolvedValue([]);
   vi.mocked(api.getTrackRecord).mockResolvedValue([winnerPick(40, 22)]);
 });
 

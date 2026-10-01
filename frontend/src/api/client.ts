@@ -72,6 +72,31 @@ export interface PlayerProp {
   actual_value: number | null;
   /** Built after tip-off (a retrain backtest): shown, never judged. */
   rebuilt?: boolean;
+  /**
+   * In-sample mean absolute error for THIS stat, over resolved rows only.
+   *
+   * `null` when nothing has been resolved for the stat yet, which is "never
+   * measured" and not "measured at zero": the site says so in words rather than
+   * drawing a ±0, which would claim the model has never missed by a tenth of a
+   * point. It is a per-stat aggregate, so it must never be read as this one
+   * player's error -- there is no per-player graded record for NBA props.
+   */
+  mae?: number | null;
+}
+
+/** A player the availability gate removed from this game's ranking. Served by
+ *  its own sibling route rather than wrapped onto the props response, because
+ *  the props fetch is typed as `PlayerProp[]` and the two answer different
+ *  questions: what the model projects, and who cannot be projected for. */
+export interface OutPlayer {
+  player_id: string;
+  player_name: string;
+  team: string;
+  status: string;
+  /** Where the out claim came from, in words. Never an id. */
+  source: string;
+  /** When it was known, in words. Never an epoch. */
+  dated: string;
 }
 
 export interface TrackRecordWeek {
@@ -223,6 +248,10 @@ export const api = {
   getGamesWeek: (start: string) => fetchJson<Game[]>(`/games/week?start=${start}`),
   getGameDetail: (gameId: string) => fetchJson<GameDetail>(`/games/${gameId}`),
   getGamePlayers: (gameId: string) => fetchJson<PlayerProp[]>(`/games/${gameId}/players`),
+  /** Players the gate removed from this game's ranking: shown once, below the
+   *  lists, attributed and dated. A sibling route, not a field on the props
+   *  response -- see `OutPlayer`. */
+  getGameOutPlayers: (gameId: string) => fetchJson<OutPlayer[]>(`/games/${gameId}/players/out`),
   /** The shared plain-English summary, via this API's explainer proxy. The id
    *  is the game's own id — the only value the route needs, and the only one
    *  the site has. */

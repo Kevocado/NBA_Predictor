@@ -10,6 +10,8 @@ vi.mock("../api/client", () => ({
   api: {
     getSeasonFirstWeek: vi.fn(), getGamesWeek: vi.fn(), getGameDetail: vi.fn(),
     getGamePlayers: vi.fn(), getHubPlayers: vi.fn().mockResolvedValue([]),
+    // The gate's sibling route; see GameDetailModal.test.tsx.
+    getGameOutPlayers: vi.fn().mockResolvedValue([]),
     // The detail modal's block reads this for its record strip. Not the
     // subject here, and empty so the strip stays out of these assertions.
     getTrackRecord: vi.fn().mockResolvedValue([]),
@@ -41,6 +43,7 @@ describe("a game identifier on the URL", () => {
     vi.mocked(api.getSeasonFirstWeek).mockResolvedValue({ first_week_start: "2026-02-10" });
     vi.mocked(api.getGamesWeek).mockResolvedValue([g1, g2]);
     vi.mocked(api.getGamePlayers).mockResolvedValue([]);
+    vi.mocked(api.getGameOutPlayers).mockResolvedValue([]);
     vi.mocked(api.getGameDetail).mockImplementation(async (id: string) =>
       detailOf(id === "g1" ? g1 : g2));
   });

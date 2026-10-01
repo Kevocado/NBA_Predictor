@@ -181,3 +181,53 @@ def test_the_missing_date_is_reported_as_blank_rather_than_invented(monkeypatch,
     )
 
     assert espn.get_injuries()[0]["dated"] == ""
+
+
+def test_a_stale_cached_report_is_refetched_not_reused_forever(monkeypatch, clear_cache):
+    """The availability gate reads this report on every request. A cache with no age
+    limit freezes it: a player ruled Out later stays ranked, and a player who has
+    returned stays removed (CodeRabbit on NBA#18). The report must expire."""
+    import os, time
+    calls = []
+
+    def _fetch(*a, **k):
+        calls.append(1)
+        return {"injuries": [_team_block("Boston Celtics", [_entry("Jayson Tatum")])]}
+
+    monkeypatch.setattr(espn, "_fetch_json", _fetch)
+    espn.get_injuries()
+    assert len(calls) == 1
+    cache_file = next(clear_cache.glob("injuries_*.json"))
+    old = time.time() - (espn.INJURY_CACHE_TTL_SECONDS + 60)
+    os.utime(cache_file, (old, old))
+    espn.get_injuries()
+    assert len(calls) == 2, "an expired injury report was served from cache"
+
+
+def test_a_fresh_cached_report_is_still_reused(monkeypatch, clear_cache):
+    calls = []
+
+    def _fetch(*a, **k):
+        calls.append(1)
+        return {"injuries": [_team_block("Boston Celtics", [_entry("Jayson Tatum")])]}
+
+    monkeypatch.setattr(espn, "_fetch_json", _fetch)
+    espn.get_injuries()
+    espn.get_injuries()
+    assert len(calls) == 1
+
+
+def test_a_failed_refetch_of_an_expired_report_raises_rather_than_serving_stale(monkeypatch, clear_cache):
+    import os, time
+    monkeypatch.setattr(espn, "_fetch_json", lambda *a, **k: {"injuries": [_team_block("Boston Celtics", [_entry("Jayson Tatum")])]})
+    espn.get_injuries()
+    cache_file = next(clear_cache.glob("injuries_*.json"))
+    old = time.time() - (espn.INJURY_CACHE_TTL_SECONDS + 60)
+    os.utime(cache_file, (old, old))
+
+    def _boom(*a, **k):
+        raise RuntimeError("ESPN unreachable")
+
+    monkeypatch.setattr(espn, "_fetch_json", _boom)
+    with pytest.raises(RuntimeError):
+        espn.get_injuries()

@@ -6,7 +6,9 @@ blocked from some network environments.
 """
 
 import json
+import os
 import re
+import time
 from pathlib import Path
 
 import requests
@@ -21,6 +23,13 @@ _KNOWN_ABBREVIATIONS = {team.abbreviation for team in TEAMS}
 ESPN_SITE_BASE = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba"
 
 ESPN_CACHE_DIR = config.CACHE_DIR / "espn"
+
+# The availability gate reads the injury report on EVERY request. A cache with no age
+# limit froze it: a player ruled Out later stayed ranked, and one who had returned
+# stayed removed. Fifteen minutes is short against ESPN's update cadence and cheap
+# against the request volume; a refetch that fails raises (the route answers 503)
+# rather than serving a report older than this.
+INJURY_CACHE_TTL_SECONDS = int(os.getenv("INJURY_CACHE_TTL_SECONDS", "900"))
 
 # ESPN uses a handful of abbreviations that differ from team_reference's.
 ESPN_ABBREVIATION_MAP = {
@@ -51,6 +60,15 @@ def _load_cache(endpoint: str, id_value: str) -> dict | None:
         except (json.JSONDecodeError, OSError):
             return None
     return None
+
+
+def _cache_age_seconds(endpoint: str, id_value: str) -> float:
+    """Seconds since the cache file was last written; infinite when unreadable, so
+    a cache whose age cannot be established is never trusted."""
+    try:
+        return max(0.0, time.time() - _cache_path(endpoint, id_value).stat().st_mtime)
+    except OSError:
+        return float("inf")
 
 
 def _save_cache(endpoint: str, id_value: str, data: dict) -> None:
@@ -275,7 +293,11 @@ def get_injuries() -> list[dict]:
     for display only.
     """
     cached = _load_cache("injuries", "current")
-    if cached is not None and _cached_injuries_have_ids(cached.get("injuries")):
+    if (
+        cached is not None
+        and _cached_injuries_have_ids(cached.get("injuries"))
+        and _cache_age_seconds("injuries", "current") < INJURY_CACHE_TTL_SECONDS
+    ):
         return cached["injuries"]
 
     data = _fetch_json(f"{ESPN_SITE_BASE}/injuries")

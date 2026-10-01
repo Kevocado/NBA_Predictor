@@ -165,10 +165,35 @@ def get_game_detail(
     )
 
 
+# The MAE is a property of the tracking database and the schedule, not of the request:
+# computing it ran two queries per scheduled game (about 3,500 for a full season) on
+# EVERY /games/{id}/players call. It changes only when a game resolves, i.e. when the
+# database file changes, so it is computed once per (file state, schedule size).
+_MAE_CACHE: dict[tuple, dict[str, float | None]] = {}
+
+
+def _db_state(db_path: Path) -> tuple[int, int]:
+    try:
+        st = Path(db_path).stat()
+        return (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return (-1, -1)
+
+
 def _mae_by_stat(db_path: Path, schedule: list[dict]) -> dict[str, float | None]:
     """In-sample MAE per stat over resolved rows only. None when a stat has
     been resolved never -- see models.player_props.in_sample_mae_by_stat."""
-    return in_sample_mae_by_stat(resolved_player_props(db_path, schedule))
+    key = (str(db_path), *_db_state(db_path), len(schedule))
+    cached = _MAE_CACHE.get(key)
+    if cached is not None:
+        return cached
+    result = in_sample_mae_by_stat(resolved_player_props(db_path, schedule))
+    # One entry per database: an older state of the same file can never be asked for
+    # again, so keeping it would only grow the dict.
+    for stale in [k for k in _MAE_CACHE if k[0] == key[0]]:
+        del _MAE_CACHE[stale]
+    _MAE_CACHE[key] = result
+    return result
 
 
 @router.get("/games/{game_id}/players", response_model=list[PlayerPropOut])

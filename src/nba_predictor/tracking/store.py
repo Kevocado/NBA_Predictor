@@ -372,9 +372,22 @@ def insert_player_outcome(
       (`store_player_outcomes` counts and logs it rather than letting it abort
       the ingest). `INSERT OR IGNORE` would swallow it and `INSERT OR REPLACE`
       would rewrite a recorded pick -- the two silent outcomes this avoids.
-    * **New key** -> inserted, and the UNIQUE index is the backstop for the
-      case where a concurrent writer inserted the same key between the check
-      and the write.
+    * **New key** -> inserted.
+
+    Read-then-write inside the connection, not `INSERT ... ON CONFLICT DO
+    NOTHING`, and that is deliberate. `get_connection` holds `_DB_LOCK` across
+    the whole block, and this module's header records why that lock is enough
+    (one replica, so this process is the sole writer), so there is no in-process
+    window between the SELECT and the INSERT for the index to close. More to
+    the point, SQLite rejects an `ON CONFLICT (game_id, player_id, stat)` target
+    that matches no unique index, raising `OperationalError: ON CONFLICT clause
+    does not match any PRIMARY KEY or UNIQUE constraint`. That is precisely the
+    legacy-file case this module deliberately supports: where existing
+    conflicting rows block the index and rule 1 forbids removing them,
+    `_ensure_unique_indexes` leaves the index out -- and an upsert would then
+    break every write to that file. This form works with or without the index,
+    and on a file that has none it is the pre-check that still stops a new
+    duplicate.
 
     The reader is unchanged by any of this and stays load-bearing:
     `player_props._earliest_outcome` still keeps the earliest row per key, so a

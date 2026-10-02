@@ -147,7 +147,7 @@ describe("GamesPage family layout", () => {
     render(<GamesPage />);
     expect(await screen.findByRole("heading", { name: "16–22 Feb" })).toBeInTheDocument();
     expect(await screen.findByText("1/2 picks made before tip-off correct")).toBeInTheDocument();
-    expect(within(screen.getByTestId("game-card-c")).getByText("Rebuilt after tip-off")).toBeInTheDocument();
+    expect(within(screen.getByTestId("game-card-c")).getByText("Made after tip-off")).toBeInTheDocument();
     expect(within(screen.getByTestId("game-card-a")).getByText("Called it ✓")).toBeInTheDocument();
   });
 

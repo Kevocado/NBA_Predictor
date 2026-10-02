@@ -364,11 +364,11 @@ it("labels a pick rebuilt after tip-off and never judges it", async () => {
 
   render(<GameDetailModal gameId="g2" onClose={() => {}} />);
 
-  // The badge says it once. The old prose sentence is gone, and this is the
-  // test that holds it gone.
-  expect(await screen.findByText("Rebuilt after tip-off")).toBeInTheDocument();
-  expect(screen.getByText(/not counted/i)).toBeInTheDocument();
+  // The badge says it once. The old prose sentences are gone, and this is the
+  // test that holds them gone.
+  expect(await screen.findByText("Made after tip-off")).toBeInTheDocument();
   expect(screen.queryByText(/Rebuilt after tip-off:/)).toBeNull();
+  expect(screen.queryByText(/not counted/i)).toBeNull();
   expect(screen.queryByText("Called it ✓")).not.toBeInTheDocument();
   expect(screen.queryByTestId("post-match-verdict")).not.toBeInTheDocument();
 });
@@ -438,8 +438,8 @@ it("labels a rebuilt pick on a game that has not finished", async () => {
 
   render(<GameDetailModal gameId="g1" onClose={() => {}} />);
 
-  expect(await screen.findByText("Rebuilt after tip-off")).toBeInTheDocument();
-  expect(screen.getByText(/not counted/i)).toBeInTheDocument();
+  expect(await screen.findByText("Made after tip-off")).toBeInTheDocument();
+  expect(screen.queryByText(/not counted/i)).toBeNull();
 });
 
 /** The plain-English panel: flow-first, thin by data. The game carries no

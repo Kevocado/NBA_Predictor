@@ -92,7 +92,7 @@ describe("buildTopCalls — one category per list", () => {
     const { categories } = buildTopCalls(props, []);
     for (const { category, rows } of categories) {
       for (const row of rows) {
-        expect(row.detail.toLowerCase()).toContain(category.toLowerCase());
+        expect(row.detail).toBe(category);
       }
     }
     // And the four categories are the four that exist, each holding its own row.
@@ -107,12 +107,21 @@ describe("buildTopCalls — one category per list", () => {
 });
 
 describe("buildTopCalls — nothing here is a probability", () => {
-  it("marks every row a projection and says so on the row", () => {
-    const { categories } = buildTopCalls([prop("1", "Scorer", "points", 31, 4.2)], []);
-    const row = categories[0].rows[0];
-    expect(row.kind).toBe("projection");
-    expect(row.detail.toLowerCase()).toContain("projection");
-    expect(row.detail.toLowerCase()).toContain("not a probability");
+  it("marks every row a projection, whatever the stat", () => {
+    // The `kind` is what keeps PicksList from drawing a point total as a share,
+    // so it is the rule that has to survive the simplification -- not the
+    // sentence that used to spell it out on the row.
+    const { categories } = buildTopCalls(
+      [
+        prop("1", "Scorer", "points", 31, 4.2),
+        prop("2", "Rebounder", "rebounds", 14, 2.1),
+        prop("3", "Shooter", "threes", 4, null),
+      ],
+      [],
+    );
+    const rows = categories.flatMap((c) => c.rows);
+    expect(rows).toHaveLength(3);
+    for (const row of rows) expect(row.kind).toBe("projection");
   });
 
   it("claims no price, no edge and no guarantee on any row", () => {
@@ -120,40 +129,13 @@ describe("buildTopCalls — nothing here is a probability", () => {
       [prop("1", "Scorer", "points", 31, 4.2), prop("2", "Shooter", "threes", 4, null)],
       [],
     );
-    const words = categories.flatMap((c) => c.rows.flatMap((r) => [r.detail, r.provenance])).join(" ").toLowerCase();
+    const words = categories
+      .flatMap((c) => c.rows.flatMap((r) => Object.values(r).map(String)))
+      .join(" ")
+      .toLowerCase();
     for (const banned of ["lock", "guaranteed", "best bet", "edge", "value", "odds", "moneyline"]) {
       expect(words, `banned wording in a row: ${banned}`).not.toContain(banned);
     }
-  });
-});
-
-describe("buildTopCalls — provenance is honest about its unit", () => {
-  it("states the ± MAE and that no graded per-player record exists", () => {
-    const { categories } = buildTopCalls([prop("1", "Scorer", "points", 31, 4.2)], []);
-    const row = categories[0].rows[0];
-    expect(row.margin).toBe(4.2);
-    expect(row.provenance.toLowerCase()).toContain("mae");
-    expect(row.provenance.toLowerCase()).toContain("no graded per-player record");
-  });
-
-  it("says there is no error estimate rather than drawing ± 0 when mae is null", () => {
-    const { categories } = buildTopCalls([prop("1", "Shooter", "threes", 4, null)], []);
-    const row = categories[0].rows[0];
-    // `undefined`, NOT 0: PicksList renders undefined as the honest sentence and
-    // would render 0 as "± 0.0", which is a claim the model never missed.
-    expect(row.margin).toBeUndefined();
-    expect(row.provenance.toLowerCase()).toContain("no error estimate yet");
-  });
-
-  it("never borrows another stat's error: each row carries its own", () => {
-    const { categories } = buildTopCalls(
-      [prop("1", "Scorer", "points", 31, 4.2), prop("2", "Rebounder", "rebounds", 14, 2.1)],
-      [],
-    );
-    const points = categories.find((c) => c.category === "Points")!.rows[0];
-    const rebounds = categories.find((c) => c.category === "Rebounds")!.rows[0];
-    expect(points.margin).toBe(4.2);
-    expect(rebounds.margin).toBe(2.1);
   });
 });
 
@@ -196,13 +178,80 @@ describe("buildTopCalls — an out player leaves the ranking entirely", () => {
   });
 });
 
+/**
+ * Kevin, 2026-10-01: a top call is the player, the team and the prediction.
+ * Nothing else. So a row carries no provenance sentence, no ± margin, no
+ * "no graded record" wording, no calibration note and no availability text --
+ * and the row says so by having none of them, rather than by disclaiming.
+ */
+describe("buildTopCalls — a row is the player, the team and the prediction", () => {
+  /** Every string a row could be carrying beyond its identity and its figure. */
+  function rowText(row: Record<string, unknown>): string {
+    return Object.entries(row)
+      .filter(([key]) => key !== "key" && key !== "name" && key !== "team" && key !== "value" && key !== "kind")
+      .map(([, v]) => String(v))
+      .join(" ");
+  }
+
+  it("carries no provenance, no ± margin and no availability text on any row", () => {
+    const { categories } = buildTopCalls(
+      [
+        // An MAE exists for this row, and none for the next. Neither may reach
+        // the row: the simplification is that the gap needs no sentence.
+        prop("1", "Scorer", "points", 31, 4.2),
+        prop("2", "Shooter", "threes", 4, null),
+        prop("3", "Passer", "assists", 9, undefined),
+      ],
+      [outRow("4", "Absent")],
+    );
+
+    for (const { rows } of categories) {
+      for (const row of rows) {
+        const text = rowText(row as unknown as Record<string, unknown>);
+        for (const banned of ["mae", "±", "graded", "record", "error estimate", "resolved", "in-sample"]) {
+          expect(text.toLowerCase(), `stripped text on a row: ${banned}`).not.toContain(banned);
+        }
+        // No provenance or margin field at all, rather than an empty one.
+        expect(row).not.toHaveProperty("provenance");
+        expect(row).not.toHaveProperty("margin");
+      }
+    }
+  });
+
+  it("still names the player, the team when there is one, and the figure", () => {
+    const { categories } = buildTopCalls([prop("1", "Scorer", "points", 31, 4.2)], []);
+    const row = categories[0].rows[0];
+    expect(row.name).toBe("Scorer");
+    expect(row.value).toBe(31);
+    expect(row.kind).toBe("projection");
+    // The category is the list's heading, not a sentence on the row.
+    expect(row.detail).toBe("Points");
+  });
+
+  it("prints the bare figure on the page, with no ± and no disclaimer beneath it", () => {
+    render(
+      <TopCalls
+        props={[prop("1", "Scorer", "points", 31, 4.2), prop("2", "Shooter", "threes", 4, null)]}
+        out={[]}
+      />,
+    );
+    expect(screen.getByText("31.0")).toBeInTheDocument();
+    expect(screen.getByText("4.0")).toBeInTheDocument();
+
+    const text = document.body.textContent!.toLowerCase();
+    for (const banned of ["±", "mae", "no error estimate", "no graded", "resolved rows"]) {
+      expect(text, `stripped text on the page: ${banned}`).not.toContain(banned);
+    }
+  });
+});
+
 describe("TopCalls — what the reader actually sees", () => {
   it("titles the list 'Model's top calls'", () => {
     render(<TopCalls props={[prop("1", "Scorer", "points", 31, 4.2)]} out={[]} />);
     expect(screen.getByTestId("picks-title")).toHaveTextContent("Model's top calls");
   });
 
-  it("renders the four category lists with their ± on the page", () => {
+  it("renders the four category lists, each row a bare figure", () => {
     render(
       <TopCalls
         props={[
@@ -216,10 +265,13 @@ describe("TopCalls — what the reader actually sees", () => {
     );
     const headings = screen.getAllByTestId("picks-category-heading").map((h) => h.textContent);
     expect(headings).toEqual(["Points", "Rebounds", "Assists", "Threes"]);
-    // The points row's ±, and the threes row's honest absence of one.
-    expect(screen.getByText("± 4.2")).toBeInTheDocument();
-    expect(screen.getByText("no error estimate yet")).toBeInTheDocument();
-    expect(screen.queryByText("± 0.0")).not.toBeInTheDocument();
+    // One figure per row, and nothing under it: the stat with an MAE and the
+    // stat without one are drawn the same way.
+    expect(screen.getAllByTestId("picks-value").map((v) => v.textContent)).toEqual(["31.0", "14.0", "9.0", "4.0"]);
+    const text = document.body.textContent!;
+    for (const banned of ["±", "no error estimate", "no graded"]) {
+      expect(text, `stripped text on the page: ${banned}`).not.toContain(banned);
+    }
   });
 
   it("renders every row as a projection, never a probability bar", () => {

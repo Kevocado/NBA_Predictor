@@ -27,10 +27,31 @@ from pathlib import Path
 from nba_predictor.tracking import store
 from nba_predictor.tracking.timing import (
     earliest_recorded,
+    earliest_recorded_outcome,
     latest_by_instant,
     latest_pre_tip,
     made_before_tip,
 )
+
+
+def _earliest_outcome(rows: list) -> dict[tuple[str, str], float]:
+    """{(player_id, stat): actual_value}, the EARLIEST recorded row per key.
+
+    The reader half of `uq_game_player_outcomes_key`. It has to key on exactly
+    the triple the unique index enforces -- (game_id, player_id, stat), and
+    `_counting_key` is the shared definition -- because a reader deduping on a
+    key the schema does not cover is a silent correctness hole, not a
+    second layer of safety.
+
+    Before this it was a bare dict comprehension over the rows as SQLite
+    returned them: no dedupe and no ORDER BY, so on a database holding two rows
+    for one key the MAE was graded against whichever came back last. One row
+    per key is the normal case and this returns the input unchanged there, so
+    the fix changes nothing on a clean file; it only makes the legacy,
+    pre-unique-index case deterministic instead of arbitrary.
+    """
+    return {(row["player_id"], row["stat"]): row["actual_value"]
+            for row in earliest_recorded_outcome(rows)}
 
 
 def _picks_from_rows(rows, game: dict) -> dict[tuple[str, str], dict]:
@@ -59,10 +80,7 @@ def picks_by_player_stat(db_path: Path, game_id: str, game: dict) -> dict[tuple[
 
 
 def actuals_by_player_stat(db_path: Path, game_id: str) -> dict[tuple[str, str], float]:
-    return {
-        (row["player_id"], row["stat"]): row["actual_value"]
-        for row in store.get_player_outcomes_for_game(db_path, game_id)
-    }
+    return _earliest_outcome(store.get_player_outcomes_for_game(db_path, game_id))
 
 
 # SQLite caps the number of bound parameters per statement; stay well under it.
@@ -102,9 +120,17 @@ def resolved_player_props(db_path: Path, schedule: list[dict]) -> list[dict]:
     actuals_by_game: dict[str, dict[tuple[str, str], float]] = {}
     rows_by_game: dict[str, list] = {}
     with store.get_connection(db_path) as conn:
-        for row in conn.execute("SELECT game_id, player_id, stat, actual_value FROM game_player_outcomes"):
+        # Grouped per game, then deduped by `_earliest_outcome`, so a duplicated
+        # key in a file that predates the unique index resolves to the earliest
+        # recorded row instead of to whatever SQLite scanned last.
+        outcomes_by_game: dict[str, list] = {}
+        for row in conn.execute(
+            "SELECT game_id, player_id, stat, actual_value, recorded_at FROM game_player_outcomes"
+        ):
             if row["game_id"] in games:
-                actuals_by_game.setdefault(row["game_id"], {})[(row["player_id"], row["stat"])] = row["actual_value"]
+                outcomes_by_game.setdefault(row["game_id"], []).append(row)
+        for game_id, outcome_rows in outcomes_by_game.items():
+            actuals_by_game[game_id] = _earliest_outcome(outcome_rows)
         ids = list(actuals_by_game)
         for i in range(0, len(ids), _IN_CHUNK):
             chunk = ids[i : i + _IN_CHUNK]

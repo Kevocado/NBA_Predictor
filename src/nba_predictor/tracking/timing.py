@@ -89,15 +89,19 @@ def made_before_tip(created_at: str, game: dict) -> bool:
         return False
 
 
-def _sort_key(row) -> tuple:
+def _stamp_key(row, column: str) -> tuple:
     """Earliest instant first; an unreadable stamp last.
 
     `na_position="last"` is the point: a row whose stamp cannot be parsed must
     never win a "which was recorded first" comparison, so it sorts behind
     everything provable instead of jumping the queue on a string comparison.
     """
-    instant = _instant_or_none(row["created_at"])
+    instant = _instant_or_none(row[column])
     return (instant is None, instant or datetime.max.replace(tzinfo=timezone.utc))
+
+
+def _sort_key(row) -> tuple:
+    return _stamp_key(row, "created_at")
 
 
 def _counting_key(row) -> tuple:
@@ -109,6 +113,10 @@ def _counting_key(row) -> tuple:
     `predictions` table has no player and no market -- the model publishes one
     probability per game there, and `game_outcome` is that market -- so its key
     reduces to the game.
+
+    The same triple is the key `store._UNIQUE_INDEXES` enforces on
+    `game_player_outcomes`, so this function and the schema cannot drift apart
+    without one of them being wrong. It is the reader half of the same key.
     """
     keys = row.keys()
     return (row["game_id"],
@@ -126,11 +134,24 @@ def earliest_recorded(rows: list) -> list:
     right would be free, and every model change would silently restate the
     record.
 
-    `predictions` and `player_prediction_snapshots` carry NO uniqueness
-    constraint, so a rerun genuinely lands twice; this is the rule that stops
-    it being graded twice, not a belt to braces. For the odds tables the unit
-    is the whole run rather than the row, because `refresh_odds` writes every
-    side of every bookmaker at one instant -- that is `earliest_run`.
+    **This dedupe is load-bearing, not belt to braces, and it is load-bearing
+    precisely because the schema does NOT enforce the key it dedupes.**
+    `predictions` and `player_prediction_snapshots` carry no uniqueness
+    constraint at all -- their only PRIMARY KEY is the surrogate `id`, which
+    makes each row distinct and constrains no business key -- so a rerun
+    genuinely lands twice and every aggregate path calls this function to stop
+    it being graded twice: `hub_service.counted_picks` for the hit rate,
+    `player_props.resolved_player_props` for the MAE. The scheduled refresh
+    re-presents a rolling window of finished games every day, so those
+    duplicates are the product working as specified, not an accident to be
+    constrained away. See `store._UNIQUE_INDEXES` for why
+    `game_player_outcomes` -- a fact table, where a duplicate WOULD move the
+    MAE -- is the one table that now has a unique index, and why the reader
+    there (`earliest_recorded_outcome`) stays anyway.
+
+    For the odds tables the unit is the whole run rather than the row, because
+    `refresh_odds` writes every side of every bookmaker at one instant -- that
+    is `earliest_run`.
 
     "Earliest" is by instant, so which row wins does not depend on how its
     timestamp happens to be spelled. A stamp that cannot be parsed cannot be
@@ -145,6 +166,37 @@ def earliest_recorded(rows: list) -> list:
     kept: list = []
     seen: set = set()
     for row in sorted(rows, key=_sort_key):
+        key = _counting_key(row)
+        if key in seen:
+            continue
+        seen.add(key)
+        kept.append(row)
+    return kept
+
+
+def earliest_recorded_outcome(rows: list) -> list:
+    """One row per (game, player, stat), the EARLIEST recorded. For OUTCOMES.
+
+    The same rule `earliest_recorded` applies to predictions, on the same
+    `(game, player, stat)` key, reading `recorded_at` instead of `created_at`
+    because that is the column an outcome is stamped with.
+
+    Defence in depth behind `uq_game_player_outcomes_key`, and it stays because
+    a unique index is only as complete as the writers: this is reached for any
+    database file that predates the index, and it is the reason adding the
+    index cannot change what serving reads on a clean file (there is one row
+    per key, so this returns the input unchanged).
+
+    What it fixes is that the outcome read had NO dedupe at all and no ORDER BY
+    -- it folded rows into a dict keyed by (player, stat), so on a file with a
+    duplicated key the MAE was graded against whichever row SQLite happened to
+    hand back last. That is the silent version of this defect: a number moves
+    and nothing records why. Here the winner is the earliest recorded one, the
+    same answer every other counted pick in this module gets.
+    """
+    kept: list = []
+    seen: set = set()
+    for row in sorted(rows, key=lambda r: _stamp_key(r, "recorded_at")):
         key = _counting_key(row)
         if key in seen:
             continue

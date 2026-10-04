@@ -7,10 +7,11 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import Scope
 
 from nba_predictor import config
-from nba_predictor.api.deps import get_schedule_path
+from nba_predictor.api.deps import get_models_dir, get_schedule_path
 from nba_predictor.api.explain import router as explain_router
 from nba_predictor.api.facts import router as facts_router
-from nba_predictor.api.routes import router, start_mae_warmer
+from nba_predictor.api.routes import router, start_mae_warmer, _market_stds_from_manifest
+from nba_predictor.pipeline.odds_refresher import start_odds_refresher
 from nba_predictor.tracking.store import init_db
 
 
@@ -35,18 +36,38 @@ class SPAStaticFiles(StaticFiles):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Warm the player-props MAE cache off the startup path.
+    """Warm the player-props MAE cache off the startup path, and keep the odds
+    market predictions fresh.
 
     The first GET /games/{game_id}/players after any deploy or database change
     otherwise costs the visitor about a second of bulk reads that belong to the
     process, not to them. The warmer is a daemon thread started here and its
     failures are logged inside warm_mae_cache, so a database that cannot be read
     yet at boot delays nothing and takes nothing down.
+
+    The odds refresher is the same shape and for the same reason.
+    `POST /refresh-odds` is `Depends(require_admin)`, so before this it ran only
+    when somebody called it by hand: the deployed container held
+    `SPORTSBOOK_API_KEY` and its `cache/sportsbook/` stayed empty, which is what
+    "wired up but never switched on" looks like. NBA's games are spread across
+    the week, so the refresh is a loop rather than a once-a-day step, and its
+    cadence is the sportsbook cache TTL — a faster tick spends no requests,
+    because the responses are already cached, and achieves nothing.
     """
     try:
         start_mae_warmer(config.TRACKING_DB_PATH, get_schedule_path())
     except Exception:  # noqa: BLE001 - a warm that cannot start must not stop the app
         logging.getLogger(__name__).exception("MAE cache warmer could not start")
+    try:
+        margin_std, total_std = _market_stds_from_manifest(get_models_dir())
+        start_odds_refresher(
+            config.TRACKING_DB_PATH,
+            get_schedule_path(),
+            margin_std=margin_std,
+            total_std=total_std,
+        )
+    except Exception:  # noqa: BLE001 - odds that cannot refresh must not stop the app
+        logging.getLogger(__name__).exception("odds refresher could not start")
     yield
 
 

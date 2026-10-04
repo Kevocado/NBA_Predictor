@@ -1,0 +1,55 @@
+name: tests
+
+# Added because NBA had none. `deploy-azure.yml`, `refresh-data.yml` and
+# `refresh-public-snapshot.yml` install the package and run scripts; not one of
+# them invoked pytest, so the suite here ran only when a person ran it. That is
+# how PR #32 was able to report "no checks reported on the branch" while changing
+# the application's startup path — a green-looking PR with nothing behind it.
+#
+# The same gap existed in the hub and was closed the same way (see
+# predictor-hub/.github/workflows/tests.yml).
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # 3.13, because that is what `requires-python = ">=3.13"` asks for and
+          # what the Dockerfile's `python:3.13-slim` serves. A gate on any other
+          # interpreter would be testing a runtime nothing deploys.
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Tests
+        # No network-marked deselection: NBA's suite has no `network` marker
+        # (grep finds none), so `pytest tests/` is the whole of it. If a
+        # metered-upstream test is ever added it must be marked and deselected
+        # here, the way NFL's workflow does — otherwise CI starts depending on
+        # that upstream being up.
+        env:
+          PYTHONPATH: ${{ github.workspace }}/src
+        run: pytest tests/ -q
+
+      - name: Byte-compile every tracked .py
+        # Catches a syntax error in a file no test imports, which a suite that
+        # only covers imported modules would never notice.
+        run: python -m py_compile $(git ls-files '*.py')

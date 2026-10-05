@@ -58,9 +58,26 @@ from ..models.player_props import STAT_TARGETS
 VISUAL = "absence_strip"
 PROJECTION_FIGURE = "projection"
 
-#: The unit in the headline. The component draws a bare number and cannot know it,
-#: so the unit lives here, in the adapter that DOES know.
-UNIT = {stat: "pts" for stat in STAT_TARGETS}
+#: The unit in the headline, PER STAT. The component draws a bare number and
+#: cannot know it, so the unit lives here, in the adapter that DOES know.
+#:
+#: **One unit per stat, not one for all of them.** The first version of this map
+#: was `{stat: "pts" for stat in STAT_TARGETS}`, so a rebound projection rendered
+#: as "11 pts" and a three as "2.5 pts" -- the right number in the wrong
+#: quantity, which on a page whose entire subject is numbers is not a cosmetic
+#: slip. Caught by CodeRabbit on #33.
+#:
+#: Declared per key rather than derived, because the sport's own abbreviations are
+#: not a rule: "3PM" is basketball's word and there is no arithmetic that gets it
+#: from "threes". `test_every_declared_stat_target_has_a_unit_of_its_own` fails if a
+#: new `STAT_TARGETS` entry arrives without one, rather than silently inheriting
+#: points.
+UNIT = {
+    "points": "pts",
+    "rebounds": "reb",
+    "assists": "ast",
+    "threes": "3PM",
+}
 
 
 def _is_out(entry: dict) -> bool:
@@ -94,7 +111,22 @@ def _ranked_by_stat(picks: dict) -> dict[str, list[tuple[int, float, str]]]:
     """
     buckets: dict[str, list[tuple[float, str]]] = {}
     for (player_id, stat), entry in (picks or {}).items():
-        pick = (entry or {}).get("pick") or {}
+        # `picks_by_player_stat` returns `{(player_id, stat): (pick_row, rebuilt)}`
+        # -- a TUPLE, per its own docstring and per how `get_game_players`
+        # unpacks it. The first version of this function read it as a mapping with
+        # a "pick" key, which is an AttributeError on every real request and was
+        # invisible to every test because the fixture had the same wrong shape.
+        # CodeRabbit on #33.
+        #
+        # `pick_row` may be `None`: `_picks_from_rows` falls back to
+        # `latest_by_instant`, which is None for a key with no rows at all. So
+        # this is `None`-checked rather than assumed, because one such player must
+        # not take the endpoint down.
+        if not (isinstance(entry, tuple) and len(entry) == 2):
+            continue
+        pick = entry[0]
+        if not isinstance(pick, dict):
+            continue
         value = pick.get("predicted_value")
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             continue

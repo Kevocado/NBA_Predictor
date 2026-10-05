@@ -25,8 +25,15 @@ from nba_predictor.api import signals as signals_module
 from nba_predictor.api.signals import MAX_SIGNALS, get_signals, signals_for_game
 
 
-def pick(value: float) -> dict:
-    return {"pick": {"predicted_value": value}, "rebuilt": False}
+def pick(value: float, rebuilt: bool = False):
+    """`picks_by_player_stat`'s REAL entry shape: a `(pick_row, rebuilt)` TUPLE.
+
+    This file's fixture originally used `{"pick": {...}, "rebuilt": False}`, the
+    same wrong shape the adapter's own tests had -- so the endpoint appeared to
+    work end to end while crashing on every real request. See
+    tests/test_absence_signal.py's `pick` for the full note.
+    """
+    return ({"predicted_value": value}, rebuilt)
 
 
 OUT = {

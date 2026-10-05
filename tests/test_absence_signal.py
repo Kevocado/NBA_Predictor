@@ -62,9 +62,33 @@ from nba_predictor.models.player_props import STAT_TARGETS
 from nba_predictor.signals.absence import absence_signal, headline
 
 
-def pick(value: float) -> dict:
-    """One `(pick, rebuilt)` pair, the shape `picks_by_player_stat` yields."""
-    return {"pick": {"predicted_value": value}, "rebuilt": False}
+def pick(value: float, rebuilt: bool = False):
+    """One entry of `picks_by_player_stat`'s output, in its REAL shape.
+
+    `tracking/player_props.picks_by_player_stat` returns
+    `{(player_id, stat): (pick_row, rebuilt)}` -- a **tuple**, per its own
+    docstring and per `get_game_players`' unpacking:
+
+        for (player_id, stat), (pick, rebuilt) in picks.items():
+            ... predicted_value=pick["predicted_value"]
+
+    The first version of this file's fixture used `{"pick": {...}, "rebuilt": False}`
+    instead, and the adapter read it happily -- so the adapter shipped a
+    `.get("pick")` on a value that is a tuple, which is an `AttributeError` on
+    every real request and invisible to every test here. Caught by CodeRabbit on
+    #33. A fixture that does not match the producer's real shape is a test that
+    passes for the wrong reason, and the shape is the whole thing being asserted.
+
+    `pick_row` can also be `None` -- `_picks_from_rows` falls back to
+    `latest_by_instant`, which is `None` for a game with no rows at all -- so
+    `none_pick()` is a real shape too.
+    """
+    return ({"predicted_value": value}, rebuilt)
+
+
+def none_pick():
+    """The `None` `pick_row` `_picks_from_rows` can yield."""
+    return (None, False)
 
 
 def out(player_id: str, name: str, status: str = "out") -> dict:
@@ -285,3 +309,83 @@ def test_a_non_finite_projection_is_skipped_rather_than_stated():
     pool = {("p2", "points"): pick(float("nan")), ("p3", "points"): pick(10.0)}
     sig = absence_signal("401", pool, [out("p2", "Big")], NAMES)
     assert sig is None
+
+
+# --- the producer's real shape, and the units that go with it -----------
+
+
+def test_the_entry_shape_is_the_tuple_picks_by_player_stat_actually_yields():
+    """Caught by CodeRabbit on #33. The first version of this file's fixture used
+    `{"pick": {...}, "rebuilt": False}`, so the adapter shipped a `.get("pick")`
+    on a value that is a `(pick_row, rebuilt)` TUPLE -- an `AttributeError` on
+    every real request, invisible to every test here.
+
+    Asserted against the function itself rather than against a literal, so a
+    change to the producer's shape breaks this test rather than silently making
+    the fixture wrong again.
+    """
+    from nba_predictor.tracking import player_props as tracking_props
+
+    assert "{(" in tracking_props.picks_by_player_stat.__doc__
+    sig = absence_signal("401", {("p2", "points"): pick(31.5)}, [out("p2", "Big")], NAMES)
+    assert sig is not None
+    assert "31.5" in sig["headline"]["text"]
+
+
+def test_a_none_pick_row_is_skipped_not_crashed():
+    """`_picks_from_rows` yields `(None, rebuilt)` when a game has no rows for a
+    key -- `latest_by_instant` is `None` there. Reading `predicted_value` off it
+    is an `AttributeError`, which would take the whole endpoint down over one
+    player."""
+    pool = {("p2", "points"): none_pick(), ("p3", "points"): pick(24.0)}
+    assert absence_signal("401", pool, [out("p2", "Big")], NAMES) is None
+
+
+def test_a_pool_mixing_none_picks_and_real_ones_uses_the_real_ones():
+    pool = {
+        ("p2", "points"): none_pick(),
+        ("p3", "points"): pick(24.0),
+        ("p1", "points"): pick(12.0),
+    }
+    sig = absence_signal("401", pool, [out("p1", "Small")], NAMES)
+    assert sig is not None
+    assert "Small" in sig["headline"]["text"]
+
+
+@pytest.mark.parametrize(
+    "stat,value,unit",
+    [
+        ("points", 31.5, "pts"),
+        ("rebounds", 11.0, "reb"),
+        ("assists", 7.5, "ast"),
+        ("threes", 2.5, "3PM"),
+    ],
+)
+def test_each_stat_states_its_OWN_unit(stat, value, unit):
+    """Caught by CodeRabbit on #33. `UNIT` was `{stat: "pts" for stat in
+    STAT_TARGETS}`, so a rebound projection was labelled "11 pts" -- the same
+    number in the wrong quantity, which on a page about numbers is not a cosmetic
+    slip.
+
+    Parametrised over every declared target rather than asserting points alone:
+    one assertion cannot catch a comprehension that labels everything the same.
+    """
+    pool = {(("p2"), stat): pick(value)}
+    sig = absence_signal("401", pool, [out("p2", "Big")], NAMES)
+    assert sig is not None, stat
+    assert f"({value:g} {unit})" in sig["headline"]["text"], (stat, sig["headline"]["text"])
+    # And no other stat's unit leaked into it.
+    for other in ("pts", "reb", "ast", "3PM"):
+        if other != unit:
+            assert f" {other})" not in sig["headline"]["text"], (stat, other)
+
+
+def test_every_declared_stat_target_has_a_unit_of_its_own():
+    """No stat may fall through to points. A missing entry would render the bare
+    number with no unit at all, which is the same defect as the wrong one."""
+    from nba_predictor.signals import absence as mod
+
+    missing = [s for s in STAT_TARGETS if s not in mod.UNIT]
+    assert not missing, f"no unit declared for {missing}"
+    # And no two stats share a unit, except where the sport genuinely does.
+    assert len(set(mod.UNIT[s] for s in STAT_TARGETS)) == len(STAT_TARGETS)

@@ -193,3 +193,29 @@ def test_windows_split_between_dates_never_mid_date():
         assert not (set(df["game_date"].iloc[train_idx]) & set(df["game_date"].iloc[test_idx])), (
             "a game date is split across the train/test boundary"
         )
+
+
+def test_margin_walk_forward_reports_mae_vs_naive_scale():
+    from nba_predictor.models.evaluate.walk_forward_eval import walk_forward_regression
+
+    df = make_games(n=100)
+    rng = np.random.default_rng(42)
+    df["home_margin"] = df["strength"] * 2 + rng.normal(0, 3, len(df))
+
+    def dummy_reg_factory(train_df):
+        from sklearn.linear_model import Ridge
+
+        model = Ridge(alpha=1.0)
+        model.fit(train_df[FEATURE_COLS], train_df["home_margin"])
+        return lambda X: model.predict(X[FEATURE_COLS])
+
+    res = walk_forward_regression(df, model_factory=dummy_reg_factory, target="home_margin")
+    assert "mae" in res["pooled"] and "naive_mae" in res["pooled"]
+    assert res["pooled"]["mae"] > 0
+
+
+def test_manifest_emits_probability_metrics():
+    from nba_predictor.models.manifest import build_manifest
+
+    manifest = build_manifest(metrics={"log_loss": 0.63, "brier": 0.22, "auc": 0.60})
+    assert manifest["log_loss"] == 0.63 and manifest["brier"] == 0.22 and manifest["auc"] == 0.60

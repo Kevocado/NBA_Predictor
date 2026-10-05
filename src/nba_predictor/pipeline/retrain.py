@@ -7,6 +7,10 @@ import pandas as pd
 
 from nba_predictor.features.build import build_training_frame
 from nba_predictor.models.evaluate.walk_forward import chronological_split
+from nba_predictor.models.evaluate.walk_forward_eval import (
+    walk_forward_metrics,
+    walk_forward_regression,
+)
 from nba_predictor.models.game_outcome import (
     predict_win_probability,
     train_margin_model,
@@ -42,6 +46,24 @@ def run_retrain_pipeline(games: pd.DataFrame, models_dir: Path, model_version: s
     total_model = train_total_model(train_df[feature_cols], train_df["home_pts"] + train_df["away_pts"])
 
     metrics = {}
+    # Compute walk-forward metrics as required
+    wf_win = None
+    wf_margin = None
+    wf_total = None
+    try:
+        wf_win = walk_forward_metrics(train_df, model_factory=lambda tr: lambda X: predict_win_probability(win_model, X[feature_cols]), windows=4)
+    except Exception:
+        wf_win = None
+    try:
+        wf_margin = walk_forward_regression(train_df, model_factory=lambda tr: lambda X: margin_model.predict(X[feature_cols]), target="home_margin", windows=4)
+    except Exception:
+        wf_margin = None
+    try:
+        total_target = train_df["home_pts"] + train_df["away_pts"]
+        wf_total = walk_forward_regression(train_df.assign(home_total=total_target), model_factory=lambda tr: lambda X: total_model.predict(X[feature_cols]), target="home_total", windows=4)
+    except Exception:
+        wf_total = None
+
     if len(holdout_df) > 0:
         win_probs = predict_win_probability(win_model, holdout_df[feature_cols])
         win_preds = (win_probs >= 0.5).astype(int)
@@ -71,7 +93,29 @@ def run_retrain_pipeline(games: pd.DataFrame, models_dir: Path, model_version: s
             "n_holdout_games": int(len(holdout_games)),
             "n_current_season_games": n_current_season_games,
         },
+        **(
+            {}
+            if not wf_win
+            else {
+                "log_loss": wf_win["pooled"].get("log_loss"),
+                "brier": wf_win["pooled"].get("brier"),
+                "auc": wf_win["pooled"].get("auc"),
+            }
+        ),
     )
+    # also add regression MAEs if available
+    try:
+        if wf_margin:
+            manifest["margin_mae"] = wf_margin["pooled"]["mae"]
+            manifest["margin_mae_naive"] = wf_margin["pooled"].get("naive_mae")
+    except Exception:
+        pass
+    try:
+        if wf_total:
+            manifest["total_mae"] = wf_total["pooled"]["mae"]
+            manifest["total_mae_naive"] = wf_total["pooled"].get("naive_mae")
+    except Exception:
+        pass
     write_manifest(manifest, models_dir / "manifest.json")
     append_manifest_history(manifest, models_dir / "manifest_history.jsonl")
 

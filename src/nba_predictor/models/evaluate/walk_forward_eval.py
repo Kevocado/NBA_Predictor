@@ -22,7 +22,7 @@ from typing import Callable
 
 import numpy as np
 import pandas as pd
-from sklearn.metrics import brier_score_loss, log_loss, roc_auc_score
+from sklearn.metrics import brier_score_loss, log_loss, mean_absolute_error, roc_auc_score
 
 #: log(2) -- what a model that knows nothing scores. The NFL repo's 0.6227 is
 #: quoted against this (spec section 5).
@@ -147,3 +147,81 @@ def walk_forward_metrics(
         "windows": per_window,
         "pooled": classification_metrics(np.concatenate(ys), np.concatenate(ps)),
     }
+
+
+def walk_forward_regression(
+    df: pd.DataFrame,
+    model_factory: Callable[[pd.DataFrame], object],
+    target: str,
+    windows: int = 4,
+    *,
+    date_col: str = "game_date",
+) -> dict:
+    """Expanding-window walk-forward for a regression target.
+
+    `model_factory(train_df)` returns a `predict(X) -> np.ndarray` callable
+    taking the full test frame and picking its own columns (mirrors the win
+    path contract).
+    """
+    df = df.sort_values(date_col).reset_index(drop=True)
+    per_window, ys, yhs = [], [], []
+
+    for i, (train_idx, test_idx) in enumerate(expanding_windows(df[date_col], windows)):
+        train_df, test_df = df.iloc[train_idx], df.iloc[test_idx]
+        y_test = test_df[target].to_numpy()
+
+        train_max, test_min = str(train_df[date_col].max()), str(test_df[date_col].min())
+        if train_max >= test_min:
+            raise AssertionError(
+                f"window {i}: train_max_date {train_max} >= test_min_date {test_min}"
+            )
+
+        pred_fn = model_factory(train_df)
+        y_pred = np.asarray(pred_fn(test_df), dtype=float)
+        if y_pred.ndim > 1:
+            y_pred = y_pred.ravel()
+
+        mae = float(mean_absolute_error(y_test, y_pred))
+        naive_mean = float(train_df[target].mean()) if len(train_df) > 0 else 0.0
+        naive_mae_train = float(mean_absolute_error(y_test, np.full_like(y_test, naive_mean)))
+        # Second baseline as specified
+        if target == "home_margin":
+            naive_fixed = 3.0  # home -3 style baseline per brief
+        else:
+            naive_fixed = naive_mean  # for totals/others, fall back to league mean style
+        naive_mae_fixed = float(mean_absolute_error(y_test, np.full_like(y_test, naive_fixed)))
+        metrics = {
+            "mae": mae,
+            "naive_mae": naive_mae_train,  # train-window mean baseline (league average)
+            "naive_mae_league": naive_mae_train,
+            "naive_mae_fixed": naive_mae_fixed,
+            "naive_mae_home3": naive_mae_fixed,
+            "naive_mean": naive_mean,
+            "n": int(len(y_test)),
+            "window": i,
+            "train_max_date": train_max,
+            "test_min_date": test_min,
+            "n_train": len(train_df),
+            "n_test": len(test_df),
+        }
+        per_window.append(metrics)
+        ys.append(y_test)
+        yhs.append(y_pred)
+
+    y_all = np.concatenate(ys)
+    yh_all = np.concatenate(yhs)
+    naive_mean_all = float(df[target].mean()) if len(df) > 0 else 0.0
+    if target == "home_margin":
+        naive_fixed_all = 3.0
+    else:
+        naive_fixed_all = naive_mean_all
+    pooled = {
+        "mae": float(mean_absolute_error(y_all, yh_all)),
+        "naive_mae": float(mean_absolute_error(y_all, np.full_like(y_all, naive_mean_all))),
+        "naive_mae_league": float(mean_absolute_error(y_all, np.full_like(y_all, naive_mean_all))),
+        "naive_mae_fixed": float(mean_absolute_error(y_all, np.full_like(y_all, naive_fixed_all))),
+        "naive_mae_home3": float(mean_absolute_error(y_all, np.full_like(y_all, naive_fixed_all))),
+        "naive_mean": naive_mean_all,
+        "n": int(len(y_all)),
+    }
+    return {"windows": per_window, "pooled": pooled}

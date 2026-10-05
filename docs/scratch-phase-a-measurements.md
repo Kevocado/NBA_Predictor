@@ -36,5 +36,36 @@ brier 0.2516 | auc 0.5912 | accuracy 0.5844 (n=758)
    it contributes 4 rows to the pooled figure. Not material at n=758, but the
    report should not quote a per-window table as if every row were equal.
 
-Not yet measured: margin/total walk-forward (Task 4), race winner (Task 5),
-prop holdout (Task 8-9).
+### Task 4 — margin/total walk-forward (via `run_retrain_pipeline`, 1,390 real games)
+
+Note: this is scored on `train_games` (the 80% chronological split), so it is not directly
+comparable to the Task 3 table above, which used the full frame. Task 11 must quote one
+consistently.
+
+| model | metric | walk-forward | naive baseline | verdict |
+|---|---|---|---|---|
+| win | log-loss | 0.7712 | coinflip 0.6931 / train-base | loses |
+| win | brier | 0.2753 | — | — |
+| win | auc | 0.5496 | 0.5 | ~chance |
+| margin | MAE | **13.461** | **12.861** (home −3 fixed) | **loses** |
+| total | MAE | **16.904** | — | — |
+
+Holdout (old path, retained for reference): accuracy 0.6583, margin MAE 13.698, total MAE 18.540.
+
+### Reads
+
+1. **The margin model does not beat "home wins by 3".** Walk-forward MAE 13.461 against a
+   fixed −3 baseline of 12.861. The old spec text called margin MAE 13.9 "at-or-above naive
+   scale (margin σ≈12)"; walk-forward puts it concretely: the model is *worse than a constant
+   −3*. That is the honest headline for Phase A.
+2. **Total improves on the holdout figure** (16.904 vs 18.540) — different estimator, not a
+   regression, but not comparable either.
+3. The win AUC of 0.5496 here is even weaker than Task 3's 0.5912 on the full frame, and the
+   log-loss worse (0.7712 vs 0.7059). Consistent with the sample-size story: this run trains on
+   80% of the data, and each window refits from scratch on a growing slice.
+
+This is what makes Task 5 (candidate race) the load-bearing next step. If Ridge beats a
+200-tree depth-4 booster on 24 features at these sample sizes, that is the whole ballgame —
+and it is exactly what happened in the NFL repo.
+
+Not yet measured: race winner (Task 5), residual-σ calibration (Task 6), prop holdout (8-9).

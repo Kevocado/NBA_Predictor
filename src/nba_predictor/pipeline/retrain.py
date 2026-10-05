@@ -1,4 +1,5 @@
 from datetime import datetime
+import logging
 from pathlib import Path
 
 import joblib
@@ -50,6 +51,7 @@ def run_retrain_pipeline(games: pd.DataFrame, models_dir: Path, model_version: s
     wf_win = None
     wf_margin = None
     wf_total = None
+    logger = logging.getLogger(__name__)
     try:
         wf_win = walk_forward_metrics(
             train_df,
@@ -60,8 +62,8 @@ def run_retrain_pipeline(games: pd.DataFrame, models_dir: Path, model_version: s
             ),
             windows=4,
         )
-    except Exception as e:
-        print(f"walk_forward win failed: {e}")
+    except Exception:
+        logger.exception("walk_forward win failed")
         wf_win = None
     try:
         wf_margin = walk_forward_regression(
@@ -72,8 +74,8 @@ def run_retrain_pipeline(games: pd.DataFrame, models_dir: Path, model_version: s
             target="home_margin",
             windows=4,
         )
-    except Exception as e:
-        print(f"walk_forward margin failed: {e}")
+    except Exception:
+        logger.exception("walk_forward margin failed")
         wf_margin = None
     try:
         total_target = train_df["home_pts"] + train_df["away_pts"]
@@ -85,8 +87,8 @@ def run_retrain_pipeline(games: pd.DataFrame, models_dir: Path, model_version: s
             target="home_total",
             windows=4,
         )
-    except Exception as e:
-        print(f"walk_forward total failed: {e}")
+    except Exception:
+        logger.exception("walk_forward total failed")
         wf_total = None
 
     if len(holdout_df) > 0:
@@ -109,11 +111,11 @@ def run_retrain_pipeline(games: pd.DataFrame, models_dir: Path, model_version: s
     joblib.dump(total_model, models_dir / "total_model.pkl")
 
     # Place probability metrics under metrics.win_probability (frontend reads per-model metrics)
-    # Do NOT overwrite holdout metrics; store walk-forward under distinct keys
+    # win_probability: unprefixed so labels light up (G10); keep accuracy as-is
     if wf_win:
-        metrics.setdefault("win_probability", {})["wf_log_loss"] = wf_win["pooled"].get("log_loss")
-        metrics.setdefault("win_probability", {})["wf_brier"] = wf_win["pooled"].get("brier")
-        metrics.setdefault("win_probability", {})["wf_auc"] = wf_win["pooled"].get("auc")
+        metrics.setdefault("win_probability", {})["log_loss"] = wf_win["pooled"].get("log_loss")
+        metrics.setdefault("win_probability", {})["brier"] = wf_win["pooled"].get("brier")
+        metrics.setdefault("win_probability", {})["auc"] = wf_win["pooled"].get("auc")
     if wf_margin:
         metrics.setdefault("margin", {})["wf_mae"] = wf_margin["pooled"]["mae"]
         if "naive_mae_fixed" in wf_margin["pooled"]:

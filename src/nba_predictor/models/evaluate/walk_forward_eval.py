@@ -34,24 +34,12 @@ def expanding_windows(
     n_windows: int = 4,
     min_train_fraction: float = 0.4,
 ) -> list[tuple[np.ndarray, np.ndarray]]:
-    """(train_idx, test_idx) position arrays per window, in date order.
-
-    Window 0 trains on the oldest `min_train_fraction` and tests on the next
-    slice; each later window folds the previous test slice into training and
-    takes a fresh slice after it. Expanding, not rolling -- history
-    accumulates, which is what a season of games actually looks like.
-
-    Cuts land on **date** boundaries, not row boundaries. The NBA plays 10-12
-    games a night, so a row-wise cut lands mid-date often enough to matter:
-    every feature on that date would have seen games in the same window it is
-    being scored in. This refused to evaluate the real 1,390-game training set
-    before the cut was moved onto dates.
-    """
+    """(train_idx, test_idx) position arrays per window, in date order."""
     n = len(dates)
     if n < 4:
         raise ValueError("Need at least 4 rows for walk-forward windows")
 
-    unique_dates = pd.Index(dates).unique()  # order of first appearance
+    unique_dates = pd.Index(dates).unique()
     n_dates = len(unique_dates)
     if n_dates < 3:
         raise ValueError("Need at least 3 distinct dates for walk-forward windows")
@@ -61,7 +49,6 @@ def expanding_windows(
     if n_dates - first_train_dates < 1:
         raise ValueError("Not enough distinct dates to build a walk-forward window")
 
-    # date value -> positions, so each window is a set of whole dates.
     by_date = {d: np.flatnonzero(np.asarray(dates == d)) for d in unique_dates}
 
     windows, train_end = [], first_train_dates
@@ -79,17 +66,6 @@ def classification_metrics(
     p: np.ndarray,
     naive_base_rate: float | None = None,
 ) -> dict:
-    """log-loss / Brier / AUC over out-of-fold predictions, plus both baselines.
-
-    `naive_base_rate` is the home-win rate of the games *before* this window --
-    what a naive model in production could actually know. Accepts a scalar (one
-    window) or a per-observation array (pooled windows, each carrying the rate
-    that was knowable then). Defaults to the pooled set's own rate only when a
-    caller has no training window to hand.
-
-    AUC is None when the pooled set has one class (a window with no home wins),
-    because a number there would be fabricated.
-    """
     p = np.clip(p, 1e-12, 1 - 1e-12)
     if naive_base_rate is None:
         naive_p = np.full(len(y_true), np.clip(np.mean(y_true), 1e-12, 1 - 1e-12))
@@ -102,7 +78,6 @@ def classification_metrics(
         "accuracy": float(((p >= 0.5).astype(int) == y_true).mean()),
         "auc": float(roc_auc_score(y_true, p)) if len(np.unique(y_true)) > 1 else None,
         "n": int(len(y_true)),
-        # The bars. An evaluator that omits these is the thing G1 was about.
         "coinflip_log_loss": COINFLIP_LOG_LOSS,
         "naive_base_rate": float(np.mean(naive_p)),
         "naive_log_loss": float(log_loss(y_true, naive_p, labels=[0, 1])),
@@ -117,16 +92,6 @@ def walk_forward_metrics(
     date_col: str = "game_date",
     target_col: str = "home_win",
 ) -> dict:
-    """Expanding-window walk-forward for the win model.
-
-    `model_factory(train_df)` returns a `predict_proba(X) -> P(home win)`
-    callable. Handing back the callable rather than a bare fitted model lets
-    each candidate own its own feature columns -- which is what lets an Elo
-    baseline, a Ridge and an XGBoost race unchanged in Task 5.
-
-    Returns per-window metrics plus `pooled`: every out-of-fold prediction
-    concatenated, the only figure computed entirely on games no window trained on.
-    """
     df = df.sort_values(date_col).reset_index(drop=True)
     per_window, ys, ps, naive_ps = [], [], [], []
 
@@ -141,11 +106,6 @@ def walk_forward_metrics(
             )
 
         p = np.asarray(model_factory(train_df)(test_df), dtype=float)
-        # The naive comparator uses the TRAINING window's home-win rate, never
-        # the test window's. A rate read off the answers would quietly
-        # strengthen the baseline with hindsight, by an amount that grows as
-        # the season's home rate drifts -- so the headline number would move
-        # for reasons that have nothing to do with the model.
         train_rate = float(train_df[target_col].mean())
         y_true = y_test.to_numpy()
         metrics = classification_metrics(y_true, p, naive_base_rate=train_rate)
@@ -164,8 +124,6 @@ def walk_forward_metrics(
     y_all = np.concatenate(ys)
     return {
         "windows": per_window,
-        # Pooled naive uses each window's own training base rate, so the
-        # comparator is honest about what was knowable at each point in time.
         "pooled": classification_metrics(
             y_all, np.concatenate(ps), naive_base_rate=np.concatenate(naive_ps)
         ),
@@ -180,12 +138,6 @@ def walk_forward_regression(
     *,
     date_col: str = "game_date",
 ) -> dict:
-    """Expanding-window walk-forward for a regression target.
-
-    `model_factory(train_df)` returns a `predict(X) -> np.ndarray` callable
-    taking the full test frame and picking its own columns (mirrors the win
-    path contract).
-    """
     df = df.sort_values(date_col).reset_index(drop=True)
     windows_list = expanding_windows(df[date_col], windows)
     per_window, ys, yhs = [], [], []
@@ -210,7 +162,7 @@ def walk_forward_regression(
         naive_mae_train = float(mean_absolute_error(y_test, np.full_like(y_test, naive_mean)))
         metrics = {
             "mae": mae,
-            "naive_mae": naive_mae_train,  # train-window mean baseline
+            "naive_mae": naive_mae_train,
             "naive_mean": naive_mean,
             "n": int(len(y_test)),
             "window": i,
@@ -222,13 +174,15 @@ def walk_forward_regression(
         if target == "home_margin":
             naive_fixed = 3.0
             metrics["naive_mae_fixed"] = float(mean_absolute_error(y_test, np.full_like(y_test, naive_fixed)))
+        elif target == "home_total":
+            naive_fixed = float(train_df[target].mean()) if len(train_df) > 0 else 0.0
+            metrics["naive_mae_fixed"] = float(mean_absolute_error(y_test, np.full_like(y_test, naive_fixed)))
         per_window.append(metrics)
         ys.append(y_test)
         yhs.append(y_pred)
 
     y_all = np.concatenate(ys)
     yh_all = np.concatenate(yhs)
-    # Pooled naive: per-window training means (leak-free), mirroring classification
     naive_preds = []
     for i, (train_idx, test_idx) in enumerate(windows_list):
         train_df, test_df = df.iloc[train_idx], df.iloc[test_idx]
@@ -243,5 +197,13 @@ def walk_forward_regression(
     }
     if target == "home_margin":
         naive_fixed_all = np.full_like(y_all, 3.0)
+        pooled["naive_mae_fixed"] = float(mean_absolute_error(y_all, naive_fixed_all))
+    elif target == "home_total":
+        naive_preds_fixed = []
+        for i, (train_idx, test_idx) in enumerate(windows_list):
+            train_df, test_df = df.iloc[train_idx], df.iloc[test_idx]
+            m = float(train_df[target].mean()) if len(train_df) > 0 else 0.0
+            naive_preds_fixed.append(np.full(len(test_df), m))
+        naive_fixed_all = np.concatenate(naive_preds_fixed) if naive_preds_fixed else np.full_like(y_all, 0.0)
         pooled["naive_mae_fixed"] = float(mean_absolute_error(y_all, naive_fixed_all))
     return {"windows": per_window, "pooled": pooled}

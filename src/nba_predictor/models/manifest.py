@@ -8,14 +8,20 @@ def build_manifest(
     model_version: str,
     trained_at: str,
     training: dict | None = None,
+    **kwargs,
 ) -> dict:
-    return {
+    manifest = {
         "model_version": model_version,
         "trained_at": trained_at,
         "models": model_names,
         "metrics": metrics,
         "training": training or {},
     }
+    # Add any extra fields (e.g., chosen_candidate) without clobbering existing keys
+    for k, v in kwargs.items():
+        if k not in manifest:
+            manifest[k] = v
+    return manifest
 
 
 def write_manifest(manifest: dict, path: Path) -> None:

@@ -207,18 +207,9 @@ def walk_forward_regression(
         mae = float(mean_absolute_error(y_test, y_pred))
         naive_mean = float(train_df[target].mean()) if len(train_df) > 0 else 0.0
         naive_mae_train = float(mean_absolute_error(y_test, np.full_like(y_test, naive_mean)))
-        # Second baseline as specified
-        if target == "home_margin":
-            naive_fixed = 3.0  # home -3 style baseline per brief
-        else:
-            naive_fixed = naive_mean  # for totals/others, fall back to league mean style
-        naive_mae_fixed = float(mean_absolute_error(y_test, np.full_like(y_test, naive_fixed)))
         metrics = {
             "mae": mae,
-            "naive_mae": naive_mae_train,  # train-window mean baseline (league average)
-            "naive_mae_league": naive_mae_train,
-            "naive_mae_fixed": naive_mae_fixed,
-            "naive_mae_home3": naive_mae_fixed,
+            "naive_mae": naive_mae_train,  # train-window mean baseline
             "naive_mean": naive_mean,
             "n": int(len(y_test)),
             "window": i,
@@ -227,24 +218,29 @@ def walk_forward_regression(
             "n_train": len(train_df),
             "n_test": len(test_df),
         }
+        if target == "home_margin":
+            naive_fixed = 3.0
+            metrics["naive_mae_fixed"] = float(mean_absolute_error(y_test, np.full_like(y_test, naive_fixed)))
         per_window.append(metrics)
         ys.append(y_test)
         yhs.append(y_pred)
 
     y_all = np.concatenate(ys)
     yh_all = np.concatenate(yhs)
-    naive_mean_all = float(df[target].mean()) if len(df) > 0 else 0.0
-    if target == "home_margin":
-        naive_fixed_all = 3.0
-    else:
-        naive_fixed_all = naive_mean_all
+    # Pooled naive: per-window training means (leak-free), mirroring classification
+    naive_preds = []
+    for i, (train_idx, test_idx) in enumerate(expanding_windows(df[date_col], windows)):
+        train_df, test_df = df.iloc[train_idx], df.iloc[test_idx]
+        m = float(train_df[target].mean()) if len(train_df) > 0 else 0.0
+        naive_preds.append(np.full(len(test_df), m))
+    naive_all = np.concatenate(naive_preds) if naive_preds else np.full_like(y_all, 0.0)
     pooled = {
         "mae": float(mean_absolute_error(y_all, yh_all)),
-        "naive_mae": float(mean_absolute_error(y_all, np.full_like(y_all, naive_mean_all))),
-        "naive_mae_league": float(mean_absolute_error(y_all, np.full_like(y_all, naive_mean_all))),
-        "naive_mae_fixed": float(mean_absolute_error(y_all, np.full_like(y_all, naive_fixed_all))),
-        "naive_mae_home3": float(mean_absolute_error(y_all, np.full_like(y_all, naive_fixed_all))),
-        "naive_mean": naive_mean_all,
+        "naive_mae": float(mean_absolute_error(y_all, naive_all)),
+        "naive_mean": float(naive_all.mean()) if len(naive_all) else 0.0,
         "n": int(len(y_all)),
     }
+    if target == "home_margin":
+        naive_fixed_all = np.full_like(y_all, 3.0)
+        pooled["naive_mae_fixed"] = float(mean_absolute_error(y_all, naive_fixed_all))
     return {"windows": per_window, "pooled": pooled}

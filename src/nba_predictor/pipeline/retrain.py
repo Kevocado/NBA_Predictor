@@ -83,6 +83,18 @@ def run_retrain_pipeline(games: pd.DataFrame, models_dir: Path, model_version: s
     joblib.dump(margin_model, models_dir / "margin_model.pkl")
     joblib.dump(total_model, models_dir / "total_model.pkl")
 
+    # Place probability metrics under metrics.win_probability (frontend reads per-model metrics)
+    if wf_win:
+        metrics.setdefault("win_probability", {})["log_loss"] = wf_win["pooled"].get("log_loss")
+        metrics.setdefault("win_probability", {})["brier"] = wf_win["pooled"].get("brier")
+        metrics.setdefault("win_probability", {})["auc"] = wf_win["pooled"].get("auc")
+    if wf_margin:
+        metrics.setdefault("margin", {})["mae"] = wf_margin["pooled"]["mae"]
+        if "naive_mae_fixed" in wf_margin["pooled"]:
+            metrics.setdefault("margin", {})["naive_mae_fixed"] = wf_margin["pooled"]["naive_mae_fixed"]
+    if wf_total:
+        metrics.setdefault("total", {})["mae"] = wf_total["pooled"]["mae"]
+
     manifest = build_manifest(
         model_names=["win_probability", "margin", "total"],
         metrics=metrics,
@@ -93,29 +105,7 @@ def run_retrain_pipeline(games: pd.DataFrame, models_dir: Path, model_version: s
             "n_holdout_games": int(len(holdout_games)),
             "n_current_season_games": n_current_season_games,
         },
-        **(
-            {}
-            if not wf_win
-            else {
-                "log_loss": wf_win["pooled"].get("log_loss"),
-                "brier": wf_win["pooled"].get("brier"),
-                "auc": wf_win["pooled"].get("auc"),
-            }
-        ),
     )
-    # also add regression MAEs if available
-    try:
-        if wf_margin:
-            manifest["margin_mae"] = wf_margin["pooled"]["mae"]
-            manifest["margin_mae_naive"] = wf_margin["pooled"].get("naive_mae")
-    except Exception:
-        pass
-    try:
-        if wf_total:
-            manifest["total_mae"] = wf_total["pooled"]["mae"]
-            manifest["total_mae_naive"] = wf_total["pooled"].get("naive_mae")
-    except Exception:
-        pass
     write_manifest(manifest, models_dir / "manifest.json")
     append_manifest_history(manifest, models_dir / "manifest_history.jsonl")
 

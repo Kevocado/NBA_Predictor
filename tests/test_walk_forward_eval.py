@@ -260,5 +260,12 @@ def test_margin_walk_forward_reports_mae_vs_naive_scale():
 def test_manifest_emits_probability_metrics():
     from nba_predictor.models.manifest import build_manifest
 
-    manifest = build_manifest(metrics={"log_loss": 0.63, "brier": 0.22, "auc": 0.60})
-    assert manifest["log_loss"] == 0.63 and manifest["brier"] == 0.22 and manifest["auc"] == 0.60
+    manifest = build_manifest(
+        model_names=["win_probability", "margin", "total"],
+        metrics={"log_loss": 0.63, "brier": 0.22, "auc": 0.60},
+        model_version="v1",
+        trained_at="2026-11-01T00:00:00",
+    )
+    assert manifest["metrics"]["log_loss"] == 0.63
+    assert manifest["metrics"]["brier"] == 0.22
+    assert manifest["metrics"]["auc"] == 0.60

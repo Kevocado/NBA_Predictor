@@ -40,23 +40,58 @@ def _parse_made_attempted(value: str) -> tuple[float, float]:
         return 0.0, 0.0
 
 
-def store_player_outcomes(training_df: pd.DataFrame, db_path: Path) -> int:
+def store_player_outcomes(training_df: pd.DataFrame, db_path: Path, log=print) -> int:
     """Stores the real actual stat value for every completed player-game
-    row, for each of the four tracked stat targets — settlement data."""
+    row, for each of the four tracked stat targets — settlement data.
+
+    Returns the number of facts that were NEW. Re-presenting a fact already on
+    the record is not an error and not a row either: the scheduled refresh
+    walks a rolling window of finished games on every run, so this re-presents
+    most of what is already stored and the count is "what today's run added",
+    which is the honest reading of the summary key
+    `player_outcomes_stored`.
+
+    A fact that DISAGREES with what is already recorded -- a source that revised
+    a box score, say -- is counted and logged by key rather than written.
+    Recorded outcomes are immutable, and `store.ConflictingOutcome` is raised
+    instead of silently overwriting or silently ignoring it. It does not abort
+    the ingest: one revised box score should not stop the other three stats and
+    every other player in the window from being recorded.
+    """
     recorded_at = datetime.now(timezone.utc).isoformat()
-    stored = 0
+    before = _outcome_row_count(db_path)
+    conflicts: list[str] = []
     for _, row in training_df.iterrows():
         for stat, column in PLAYER_STAT_TARGET_COLUMNS.items():
-            store.insert_player_outcome(
-                db_path,
-                game_id=row["game_id"],
-                player_id=row["player_id"],
-                stat=stat,
-                actual_value=float(row[column]),
-                recorded_at=recorded_at,
-            )
-            stored += 1
-    return stored
+            try:
+                store.insert_player_outcome(
+                    db_path,
+                    game_id=row["game_id"],
+                    player_id=row["player_id"],
+                    stat=stat,
+                    actual_value=float(row[column]),
+                    recorded_at=recorded_at,
+                )
+            except store.ConflictingOutcome as exc:
+                conflicts.append(str(exc))
+    if conflicts:
+        log(
+            f"  WARNING: {len(conflicts)} player outcome(s) disagreed with a value "
+            f"already recorded and were NOT written (recorded stays recorded). "
+            f"First: {conflicts[0]}"
+        )
+    return _outcome_row_count(db_path) - before
+
+
+def _outcome_row_count(db_path: Path) -> int:
+    """How many outcome rows exist, so the summary can report facts ADDED.
+
+    Counted rather than incremented per call, because re-presenting a fact
+    already on the record returns successfully and writes nothing: incrementing
+    would report a day's refresh as thousands of new rows when it added none.
+    """
+    with store.get_connection(db_path) as conn:
+        return conn.execute("SELECT COUNT(*) FROM game_player_outcomes").fetchone()[0]
 
 
 PLAYER_STAT_TARGET_COLUMNS = {"points": "points", "rebounds": "rebounds", "assists": "assists", "threes": "fg3m"}
@@ -243,6 +278,8 @@ def to_schedule_cache(games: list[dict]) -> list[dict]:
             "completed": g.get("completed", False),
             "home_pts": g.get("home_pts"),
             "away_pts": g.get("away_pts"),
+            # The pre-tip cutoff (tracking/timing.py) reads this.
+            "tip_off": g.get("tip_off"),
         }
         for g in games
     ]

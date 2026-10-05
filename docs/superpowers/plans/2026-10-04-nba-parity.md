@@ -6,7 +6,10 @@
 > skill installed) together with superpowers test-driven development: write the
 > failing test first for every task, no production code without a failing test,
 > and climb the ladder before writing any code — reuse before inventing, stdlib
-> before custom, one line before fifty, minimum viable diff always. Steps use
+> before custom, one line before fifty, minimum viable diff always. **For every
+> frontend task, also use the impeccable skill** (pbakaus/impeccable; spec §16):
+> `/impeccable craft` or `polish` to build, `/impeccable audit` on each touched
+> surface before committing, and fix detector findings in the same task. Steps use
 > checkbox (`- [ ]`) syntax for tracking. Commit after every task. Never merge
 > to `main` without Kevin's explicit approval — work on `nba-parity-review` and
 > open a PR per phase.
@@ -548,6 +551,11 @@ git commit -m "chore: remove dead odds/data modules and unused tracking tables"
 ---
 
 ## Phase C — Polish, preseason, ops truth (P2)
+
+**Frontend method for every task below:** impeccable (spec §16). Build with
+`/impeccable craft` or `polish`, then `/impeccable audit` each touched surface
+and fix detector findings before committing. Ponytail still applies — the
+laziest diff that passes the audit.
 
 ### Task 16: Game cards — status, timing badges, sort
 

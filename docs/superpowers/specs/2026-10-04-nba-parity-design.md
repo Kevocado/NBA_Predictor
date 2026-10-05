@@ -161,6 +161,17 @@ Development on this spec uses the **ponytail** skill (DietrichGebert/ponytail, M
 
 TDD is not relaxed by ponytail: every task still starts with a failing test. Ponytail decides *how little* code the test needs; TDD decides *whether* it's correct.
 
+## 16. Impeccable — the frontend skill (binding for all UI work)
+
+All frontend work in this spec (Phase C, and any UI touch in other phases) uses the **impeccable** skill (pbakaus/impeccable, Apache 2.0) — the design skill for AI coding agents that extends Anthropic's frontend-design skill with 24 commands and 61 deterministic detector rules for AI design mistakes.
+
+- **Install (once per agent environment):** `npx impeccable install`, then `/impeccable init` in the repo root — `init` inspects the project and writes `PRODUCT.md` (audience, purpose, constraints, voice). Commit `PRODUCT.md`; later commands use it as context.
+- **Commands to use:** `/impeccable craft` (plan then build a new surface), `/impeccable polish` (final pass before the phase PR), `/impeccable audit <surface>` (accessibility, performance, responsiveness checks), `/impeccable critique` (UX review of hierarchy/clarity/tone), `/impeccable harden` (error states, text overflow, edge cases).
+- **Binding rule:** every frontend task ends with `/impeccable audit` on each touched surface, and detector findings are fixed before the commit — not after the phase.
+- **If the skill is not installed:** fall back to the repo's incumbent visual system — the dark "PREDICTOR" theme, existing CSS variables (`--color-net-*`, `--color-line`, etc.), and the shared `predictor-ui` components. No new design language, no new fonts, no new color system. Match what's there.
+
+Impeccable governs *how the UI looks*; ponytail governs *how little code builds it*; TDD governs *whether it works*. All three apply to frontend tasks.
+
 ## 13. Global constraints (every task inherits these)
 
 - **$0 data spend.** No paid APIs, no new keys. ESPN keyless API and RapidAPI Sportsbook API v2 (already keyed, on a refresh loop) are the only live calls. The Odds API is deleted per §10 — it is not a fallback here.

@@ -23,6 +23,8 @@ class MarketPredictionOut(BaseModel):
     bookmaker: str | None = None
     american_odds: int | None = None
     point: float | None = None
+    # Priced after tip-off (e.g. a refresh during the game): shown, never judged.
+    rebuilt: bool = False
 
 
 class GameOut(BaseModel):
@@ -30,7 +32,11 @@ class GameOut(BaseModel):
     game_date: str
     home_team: str
     away_team: str
+    tip_off: str | None = None
     prediction: PredictionOut | None = None
+    # True when the pick shown was made at or after tip-off (a backtest). It
+    # is labelled on the site and never counted.
+    rebuilt: bool = False
     completed: bool = False
     home_pts: int | None = None
     away_pts: int | None = None
@@ -56,15 +62,189 @@ class PlayerPropOut(BaseModel):
     player_id: str
     player_name: str
     stat: str
+    # A projection, in the stat's own unit -- points, rebounds, assists, made
+    # threes. Deliberately not a probability: models/player_props.py is an
+    # XGBRegressor returning a raw point total, and this repo has no calibrated
+    # probability for it to serve. predict_double_double_probability exists and
+    # has zero callers; shipping it is not this change. Do not add a
+    # probability field here without calibration evidence.
     predicted_value: float
     actual_value: float | None = None
+    # Built after tip-off (the retrain backtest): shown, never judged.
+    rebuilt: bool = False
+    # In-sample mean absolute error for this stat (see
+    # models.player_props.in_sample_mae_by_stat). None when nothing has been
+    # resolved for the stat yet -- never 0.0, which would claim the model never
+    # missed by a tenth of a point. The site renders this as "+/- N" next to
+    # the projection, or says it has no error estimate yet.
+    #
+    # This is the HEADLINE: over every COUNTED pick for this stat -- one per
+    # (game, player, stat), the earliest recorded, whenever it was made. Before
+    # 2026-10-01 (predictor-hub #66) it was the pre-tip-only figure and a game
+    # whose only pick came from the retrain backtest contributed nothing, which
+    # is how a projection could sit on the page for a season with no error
+    # estimate at all. The name is unchanged, so every reader of it now sees
+    # the fuller record.
+    mae: float | None = None
+    # The same error estimate over the picks made BEFORE tip-off only: what the
+    # model would have said on the night. Published beside `mae` because the
+    # two differ, and a reader comparing a model against a book needs to know
+    # which one they are reading. None when no counted pick for this stat was
+    # made in time -- never 0.0, for the same reason as `mae`.
+    mae_pre_tip: float | None = None
+    # The n behind each figure. An error estimate with no count beside it is a
+    # number nobody can weigh, and the pre-tip figure is the one most likely to
+    # be thin -- so both travel with it rather than being reconstructed.
+    mae_n: int = 0
+    mae_n_pre_tip: int = 0
+
+
+class OutPlayerOut(BaseModel):
+    """A player the availability gate removed from the ranking.
+
+    Removed, not flagged in place: no list, no bar, no rank position. Shown
+    once, below the lists, attributed and dated.
+    """
+
+    player_id: str
+    player_name: str
+    team: str
+    status: str
+    source: str
+    dated: str
+
+
+class DoubtfulPlayerOut(BaseModel):
+    """A player the availability gate flagged as doubtful but kept ranked.
+
+    Flagged in place, NOT removed: the player is still a legitimate call and
+    still appears in /games/{id}/players. This is the note that makes the
+    ranking honest -- before it, a day-to-day player reached no feed at all,
+    which reads as "checked and clear".
+
+    Deliberately the same six fields as OutPlayerOut and no more. ``status`` is
+    the feed's own word ("Day-To-Day"), reported verbatim rather than reworded
+    into a judgement; there is NO probability and NO downgrade coefficient
+    field, because a status is not a number and this repo has no calibrated
+    quantity to pair it with. Nothing here is a recommendation against the
+    player: it states availability, nothing more.
+    """
+
+    player_id: str
+    player_name: str
+    team: str
+    status: str
+    source: str
+    dated: str
+
+
+class TrackRecordTallyOut(BaseModel):
+    """The secondary figure: the same tally over the picks made BEFORE tip-off.
+
+    A whole sub-record rather than three loose numbers, so the pre-tip figure
+    carries its own n, its own rate and its own week table exactly as the
+    headline does. Its `n` is the size of that subset by construction -- it is
+    the same summariser over the same counted rows, filtered by the derivation
+    in `tracking.timing.made_before_tip`, not a figure reconciled by hand.
+    """
+    total_predictions: int
+    correct_predictions: int
+    # None when nothing in the subset graded: 0.0 would claim every one missed.
+    hit_rate: float | None = None
+    n_push: int = 0
+    # The same window as the headline's, filled by compute_track_record.
+    weekly: list["TrackRecordWeekOut"] = []
+
+
+class TrackRecordPickOut(BaseModel):
+    """One recorded pick for one market, with when it was made.
+
+    Disclosure is per pick, not only in aggregate: `made_before_tip` is derived
+    on every read from this row's own `created_at` against the game's tip-off,
+    compared as UTC instants and failing closed to False, and `created_at` is
+    published next to it so a reader can check the derivation rather than take
+    it on trust. A pick made after tip-off is never presented as one made
+    before.
+
+    `counted` says whether this row is the one the headline scored. A rerun
+    that lost the earliest-pick contest is still here -- recorded stays
+    recorded -- and is marked `counted: false` so the rows a reader tallies are
+    exactly the rows that produced the number above them.
+    """
+    game_id: str
+    market: str
+    # What the model backed, in words, with the line it was priced at.
+    pick: str
+    # What actually happened, in the same words.
+    actual: str
+    # None for a push or a row with no line: nobody won it, so it is not a miss.
+    hit: bool | None = None
+    made_before_tip: bool
+    created_at: str
+    counted: bool = True
+    gameday: str | None = None
 
 
 class ConfidenceBucketOut(BaseModel):
     bucket: str
     total_predictions: int
     correct_predictions: int
-    hit_rate: float
+    hit_rate: float | None = None
+
+
+
+
+class TrackRecordWeekOut(BaseModel):
+    week_start: str  # ISO date of the Monday the week starts on
+    n: int
+    correct: int
+    # None for a week with no graded picks -- see TrackRecordOut.hit_rate.
+    hit_rate: float | None = None
+    tracked: bool
+
+
+class VsMarketWeekOut(BaseModel):
+    week_start: str  # ISO Monday date
+    tracked: bool  # n > 0: games actually compared with a price
+    n: int
+    # Percentage points; None when nothing was compared that week.
+    mean_edge_points: float | None = None
+    disagreement_n: int = 0
+    disagreement_hit_rate: float | None = None
+
+
+class VsMarketScopeOut(BaseModel):
+    population: str
+    weekly_from: str | None = None
+    weekly_through: str | None = None
+    n_games_total: int
+    n_games_in_weekly: int
+    n_games_outside_weekly: int
+
+
+class VsMarketOut(BaseModel):
+    """The model's moneyline pick beside the price it was measured against.
+
+    NBA stores the market's own de-vigged probability per side (see
+    pipeline/refresh_odds), so unlike the NFL/CFB version this needs no
+    implied-probability conversion of a line: the comparison reads the same
+    row the pick was priced with.
+    """
+
+    market: str = "h2h"
+    n: int = 0
+    mean_model_probability: float | None = None
+    mean_market_probability: float | None = None
+    # Percentage points, signed toward the model; None when n == 0.
+    mean_edge_points: float | None = None
+    # Games where the model backed the side the price did not favour.
+    disagreement_n: int = 0
+    disagreement_hit_rate: float | None = None
+    disagreement_game_ids: list[str] = []
+    weekly: list[VsMarketWeekOut] = []
+    scope: VsMarketScopeOut
+    # Sentences the page prints verbatim; see hub_service._VS_MARKET_METHOD.
+    method: dict[str, str | float] = {}
 
 
 class PropStatOut(BaseModel):
@@ -78,10 +258,36 @@ class TrackRecordOut(BaseModel):
     market: str
     total_predictions: int
     correct_predictions: int
-    hit_rate: float
+    # None when nothing was graded: 0.0 would claim every graded pick missed,
+    # which is a different statement from "never measured".
+    hit_rate: float | None = None
+    # The number of graded counted picks made at or after their own tip-off:
+    # the reconciliation between the headline and the pre-tip subset.
+    n_rebuilt: int = 0
+    # The size of the pre-tip subset. Equal to `pre_tip.total_predictions`.
+    n_pre_tip: int = 0
+    # Picks left out of the rate because there was nothing to grade them
+    # against (a push, or a row with no line). Counted, never scored as a miss.
+    n_push: int = 0
+    # Counted picks the schedule cannot date: in the headline and in
+    # `per_pick` but in no week row.
+    n_unplaced: int = 0
+    # False when there is no rule for judging the market (or no results).
+    settled: bool = True
+    # The pre-tip subset beside the headline. None only where `settled` is false.
+    pre_tip: TrackRecordTallyOut | None = None
+    # Every recorded pick for this market, counted or not.
+    per_pick: list[TrackRecordPickOut] = []
+    # Weekly table; the headline's n adds up to `total_predictions`.
+    weekly: list["TrackRecordWeekOut"] = []
+    # Confidence buckets over the counted graded picks (50-60/60-70/70%+).
     confidence_buckets: list[ConfidenceBucketOut] | None = None
+    # Per-stat MAE + signed error for player props.
     per_stat: list[PropStatOut] | None = None
+    # Per-position MAE for player props.
     per_position_mae: dict[str, float] | None = None
+
+
 
 
 class SeasonBoundsOut(BaseModel):

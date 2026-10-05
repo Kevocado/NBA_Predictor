@@ -16,11 +16,11 @@ def _db(tmp_path) -> Path:
 def _schedule():
     return [
         {"game_id": "g1", "completed": True, "home_team": "LAL", "away_team": "BOS",
-         "home_pts": 110, "away_pts": 100},  # LAL wins
+         "home_pts": 110, "away_pts": 100, "game_date": "2026-01-05"},  # LAL wins
         {"game_id": "g2", "completed": True, "home_team": "LAL", "away_team": "BOS",
-         "home_pts": 95, "away_pts": 105},   # BOS wins
+         "home_pts": 95, "away_pts": 105, "game_date": "2026-01-06"},   # BOS wins
         {"game_id": "g3", "completed": True, "home_team": "LAL", "away_team": "BOS",
-         "home_pts": 120, "away_pts": 100},  # LAL wins
+         "home_pts": 120, "away_pts": 100, "game_date": "2026-01-07"},  # LAL wins
     ]
 
 

@@ -1,3 +1,6 @@
+
+import type { Explanation } from "../predictor-ui";
+
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 
 export interface Team {
@@ -25,9 +28,13 @@ export interface HeadToHeadMeeting {
 export interface Game {
   game_id: string;
   game_date: string;
+  /** UTC start time; missing for games cached before it was recorded. */
+  tip_off?: string | null;
   home_team: string;
   away_team: string;
   prediction: Prediction | null;
+  /** The pick shown was made after tip-off: labelled, never counted. */
+  rebuilt?: boolean;
   completed: boolean;
   home_pts: number | null;
   away_pts: number | null;
@@ -42,6 +49,8 @@ export interface MarketPrediction {
   bookmaker: string | null;
   american_odds: number | null;
   point: number | null;
+  /** Priced after tip-off: shown, never judged. */
+  rebuilt?: boolean;
 }
 
 export interface GameDetail extends Game {
@@ -61,13 +70,153 @@ export interface PlayerProp {
   stat: string;
   predicted_value: number;
   actual_value: number | null;
+  /** Built after tip-off (a retrain backtest): shown, never judged. */
+  rebuilt?: boolean;
+  /**
+   * In-sample mean absolute error for THIS stat -- the HEADLINE, over every
+   * counted pick: one per (game, player, stat), the earliest recorded,
+   * whenever it was made.
+   *
+   * `null` when nothing has been resolved for the stat yet, which is "never
+   * measured" and not "measured at zero": the site says so in words rather than
+   * drawing a ±0, which would claim the model has never missed by a tenth of a
+   * point. It is a per-stat aggregate, so it must never be read as this one
+   * player's error -- there is no per-player graded record for NBA props.
+   *
+   * The name is unchanged from before 2026-10-01, when it was the pre-tip-only
+   * figure: same field, fuller record behind it.
+   */
+  mae?: number | null;
+  /**
+   * The same error estimate over the picks made BEFORE tip-off only: what the
+   * model would have said on the night. Published beside `mae` because the two
+   * differ, and a reader weighing the model against a book needs to know which
+   * one they are reading. `null`, never 0, when no counted pick for this stat
+   * was made in time.
+   */
+  mae_pre_tip?: number | null;
+  /** The n behind `mae`. An error estimate with no count is unweighable. */
+  mae_n?: number;
+  /** The n behind `mae_pre_tip`, which is the figure most likely to be thin. */
+  mae_n_pre_tip?: number;
+}
+
+/** A player the availability gate removed from this game's ranking. Served by
+ *  its own sibling route rather than wrapped onto the props response, because
+ *  the props fetch is typed as `PlayerProp[]` and the two answer different
+ *  questions: what the model projects, and who cannot be projected for. */
+export interface OutPlayer {
+  player_id: string;
+  player_name: string;
+  team: string;
+  status: string;
+  /** Where the out claim came from, in words. Never an id. */
+  source: string;
+  /** When it was known, in words. Never an epoch. */
+  dated: string;
+}
+
+export interface TrackRecordWeek {
+  /** ISO date of the Monday the week starts on. */
+  week_start: string;
+  n: number;
+  correct: number;
+  /** null when the week graded nothing: an em dash, never a fabricated 0%. */
+  hit_rate: number | null;
+  tracked: boolean;
+}
+
+/** The secondary figure: the same tally over the picks made BEFORE tip-off. */
+export interface TrackRecordTally {
+  total_predictions: number;
+  correct_predictions: number;
+  /** null when nothing in the subset graded — a dash, never a 0% claim. */
+  hit_rate: number | null;
+  n_push?: number;
+  weekly?: TrackRecordWeek[];
+}
+
+/** One recorded pick for one market, with when it was made. */
+export interface TrackRecordPick {
+  game_id: string;
+  market: string;
+  /** What the model backed, with the line it was priced at. */
+  pick: string;
+  /** What actually happened, in the same words. */
+  actual: string;
+  /** null for a push or a row with no line: nobody won it, so it is not a miss. */
+  hit: boolean | null;
+  /** Derived on every read from `created_at` vs tip-off, as UTC instants. */
+  made_before_tip: boolean;
+  created_at: string;
+  /** False for a rerun that lost the earliest-pick contest. */
+  counted: boolean;
+  gameday: string | null;
 }
 
 export interface TrackRecord {
   market: string;
   total_predictions: number;
   correct_predictions: number;
-  hit_rate: number;
+  /** null when nothing was graded — a dash, never a 0% claim. */
+  hit_rate: number | null;
+  /**
+   * RENAMED IN MEANING, name kept: it used to count finals LEFT OUT of the
+   * record. It is now the number of graded counted picks made at or after their
+   * own tip-off, so `total_predictions === pre_tip.total_predictions +
+   * n_rebuilt`. Subtract it to see how much of the headline is the rerun
+   * rather than the night.
+   */
+  n_rebuilt?: number;
+  /** Picks left out of the rate: the result landed on the line, or there was no line. */
+  n_push?: number;
+  /** Counted picks the schedule cannot date, so they appear in no week row. */
+  n_unplaced?: number;
+  /** The size of the pre-tip subset; equal to `pre_tip.total_predictions`. */
+  n_pre_tip?: number;
+  /** The pre-tip subset beside the headline. Absent only where `settled` is false. */
+  pre_tip?: TrackRecordTally;
+  /** Every recorded pick for this market, counted or not. */
+  per_pick?: TrackRecordPick[];
+  /** False when the backend has no rule for judging this market: never render a rate. */
+  settled?: boolean;
+  /** Every week since tracking began, through this week; gaps carried as tracked=false. */
+  weekly?: TrackRecordWeek[];
+}
+
+export interface VsMarketWeek {
+  week_start: string;
+  /** Games actually compared with a price that week. */
+  tracked: boolean;
+  n: number;
+  /** Model minus price, in percentage points; null when nothing was compared. */
+  mean_edge_points: number | null;
+  disagreement_n: number;
+  disagreement_hit_rate: number | null;
+}
+
+export interface VsMarketScope {
+  population: string;
+  weekly_from: string | null;
+  weekly_through: string | null;
+  n_games_total: number;
+  n_games_in_weekly: number;
+  n_games_outside_weekly: number;
+}
+
+export interface VsMarket {
+  market: string;
+  n: number;
+  mean_model_probability: number | null;
+  mean_market_probability: number | null;
+  mean_edge_points: number | null;
+  disagreement_n: number;
+  disagreement_hit_rate: number | null;
+  disagreement_game_ids: string[];
+  weekly: VsMarketWeek[];
+  scope: VsMarketScope;
+  /** Sentences the panel prints verbatim — see hub_service._VS_MARKET_METHOD. */
+  method: Record<string, string | number>;
 }
 
 export interface TeamHubRow {
@@ -149,8 +298,18 @@ export interface CalibrationBin {
   count: number;
 }
 
+// A backend that accepts the connection but never answers must still end in
+// the page's error state (with Try again), never an endless "Loading…".
+export const REQUEST_TIMEOUT_MS = 15_000;
+
+function fetchWithTimeout(url: string, init: RequestInit = {}): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  return fetch(url, { ...init, signal: controller.signal }).finally(() => clearTimeout(timer));
+}
+
 async function fetchJson<T>(path: string): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`);
+  const response = await fetchWithTimeout(`${API_BASE}${path}`);
   if (!response.ok) {
     throw new Error(`Request to ${path} failed with status ${response.status}`);
   }
@@ -164,12 +323,21 @@ export const api = {
   getGamesWeek: (start: string) => fetchJson<Game[]>(`/games/week?start=${start}`),
   getGameDetail: (gameId: string) => fetchJson<GameDetail>(`/games/${gameId}`),
   getGamePlayers: (gameId: string) => fetchJson<PlayerProp[]>(`/games/${gameId}/players`),
+  /** Players the gate removed from this game's ranking: shown once, below the
+   *  lists, attributed and dated. A sibling route, not a field on the props
+   *  response -- see `OutPlayer`. */
+  getGameOutPlayers: (gameId: string) => fetchJson<OutPlayer[]>(`/games/${gameId}/players/out`),
+  /** The shared plain-English summary, via this API's explainer proxy. The id
+   *  is the game's own id — the only value the route needs, and the only one
+   *  the site has. */
+  explainGame: (gameId: string) => fetchJson<Explanation>(`/api/explain/nba/${gameId}`),
   getSeasonFirstWeek: () => fetchJson<SeasonBounds>("/season/first-week"),
   getHubTeams: () => fetchJson<TeamHubRow[]>("/hub/teams"),
   getHubPlayers: () => fetchJson<PlayerHubRow[]>("/hub/players"),
   getHubRankings: () => fetchJson<PowerRankingRow[]>("/hub/rankings"),
   getHubStandings: () => fetchJson<StandingsRow[]>("/hub/standings"),
   getTrackRecord: () => fetchJson<TrackRecord[]>("/hub/track-record"),
+  getVsMarket: () => fetchJson<VsMarket>("/hub/vs-market"),
   getManifest: () => fetchJson<Manifest>("/manifest"),
   getPlayerPropsManifest: () => fetchJson<PlayerPropsManifest>("/player-props-manifest"),
   getCalibration: () => fetchJson<CalibrationBin[]>("/calibration"),

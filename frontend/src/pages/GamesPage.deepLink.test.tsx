@@ -8,6 +8,10 @@ import { api, type Game, type GameDetail } from "../api/client";
 // ask for is stubbed here; nothing in this file reaches the network.
 vi.mock("../api/client", () => ({
   api: {
+    // `GameDetailModal` fetches its signal rows separately; see
+    // GameDetailModal.test.tsx. A valid EMPTY list -- spec §2's "no data, no row" --
+    // because a bare `vi.fn()` returns `undefined` and the modal calls `.then`.
+    getGameSignals: vi.fn(async () => ({ sport: "nba", id: "", signals: [] })),
     getSeasonFirstWeek: vi.fn(), getGamesWeek: vi.fn(), getGameDetail: vi.fn(),
     getGamePlayers: vi.fn(), getHubPlayers: vi.fn().mockResolvedValue([]),
     // The gate's sibling route; see GameDetailModal.test.tsx.

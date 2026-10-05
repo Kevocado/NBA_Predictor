@@ -5,7 +5,13 @@ import GamesPage from "./GamesPage";
 import { api } from "../api/client";
 
 vi.mock("../api/client", () => ({
-  api: { getGamesWeek: vi.fn(), getSeasonFirstWeek: vi.fn() },
+  api: {
+    getGamesWeek: vi.fn(), getSeasonFirstWeek: vi.fn(),
+    // Declared for completeness: this page never opens the modal, but it mocks the
+    // whole client and a method the component tree reaches for must not be
+    // `undefined`. See GamesPage.deepLink.test.tsx.
+    getGameSignals: vi.fn(async () => ({ sport: "nba", id: "", signals: [] })),
+  },
 }));
 
 afterEach(() => {

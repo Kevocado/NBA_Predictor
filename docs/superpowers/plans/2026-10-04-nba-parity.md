@@ -73,37 +73,40 @@ Deleted files (Task 15): `src/nba_predictor/data/odds_api.py`, `src/nba_predicto
 
 ## Phase 0 — Reconcile branches (do this first)
 
-### Task 0: Merge `origin/main` into `nba-parity-review`, run the suite, push
+### Task 0: Verify the merged branch (merge already done — do not re-merge)
 
-**Files:** repo root (merge), `frontend/package-lock.json` (modified, include in commit)
+**Context:** `nba-parity-review` is pushed to GitHub and already contains the
+merge of `origin/main` (odds-refresh loop from PR #32, CI suite, the Sep 25–Oct 4
+frontend/backend rework) with the Sep 23 review-implementation commits. The
+merge commit is `903b60b` on the remote branch. Conflict resolutions kept both
+sides: both store.py migrations, main's track-record machinery + confidence
+buckets re-applied on counted picks, repaired schemas.py, main's new frontend
+structures + TeamLogo components, GameCard.tsx deletion accepted (replaced by
+`lib/nightCards.ts` on main).
 
-**Context:** This branch holds 9 unpushed review commits (2026-09-23). `origin/main` is 5 commits ahead: PR #32 (odds-refresh loop — another agent, opencode, 2026-10-04), a CI fix, and snapshot refreshes. The odds-refresh loop changes the value-layer design: `POST /refresh-odds` now runs on a scheduler thread in the app lifespan — Task 12 builds the gate on it, it does not schedule anything.
-
-- [ ] **Step 1: Fetch and merge**
+- [ ] **Step 1: Pull the branch**
 
 ```bash
 git fetch origin
-git merge origin/main -m "merge: origin/main (odds-refresh-loop, CI) into nba-parity-review"
+git checkout nba-parity-review
+git pull --ff-only origin nba-parity-review
 ```
 
-- [ ] **Step 2: Resolve conflicts** — keep both features. Likely touchpoints: `src/nba_predictor/tracking/store.py`, `src/nba_predictor/api/routes.py`, snapshot payloads. When in doubt, keep the review-branch version of honesty/timing logic and the main-branch version of the odds loop.
-- [ ] **Step 3: Run the full suite**
+- [ ] **Step 2: Run the full suite**
 
 ```bash
 python -m pytest tests/ -x -q
 ```
 
-Expected: all pass. If the suite fails on a conflict you introduced, fix it — do not delete tests to make it green.
-- [ ] **Step 4: Verify the odds loop survived the merge** — start the app locally and confirm the refresh-odds scheduler thread is registered in the lifespan (log line or startup print). If it's missing, the merge dropped it — restore from `6bf7316`.
-- [ ] **Step 5: Commit and push the branch**
-
-```bash
-git add -A
-git commit -m "chore: merge origin/main into nba-parity-review; include package-lock"
-git push -u origin nba-parity-review
-```
-
-Expected: branch visible on GitHub for other agents to pull.
+Expected: all pass. (Note: this environment was validated 2026-10-04 — every
+runnable test passes; the only failures are missing `xgboost` in minimal
+envs, which CI has. Do not delete tests to make it green.)
+- [ ] **Step 3: Verify the odds loop is live** — the refresh-odds scheduler
+thread from PR #32 must be registered in the app lifespan. If it's missing,
+stop and report back — do not proceed.
+- [ ] **Step 4: Verify the confidence buckets flow** — run
+`tests/test_hub_track_record.py::test_h2h_confidence_buckets` and confirm it
+passes: buckets are computed over counted picks via main's machinery.
 
 ---
 

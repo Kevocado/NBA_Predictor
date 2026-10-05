@@ -10,6 +10,7 @@ from nba_predictor import config
 from nba_predictor.api.deps import get_models_dir, get_schedule_path
 from nba_predictor.api.explain import router as explain_router
 from nba_predictor.api.facts import router as facts_router
+from nba_predictor.api.signals import router as signals_router
 from nba_predictor.api.routes import router, start_mae_warmer, _market_stds_from_manifest
 from nba_predictor.pipeline.odds_refresher import start_odds_refresher
 from nba_predictor.tracking.store import init_db
@@ -86,6 +87,10 @@ def create_app() -> FastAPI:
     # than directly. Registered before the SPA mount below so /api/explain/* is
     # never swallowed by the static-file fallback.
     app.include_router(explain_router)
+    # GET /api/signals/{game_id} -- spec §3's per-fixture signal payloads, rendered
+    # by the shared predictor-ui component. A game with nothing to say returns an
+    # empty list rather than an empty state.
+    app.include_router(signals_router)
 
     frontend_dist = config.PROJECT_ROOT / "frontend" / "dist"
     if frontend_dist.exists():

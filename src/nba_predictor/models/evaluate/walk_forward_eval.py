@@ -187,9 +187,10 @@ def walk_forward_regression(
     path contract).
     """
     df = df.sort_values(date_col).reset_index(drop=True)
+    windows_list = expanding_windows(df[date_col], windows)
     per_window, ys, yhs = [], [], []
 
-    for i, (train_idx, test_idx) in enumerate(expanding_windows(df[date_col], windows)):
+    for i, (train_idx, test_idx) in enumerate(windows_list):
         train_df, test_df = df.iloc[train_idx], df.iloc[test_idx]
         y_test = test_df[target].to_numpy()
 
@@ -229,7 +230,7 @@ def walk_forward_regression(
     yh_all = np.concatenate(yhs)
     # Pooled naive: per-window training means (leak-free), mirroring classification
     naive_preds = []
-    for i, (train_idx, test_idx) in enumerate(expanding_windows(df[date_col], windows)):
+    for i, (train_idx, test_idx) in enumerate(windows_list):
         train_df, test_df = df.iloc[train_idx], df.iloc[test_idx]
         m = float(train_df[target].mean()) if len(train_df) > 0 else 0.0
         naive_preds.append(np.full(len(test_df), m))

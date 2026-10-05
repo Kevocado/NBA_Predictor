@@ -51,17 +51,42 @@ def run_retrain_pipeline(games: pd.DataFrame, models_dir: Path, model_version: s
     wf_margin = None
     wf_total = None
     try:
-        wf_win = walk_forward_metrics(train_df, model_factory=lambda tr: lambda X: predict_win_probability(win_model, X[feature_cols]), windows=4)
-    except Exception:
+        wf_win = walk_forward_metrics(
+            train_df,
+            model_factory=lambda tr: (
+                lambda X: predict_win_probability(
+                    train_win_probability_model(tr[feature_cols], tr["home_win"]), X[feature_cols]
+                )
+            ),
+            windows=4,
+        )
+    except Exception as e:
+        print(f"walk_forward win failed: {e}")
         wf_win = None
     try:
-        wf_margin = walk_forward_regression(train_df, model_factory=lambda tr: lambda X: margin_model.predict(X[feature_cols]), target="home_margin", windows=4)
-    except Exception:
+        wf_margin = walk_forward_regression(
+            train_df.assign(home_margin=train_df["home_pts"] - train_df["away_pts"]),
+            model_factory=lambda tr: (
+                lambda X: train_margin_model(tr[feature_cols], tr["home_margin"]).predict(X[feature_cols])
+            ),
+            target="home_margin",
+            windows=4,
+        )
+    except Exception as e:
+        print(f"walk_forward margin failed: {e}")
         wf_margin = None
     try:
         total_target = train_df["home_pts"] + train_df["away_pts"]
-        wf_total = walk_forward_regression(train_df.assign(home_total=total_target), model_factory=lambda tr: lambda X: total_model.predict(X[feature_cols]), target="home_total", windows=4)
-    except Exception:
+        wf_total = walk_forward_regression(
+            train_df.assign(home_total=total_target),
+            model_factory=lambda tr: (
+                lambda X: train_total_model(tr[feature_cols], tr["home_total"]).predict(X[feature_cols])
+            ),
+            target="home_total",
+            windows=4,
+        )
+    except Exception as e:
+        print(f"walk_forward total failed: {e}")
         wf_total = None
 
     if len(holdout_df) > 0:
@@ -84,16 +109,17 @@ def run_retrain_pipeline(games: pd.DataFrame, models_dir: Path, model_version: s
     joblib.dump(total_model, models_dir / "total_model.pkl")
 
     # Place probability metrics under metrics.win_probability (frontend reads per-model metrics)
+    # Do NOT overwrite holdout metrics; store walk-forward under distinct keys
     if wf_win:
-        metrics.setdefault("win_probability", {})["log_loss"] = wf_win["pooled"].get("log_loss")
-        metrics.setdefault("win_probability", {})["brier"] = wf_win["pooled"].get("brier")
-        metrics.setdefault("win_probability", {})["auc"] = wf_win["pooled"].get("auc")
+        metrics.setdefault("win_probability", {})["wf_log_loss"] = wf_win["pooled"].get("log_loss")
+        metrics.setdefault("win_probability", {})["wf_brier"] = wf_win["pooled"].get("brier")
+        metrics.setdefault("win_probability", {})["wf_auc"] = wf_win["pooled"].get("auc")
     if wf_margin:
-        metrics.setdefault("margin", {})["mae"] = wf_margin["pooled"]["mae"]
+        metrics.setdefault("margin", {})["wf_mae"] = wf_margin["pooled"]["mae"]
         if "naive_mae_fixed" in wf_margin["pooled"]:
-            metrics.setdefault("margin", {})["naive_mae_fixed"] = wf_margin["pooled"]["naive_mae_fixed"]
+            metrics.setdefault("margin", {})["wf_naive_mae_fixed"] = wf_margin["pooled"]["naive_mae_fixed"]
     if wf_total:
-        metrics.setdefault("total", {})["mae"] = wf_total["pooled"]["mae"]
+        metrics.setdefault("total", {})["wf_mae"] = wf_total["pooled"]["mae"]
 
     manifest = build_manifest(
         model_names=["win_probability", "margin", "total"],

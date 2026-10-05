@@ -5,6 +5,13 @@ import { api } from "../api/client";
 
 vi.mock("../api/client", () => ({
   api: {
+    // `GameDetailModal` fetches its signal rows separately, so a mock that omits
+    // it leaves it `undefined` and the modal's effect throws on open -- 41 failures
+    // across four files when this row landed.
+    //
+    // Default: a valid EMPTY list -- spec §2's "no data, no row". A bare `vi.fn()`
+    // returns `undefined` and the modal calls `.then` on it.
+    getGameSignals: vi.fn(async () => ({ sport: "nba", id: "", signals: [] })),
     getGameDetail: vi.fn(),
     getGamePlayers: vi.fn(),
     getGameOutPlayers: vi.fn(),

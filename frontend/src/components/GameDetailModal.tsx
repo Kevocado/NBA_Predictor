@@ -3,7 +3,7 @@ import { api, type GameDetail, type OutPlayer, type PlayerProp, type PlayerHubRo
 import TopCalls from "./TopCalls";
 import { favourite } from "../lib/pick";
 import { teamName } from "../lib/teams";
-import { ErrorState, FixtureExplainer, Skeleton, kickoff, pct, stat, statusWords } from "../predictor-ui";
+import { ErrorState, FixtureExplainer, SignalRows, Skeleton, kickoff, pct, stat, statusWords, type Signal } from "../predictor-ui";
 import { panelFacts } from "../predictor-ui/lib/panelFacts";
 import PlayerBoxScore from "./PlayerBoxScore";
 
@@ -100,6 +100,9 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
   // so the two cases stay apart. Showing the top three of a list we cannot prove
   // is complete would be the dishonest reading, not the cautious one.
   const [outPlayers, setOutPlayers] = useState<OutPlayer[] | null>(null);
+  // Spec §4's signal rows. `[]` and never null once settled -- and `[]` is also
+  // what every failure leaves behind, see the effect below.
+  const [signals, setSignals] = useState<Signal[]>([]);
   // The per-game player feed carries no team, so the box score's split comes
   // from the season hub feed. Fetched separately, and allowed to fail: losing
   // the split must not take the game detail down with it.
@@ -127,6 +130,54 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
       })
       .catch(() => setError("We couldn't load this game. Check your connection and try again."));
   }, [gameId, reloadKey]);
+
+  // The signal rows (spec §4). Its own fetch, allowed to fail on its own, and
+  // GATED ON `detail.game_id === gameId` -- the same shape PL's `FixtureModal` uses,
+  // and for PL's reason: this modal keeps the PREVIOUS game in state until the new
+  // one lands (the reset is a `setDetail(null)` inside the effect above, and an
+  // effect reads the value captured by ITS OWN render), so a `!detail` or
+  // `detail?.game_status` gate would read the OLD game's status to decide about the
+  // new one.
+  //
+  // A COMPLETED game is not asked about at all. The endpoint answers `[]` for one,
+  // because a completed game's roster is the one known BEFORE tip-off -- the same
+  // reason `get_game_players` withholds those rows and the same reason this page's
+  // own `outPlayers` list stops being information. Asking for an answer already known
+  // is a request per game for nothing.
+  //
+  // **`completed` AND NOT "has started".** The endpoint's own rule is
+  // `facts._status(game, now) in ("live", "final")`, and `completed` is only the
+  // `final` half of it: a LIVE game has `completed=False` with a tip-off in the
+  // past. So a live game is still asked, and the endpoint answers `[]`. That is
+  // deliberate -- reproducing `_status` on the client means comparing `tip_off`
+  // against the browser's clock, which duplicates the server's rule on the wrong
+  // side of a network boundary for the sake of one avoided request. One extra
+  // request per live game is cheaper than a status rule that can disagree with the
+  // endpoint it is mirroring.
+  //
+  // EVERY failure is silence, and the failures are deliberately indistinguishable:
+  // a 404, a network error and an honest empty list all leave `[]`. Spec §2 forbids a
+  // placeholder, and a signal is an enhancement on this page -- it must never become
+  // the page's error state. Sports' `GameDetailModal` does the same at the same
+  // place, so this is one implementation and not one per sport.
+  useEffect(() => {
+    let cancelled = false;
+    setSignals([]);
+    if (!detail || detail.game_id !== gameId) return;
+    if (detail.completed) return;
+    api
+      .getGameSignals(gameId)
+      .then((response) => {
+        if (!cancelled) setSignals(response?.signals ?? []);
+      })
+      // Swallow only. The `[]` at this effect's head already covers every re-run, so
+      // repeating it here would be a second place to keep the same rule -- PL's
+      // proved that redundant, by passing its whole suite with the clear deleted.
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [gameId, detail, reloadKey]);
 
   // Its own fetch, allowed to fail on its own. Deliberately NOT folded into the
   // Promise.all above: that one failing would take the whole game detail down,
@@ -574,6 +625,23 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
               Player projections
             </h3>
             <TopCalls props={players} out={outPlayers} />
+          </section>
+        )}
+        {/* The signal rows (spec §4), ABOVE the projections -- the same position
+            Sports' `GameDetailModal` and PL's `FixtureModal` put them, so a fixture
+            page reads the same way in all three.
+
+            On NBA this is the only place the out player's own projection appears at
+            all: `/games/{id}/players` withholds his rows before serialising, so the
+            mention under the lists above is all he gets today. This row is the first
+            thing on the page that says what the model expected of him.
+
+            `{signals.length > 0 && ...}` rather than a guard around the block:
+            spec §2 says a game with nothing to say renders NO rows -- not an empty
+            section, not a heading. */}
+        {signals.length > 0 && (
+          <section aria-labelledby={`${titleId}-signals`} className="mt-4">
+            <SignalRows signals={signals} />
           </section>
         )}
         {players && players.length > 0 && !outPlayers && (

@@ -1,5 +1,5 @@
 
-import type { Explanation } from "../predictor-ui";
+import type { Explanation, Signal } from "../predictor-ui";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 
@@ -51,6 +51,13 @@ export interface MarketPrediction {
   point: number | null;
   /** Priced after tip-off: shown, never judged. */
   rebuilt?: boolean;
+}
+
+/** `GET /api/signals/{game_id}`'s envelope. */
+export interface SignalsResponse {
+  sport: string;
+  id: string;
+  signals: Signal[];
 }
 
 export interface GameDetail extends Game {
@@ -311,6 +318,9 @@ export const api = {
    *  lists, attributed and dated. A sibling route, not a field on the props
    *  response -- see `OutPlayer`. */
   getGameOutPlayers: (gameId: string) => fetchJson<OutPlayer[]>(`/games/${gameId}/players/out`),
+  /** Spec §3's per-fixture signal payloads, rendered by the shared `SignalRows`.
+   *  `[]` is a complete answer, never absent -- spec §2's "no data, no row". */
+  getGameSignals: (gameId: string) => fetchJson<SignalsResponse>(`/api/signals/${encodeURIComponent(gameId)}`),
   /** The shared plain-English summary, via this API's explainer proxy. The id
    *  is the game's own id — the only value the route needs, and the only one
    *  the site has. */

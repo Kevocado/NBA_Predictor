@@ -179,12 +179,21 @@ def walk_forward_regression(
     windows: int = 4,
     *,
     date_col: str = "game_date",
+    fixed_baseline: float | None = None,
 ) -> dict:
     """Expanding-window walk-forward for a regression target.
 
     `model_factory(train_df)` returns a `predict(X) -> np.ndarray` callable
     taking the full test frame and picking its own columns (mirrors the win
     path contract).
+
+    Two naive baselines, deliberately distinct:
+      * `naive_mae` scores the target's **training-window mean** -- a constant
+        that adapts to each window.
+      * `naive_mae_fixed` scores a **fixed constant** (e.g. margin −3, league
+        average total) that does not adapt, and is only emitted when the caller
+        supplies one. Reporting the training mean under both names would be one
+        number wearing two labels.
     """
     df = df.sort_values(date_col).reset_index(drop=True)
     windows_list = expanding_windows(df[date_col], windows)
@@ -219,9 +228,10 @@ def walk_forward_regression(
             "n_train": len(train_df),
             "n_test": len(test_df),
         }
-        if target == "home_margin":
-            naive_fixed = 3.0
-            metrics["naive_mae_fixed"] = float(mean_absolute_error(y_test, np.full_like(y_test, naive_fixed)))
+        if fixed_baseline is not None:
+            metrics["naive_mae_fixed"] = float(
+                mean_absolute_error(y_test, np.full_like(y_test, fixed_baseline))
+            )
         per_window.append(metrics)
         ys.append(y_test)
         yhs.append(y_pred)
@@ -241,7 +251,8 @@ def walk_forward_regression(
         "naive_mean": float(naive_all.mean()) if len(naive_all) else 0.0,
         "n": int(len(y_all)),
     }
-    if target == "home_margin":
-        naive_fixed_all = np.full_like(y_all, 3.0)
-        pooled["naive_mae_fixed"] = float(mean_absolute_error(y_all, naive_fixed_all))
+    if fixed_baseline is not None:
+        pooled["naive_mae_fixed"] = float(
+            mean_absolute_error(y_all, np.full_like(y_all, fixed_baseline))
+        )
     return {"windows": per_window, "pooled": pooled}

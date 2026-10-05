@@ -26,6 +26,27 @@ from nba_predictor.tracking import store
 BOX_FIELDS = ["fgm", "fga", "fg3m", "tov", "oreb", "dreb", "fta"]
 
 
+def default_window_start(today: date | None = None) -> str:
+    """Start of the NBA season *before* the one in progress: Oct 1 of the
+    previous calendar year.
+
+    The window used to be `date -d '60 days ago'`, which cannot cover a season
+    and left the offseason run training on one game before crashing in
+    chronological_split -- see docs/nba-retrain-diagnosis-2026-10.md. The
+    rolling features in features/build.py need a season of history behind them,
+    so the floor is one full season back, whatever day it is. Sep 30 -> 2025-10-01;
+    Oct 20 -> 2025-10-01; Feb 3 -> 2026-10-01.
+    """
+    today = today or date.today()
+    return f"{today.year - 1}-10-01"
+
+
+def default_window_end(today: date | None = None) -> str:
+    """Fourteen days out: enough of the schedule to score every upcoming game
+    the same horizon the workflow always wanted."""
+    return ((today or date.today()) + timedelta(days=14)).isoformat()
+
+
 def _daterange(start_date: str, end_date: str) -> list[str]:
     start, end = date.fromisoformat(start_date), date.fromisoformat(end_date)
     days = (end - start).days
@@ -710,6 +731,15 @@ def run_ingest(
 
     training_df = to_training_frame(games)
     log(f"Training on {len(training_df)} completed games with full box scores...")
+    # api/deps.py resolves this path and POST /retrain 400s without it, but
+    # nothing in src/ ever wrote it -- so that endpoint was unrunnable in every
+    # environment, including the VPS. It carries the box-score fields, which
+    # to_schedule_cache deliberately drops, so this is its own file.
+    training_path = config.DATA_DIR / "cache" / "training" / "games.json"
+    training_path.parent.mkdir(parents=True, exist_ok=True)
+    training_path.write_text(json.dumps(training_df.to_dict(orient="records")))
+    summary["training_games_written"] = len(training_df)
+    log(f"  wrote {training_path}")
 
     models_dir = config.PROJECT_ROOT / "models"
     model_version = datetime.now(timezone.utc).strftime("v%Y%m%d%H%M%S")
@@ -754,8 +784,8 @@ def run_ingest(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Ingest real NBA schedule/box-score data and refresh caches.")
-    parser.add_argument("--start", default="2025-10-01")
-    parser.add_argument("--end", default="2026-11-30")
+    parser.add_argument("--start", default=default_window_start(), help="Defaults to the start of the previous NBA season (Oct 1) -- see default_window_start.")
+    parser.add_argument("--end", default=default_window_end(), help="Defaults to 14 days out.")
     parser.add_argument(
         "--player-hub-days", type=int, default=21,
         help="How many days (most recent, within --start/--end) to fetch per-player box scores for. "

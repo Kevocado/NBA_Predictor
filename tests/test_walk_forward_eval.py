@@ -161,6 +161,49 @@ def test_needs_a_real_number_of_games():
         walk_forward_metrics(make_games(3), model_factory=dummy_factory, windows=4)
 
 
+def test_naive_baseline_does_not_peek_at_the_test_window():
+    """The naive comparator must be what a deploy-time naive model could
+    actually know: the home-win rate of the games *before* the window.
+
+    Deriving it from the test labels quietly strengthens the baseline with
+    hindsight, and the size of that cheat scales with how much the home rate
+    drifts across the season -- so the headline number moves for reasons that
+    have nothing to do with the model.
+
+    Pinned by flipping every test-window label and requiring the naive
+    log-loss to stay put: a model that has seen the answers changes when the
+    answers change.
+    """
+    df = make_games(150)
+    res = walk_forward_metrics(df, model_factory=dummy_factory, windows=4)
+    ordered = df.sort_values("game_date").reset_index(drop=True)
+
+    for w, (train_idx, test_idx) in zip(res["windows"], expanding_windows(ordered["game_date"], n_windows=4)):
+        train_rate = ordered["home_win"].iloc[train_idx].mean()
+        test_rate = ordered["home_win"].iloc[test_idx].mean()
+
+        assert w["naive_base_rate"] == pytest.approx(train_rate), (
+            f"window {w['window']}: naive base rate {w['naive_base_rate']:.4f} is not "
+            f"the training window's home-win rate {train_rate:.4f}"
+        )
+        if abs(test_rate - train_rate) > 0.02:
+            assert w["naive_base_rate"] != pytest.approx(test_rate), (
+                f"window {w['window']}: naive base rate matches the TEST window's "
+                f"home-win rate {test_rate:.4f} -- it is peeking at the answers"
+            )
+
+
+def test_naive_baseline_tracks_the_training_window_only():
+    """Each window's naive log-loss is scored against the base rate of its own
+    training window, so the number moves as the season's home rate drifts."""
+    df = make_games(150)
+    res = walk_forward_metrics(df, model_factory=dummy_factory, windows=4)
+    rates = [w["naive_base_rate"] for w in res["windows"]]
+    assert len(set(rates)) > 1, (
+        "every window reports the same base rate -- it is global, not per-window"
+    )
+
+
 def test_windows_split_between_dates_never_mid_date():
     """Several games share a date (10-12 a night). A row-wise cut can land
     inside one, so the test window's first game and the training window's last

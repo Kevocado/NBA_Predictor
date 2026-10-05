@@ -74,13 +74,28 @@ def expanding_windows(
     return windows
 
 
-def classification_metrics(y_true: np.ndarray, p: np.ndarray) -> dict:
+def classification_metrics(
+    y_true: np.ndarray,
+    p: np.ndarray,
+    naive_base_rate: float | None = None,
+) -> dict:
     """log-loss / Brier / AUC over out-of-fold predictions, plus both baselines.
+
+    `naive_base_rate` is the home-win rate of the games *before* this window --
+    what a naive model in production could actually know. Accepts a scalar (one
+    window) or a per-observation array (pooled windows, each carrying the rate
+    that was knowable then). Defaults to the pooled set's own rate only when a
+    caller has no training window to hand.
 
     AUC is None when the pooled set has one class (a window with no home wins),
     because a number there would be fabricated.
     """
     p = np.clip(p, 1e-12, 1 - 1e-12)
+    if naive_base_rate is None:
+        naive_p = np.full(len(y_true), np.clip(np.mean(y_true), 1e-12, 1 - 1e-12))
+    else:
+        naive_p = np.broadcast_to(np.asarray(naive_base_rate, dtype=float), y_true.shape)
+        naive_p = np.clip(naive_p, 1e-12, 1 - 1e-12)
     return {
         "log_loss": float(log_loss(y_true, p, labels=[0, 1])),
         "brier": float(brier_score_loss(y_true, p)),
@@ -89,13 +104,8 @@ def classification_metrics(y_true: np.ndarray, p: np.ndarray) -> dict:
         "n": int(len(y_true)),
         # The bars. An evaluator that omits these is the thing G1 was about.
         "coinflip_log_loss": COINFLIP_LOG_LOSS,
-        "naive_log_loss": float(
-            log_loss(
-                y_true,
-                np.full(len(y_true), np.clip(np.mean(y_true), 1e-12, 1 - 1e-12)),
-                labels=[0, 1],
-            )
-        ),
+        "naive_base_rate": float(np.mean(naive_p)),
+        "naive_log_loss": float(log_loss(y_true, naive_p, labels=[0, 1])),
     }
 
 
@@ -118,7 +128,7 @@ def walk_forward_metrics(
     concatenated, the only figure computed entirely on games no window trained on.
     """
     df = df.sort_values(date_col).reset_index(drop=True)
-    per_window, ys, ps = [], [], []
+    per_window, ys, ps, naive_ps = [], [], [], []
 
     for i, (train_idx, test_idx) in enumerate(expanding_windows(df[date_col], windows)):
         train_df, test_df = df.iloc[train_idx], df.iloc[test_idx]
@@ -131,7 +141,14 @@ def walk_forward_metrics(
             )
 
         p = np.asarray(model_factory(train_df)(test_df), dtype=float)
-        metrics = classification_metrics(y_test.to_numpy(), p)
+        # The naive comparator uses the TRAINING window's home-win rate, never
+        # the test window's. A rate read off the answers would quietly
+        # strengthen the baseline with hindsight, by an amount that grows as
+        # the season's home rate drifts -- so the headline number would move
+        # for reasons that have nothing to do with the model.
+        train_rate = float(train_df[target_col].mean())
+        y_true = y_test.to_numpy()
+        metrics = classification_metrics(y_true, p, naive_base_rate=train_rate)
         metrics.update(
             window=i,
             train_max_date=train_max,
@@ -140,12 +157,18 @@ def walk_forward_metrics(
             n_test=len(test_df),
         )
         per_window.append(metrics)
-        ys.append(y_test.to_numpy())
+        ys.append(y_true)
         ps.append(p)
+        naive_ps.append(np.full(len(y_true), np.clip(train_rate, 1e-12, 1 - 1e-12)))
 
+    y_all = np.concatenate(ys)
     return {
         "windows": per_window,
-        "pooled": classification_metrics(np.concatenate(ys), np.concatenate(ps)),
+        # Pooled naive uses each window's own training base rate, so the
+        # comparator is honest about what was knowable at each point in time.
+        "pooled": classification_metrics(
+            y_all, np.concatenate(ps), naive_base_rate=np.concatenate(naive_ps)
+        ),
     }
 
 

@@ -94,3 +94,58 @@ def test_predict_accepts_either_model_without_knowing_which(frames):
     for candidate in ("xgboost", "logistic"):
         model = train_win_probability_model(X, y, candidate=candidate)
         assert np.isfinite(predict_win_probability(model, X)).all()
+
+def test_retrain_manifest_carries_the_residual_sigmas(tmp_path):
+    """The sigmas drive the served probabilities, so they have to survive into
+    the manifest -- and under keys that cannot collide with the existing
+    holdout metrics (`margin.mae` / `total.mae` are read by
+    `_market_stds_from_manifest`).
+
+    Derived from the walk-forward MAE via sigma = MAE * sqrt(pi/2), which is the
+    Normal relationship and avoids plumbing raw residuals through the pipeline.
+    """
+    import json
+    from math import isclose, sqrt, pi
+
+    import pandas as pd
+
+    from nba_predictor.pipeline.retrain import run_retrain_pipeline
+
+    rng = np.random.default_rng(0)
+    n = 160
+    dates = pd.date_range("2025-10-22", periods=n).astype(str)
+    teams = ["BOS", "MIA", "LAL", "GSW"]
+    strength = np.linspace(-2.0, 2.0, n)
+    rows = []
+    for i, d in enumerate(dates):
+        home, away = teams[i % 4], teams[(i + 1) % 4]
+        margin = 3 + strength[i] * 6
+        total = 218 + rng.normal(0, 10)
+        rows.append({
+            "game_id": f"g{i}", "game_date": d, "home_team": home, "away_team": away,
+            "home_pts": round((total + margin) / 2), "away_pts": round((total - margin) / 2),
+            "home_fgm": 40, "home_fga": 88, "home_fg3m": 12,
+            "home_tov": 11, "home_oreb": 9, "home_dreb": 32, "home_fta": 20,
+            "away_fgm": 38, "away_fga": 90, "away_fg3m": 10,
+            "away_tov": 13, "away_oreb": 10, "away_dreb": 30, "away_fta": 18,
+        })
+    games = pd.DataFrame(rows)
+    games["home_win"] = (games["home_pts"] > games["away_pts"]).astype(int)
+
+    manifest = run_retrain_pipeline(games, tmp_path, "vtest", "2026-10-05T00:00:00+00:00")
+
+    for target in ("margin", "total"):
+        block = manifest["metrics"][target]
+        sigma = block.get("residual_sigma")
+        assert sigma is not None, f"{target} has no residual_sigma"
+        assert sigma > 0 and np.isfinite(sigma)
+        # sigma is the Normal equivalent of the OUT-OF-FOLD MAE, not of the
+        # holdout `mae` and not a copy of it.
+        assert isclose(sigma, block["wf_mae"] * sqrt(pi / 2), rel_tol=1e-6), (
+            f"{target}: sigma must be the walk-forward MAE * sqrt(pi/2)"
+        )
+        assert not isclose(sigma, block["mae"], rel_tol=1e-6), (
+            f"{target}: sigma was derived from the in-holdout mae"
+        )
+        assert "mae" in block, "the existing holdout key must survive"
+    json.dumps(manifest)

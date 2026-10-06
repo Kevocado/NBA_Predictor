@@ -496,36 +496,48 @@ def _summarize_player_props(db_path: Path) -> TrackRecordOut | None:
     mean_signed_error is mean(predicted - actual): positive means systematic
     over-prediction. Snapshots with no recorded position group as "Unknown"."""
     with get_connection(db_path) as conn:
-        rows = conn.execute(
-            """
-            SELECT s.game_id, s.player_id, s.stat, s.predicted_value,
-                   o.actual_value, s.position, s.created_at,
-                   o.recorded_at AS recorded_at
-            FROM player_prediction_snapshots s
-            JOIN game_player_outcomes o
-              ON o.game_id = s.game_id AND o.player_id = s.player_id AND o.stat = s.stat
-            """
+        snapshot_rows = conn.execute(
+            "SELECT game_id, player_id, stat, predicted_value, position, created_at "
+            "FROM player_prediction_snapshots"
         ).fetchall()
-    if not rows:
+        outcome_rows = conn.execute(
+            "SELECT game_id, player_id, stat, actual_value, recorded_at "
+            "FROM game_player_outcomes"
+        ).fetchall()
+    if not snapshot_rows:
         return None
-    # Two dedupes, in this order, because the join multiplies them together.
+
+    # Dedupe each table on its OWN rows, then pair the survivors by key.
     #
-    # 1. The OUTCOME first. On a legacy file `uq_game_player_outcomes_key` could
-    #    not be built -- rule 1 forbids deleting conflicting rows -- so this join
-    #    can return two outcomes for one key. Deduping the snapshot first would
-    #    leave which outcome it pairs with to chance.
-    # 2. Then the snapshot: EARLIEST per key, not the latest. This table carries
-    #    no uniqueness constraint by design (the daily refresh re-scores a
-    #    rolling window, so a rerun genuinely lands twice), which is why every
-    #    aggregate path dedupes here. Keeping the latest let a rerun replace the
-    #    original pre-tip pick and restate the published MAE -- the failure rule
-    #    2 of the 2026-10-01 spec exists to prevent, and the same one
-    #    `counted_picks` already guards for the hit rate.
-    counted = earliest_recorded(earliest_recorded_outcome(rows))
+    # Joining first and deduping once does not work: `earliest_recorded` and
+    # `earliest_recorded_outcome` key on the same (game, player, stat), so
+    # applying the outcome one to joined rows would decide which *snapshot*
+    # survives by join order -- and the join carries no ORDER BY.
+    #
+    # Both sides need it. A snapshot table with no uniqueness constraint (the
+    # daily refresh re-scores a rolling window, so a rerun genuinely lands twice)
+    # means keeping the latest would let a rerun replace the original pre-tip
+    # pick and restate the published MAE. An outcome table whose index could not
+    # be built on a legacy file means two outcomes per key, and which one the
+    # MAE is graded against would otherwise be left to chance.
+    snapshots = {
+        (r["game_id"], r["player_id"], r["stat"]): r
+        for r in earliest_recorded(snapshot_rows)
+    }
+    outcomes = {
+        (r["game_id"], r["player_id"], r["stat"]): r
+        for r in earliest_recorded_outcome(outcome_rows)
+    }
+
     by_stat: dict[str, list[float]] = {}
     by_pos: dict[str, list[float]] = {}
-    for r in counted:
-        err = r["predicted_value"] - r["actual_value"]
+    counted = 0
+    for key, r in snapshots.items():
+        outcome = outcomes.get(key)
+        if outcome is None:
+            continue
+        counted += 1
+        err = r["predicted_value"] - outcome["actual_value"]
         by_stat.setdefault(r["stat"], []).append(err)
         by_pos.setdefault(r["position"] or "Unknown", []).append(abs(err))
     per_stat = [
@@ -536,7 +548,7 @@ def _summarize_player_props(db_path: Path) -> TrackRecordOut | None:
     ]
     return TrackRecordOut(
         market="player_props",
-        total_predictions=len(counted),
+        total_predictions=counted,
         correct_predictions=0,
         hit_rate=0.0,
         per_stat=per_stat,

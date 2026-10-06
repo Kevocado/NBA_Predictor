@@ -150,3 +150,40 @@ def test_prop_mae_pairs_the_earliest_recorded_outcome(tmp_path):
         f"MAE {by_stat['points'].mae} -- graded against an outcome other than "
         "the earliest recorded (24.0 vs 20.0 => 4.0)"
     )
+
+
+def test_earliest_snapshot_wins_even_when_the_rerun_is_inserted_first(tmp_path):
+    """Join order must not decide which pick is graded.
+
+    Snapshots and outcomes are both unconstrained tables, so a join of them
+    multiplies rows per key and -- with no ORDER BY -- hands them back in
+    whatever order SQLite finds. Dedupe the joined set ONCE and the *snapshot*
+    that survives is decided by that order, so a rerun inserted before the
+    original would be graded instead of it.
+
+    Both sides are deduped on their own rows here, then paired by key, so the
+    answer does not depend on insertion order at all.
+    """
+    db_path = _db(tmp_path)
+    # Deliberately worst case: the rerun is written FIRST.
+    store.insert_player_prediction(
+        db_path, game_id="g1", player_id="p1", stat="points",
+        predicted_value=99.0, created_at="2026-10-21T19:30:00+00:00", position="G",
+    )
+    store.insert_player_prediction(
+        db_path, game_id="g1", player_id="p1", stat="points",
+        predicted_value=22.0, created_at="2026-10-21T18:00:00+00:00", position="G",
+    )
+    store.insert_player_outcome(
+        db_path, game_id="g1", player_id="p1", stat="points", actual_value=20.0, recorded_at=TS,
+    )
+
+    rows = {r.market: r for r in hub_service.compute_track_record(db_path, _schedule())}
+    prop = rows["player_props"]
+    by_stat = {s.stat: s for s in prop.per_stat}
+
+    assert by_stat["points"].n == 1
+    assert by_stat["points"].mae == 2.0, (
+        f"MAE {by_stat['points'].mae} -- the rerun (99.0) was graded instead of "
+        "the earliest pick (22.0 vs actual 20.0 => 2.0)"
+    )

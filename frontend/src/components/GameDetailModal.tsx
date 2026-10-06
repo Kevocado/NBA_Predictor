@@ -388,12 +388,16 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
     ? `${marginFav.team} by ${marginFav.value.toFixed(1)}`
     : "Toss-up";
 
-  // Show legacy header strip only when: pre-tip game, no cover probabilities
-  // available (meaning no market line / no new block data). The "Other model
-  // markets" block below is the canonical source.
+  // Show legacy header strip only when: pre-tip game, NO cover probabilities
+  // available. If ANY cover probability exists (meaning a market line exists),
+  // the "Other model markets" block below is the canonical source and owns all
+  // figures (margin/total ±, cover probs, σ). This satisfies the one-source rule.
+  // Use falsy check to handle both null and undefined.
+  const hasCoverProb = detail?.prediction && (
+    detail.prediction.cover_prob_spread || detail.prediction.cover_prob_total
+  );
   const showLegacyStrip = (
-    detail && detail.prediction && !detail.completed &&
-    !detail.prediction.cover_prob_spread && !detail.prediction.cover_prob_total
+    detail && detail.prediction && !detail.completed && !hasCoverProb
   );
 
   return (

@@ -1,8 +1,10 @@
+import logging
 import sqlite3
 import threading
 import warnings
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Sequence
 
 _CONNECT_TIMEOUT_SECONDS = 30
 # The tracking DB can live on an Azure Files (SMB) mount for persistence
@@ -15,6 +17,9 @@ _CONNECT_TIMEOUT_SECONDS = 30
 # app is pinned to exactly one replica, making this process the sole
 # writer.
 _DB_LOCK = threading.Lock()
+
+
+logger = logging.getLogger(__name__)
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
@@ -460,3 +465,182 @@ def get_all_predictions(db_path: Path) -> list[sqlite3.Row]:
             """
         )
         return cur.fetchall()
+
+
+# ---------------------------------------------------------------------------
+# Per-player prop ledger (spec section 7)
+#
+# `player_prediction_snapshots` and `game_player_outcomes` have existed in the
+# schema with no writer and no reader, so the site has had no per-player graded
+# record -- the prop counterpart of the game-level track record.
+# ---------------------------------------------------------------------------
+
+
+def write_prop_snapshot(
+    db_path: Path,
+    *,
+    game_id: str,
+    player_id: str,
+    stat: str,
+    predicted_value: float,
+    created_at: str,
+    position: str | None = None,
+) -> bool:
+    """Snapshot one pre-tip prop pick.
+
+    Appends, and always returns True. This table deliberately carries **no**
+    unique index: the daily refresh re-scores a rolling window on every run, so
+    a repeated snapshot is written every day in production and is *not* a defect.
+    It is kept as history and the earliest one is what counts --
+    `read_prop_ledger` does the dedupe on the read, which is the convention
+    `tests/test_tracking_unique_keys.py` pins for the game-level `predictions`
+    table. Adding a unique index here would contradict that decision, so the
+    immutability of a published pick is enforced by the reader, not the schema.
+
+    `position` is recorded *here*, at snapshot time. A player's position can
+    change between the pick and its settlement, and reading it later would
+    attribute the pick to a role they did not hold when it was made.
+    """
+    with get_connection(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO player_prediction_snapshots
+                (game_id, player_id, stat, predicted_value, created_at, position)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (game_id, player_id, stat, predicted_value, created_at, position),
+        )
+        conn.commit()
+        return True
+
+
+def write_player_outcome(
+    db_path: Path,
+    *,
+    game_id: str,
+    player_id: str,
+    stat: str,
+    actual_value: float,
+    recorded_at: str,
+) -> int:
+    """Record a realised prop value. An outcome is a fact, so it is immutable:
+    a disagreeing value raises `ConflictingOutcome` rather than overwriting."""
+    with get_connection(db_path) as conn:
+        try:
+            cur = conn.execute(
+                """
+                INSERT INTO game_player_outcomes
+                    (game_id, player_id, stat, actual_value, recorded_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (game_id, player_id, stat, actual_value, recorded_at),
+            )
+            conn.commit()
+            return cur.lastrowid
+        except sqlite3.IntegrityError:
+            row = conn.execute(
+                """
+                SELECT actual_value FROM game_player_outcomes
+                WHERE game_id = ? AND player_id = ? AND stat = ?
+                """,
+                (game_id, player_id, stat),
+            ).fetchone()
+            conn.rollback()
+            if row is not None and float(row[0]) != float(actual_value):
+                raise ConflictingOutcome(
+                    f"{player_id}/{stat} in {game_id} already recorded as "
+                    f"{row[0]}, now {actual_value}"
+                ) from None
+            return 0
+
+
+def read_prop_ledger(db_path: Path, game_id: str) -> list[dict]:
+    """Every snapshotted prop pick for a game, graded where an outcome exists.
+
+    **The earliest snapshot per (player, market) wins.** The table keeps every
+    snapshot as history, per the repo's standing decision that prediction tables
+    carry no unique index; the pick that counts is the one published first,
+    which is the prop counterpart of the earliest-pick rule the game-level track
+    record already follows. Without this dedupe a rerun that re-scored a game
+    would silently replace a published pre-tip line with a later one.
+
+    An ungradeable pick reads `actual_value=None`, `hit=None`, `error=None`.
+    Never `hit=False`: a pick with no recorded outcome is not a miss, and
+    reporting it as one is the exact error the game-level track record is built
+    to avoid.
+    """
+    with get_connection(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT s.game_id, s.player_id, s.stat, s.predicted_value,
+                   s.created_at, s.position, o.actual_value
+            FROM player_prediction_snapshots AS s
+            LEFT JOIN game_player_outcomes AS o
+              ON o.game_id = s.game_id
+             AND o.player_id = s.player_id
+             AND o.stat = s.stat
+            WHERE s.game_id = ?
+            ORDER BY s.created_at, s.player_id, s.stat
+            """,
+            (game_id,),
+        ).fetchall()
+
+    earliest: dict[tuple[str, str], dict] = {}
+    for row in rows:
+        record = dict(row)
+        actual = record["actual_value"]
+        record["error"] = None if actual is None else abs(float(actual) - float(record["predicted_value"]))
+        record["hit"] = None if actual is None else bool(actual >= record["predicted_value"])
+        # Rows arrive in created_at order, so the first row seen for a key is the
+        # earliest one and later snapshots do not displace it.
+        earliest.setdefault((record["player_id"], record["stat"]), record)
+    return list(earliest.values())
+
+
+def normalise_player_name(name: str | None) -> str:
+    """Casefolded, punctuation-stripped name for exact matching.
+
+    Normalisation exists so that "J. Tatum" and "jayson tatum" are not two
+    players. It is deliberately *not* fuzzy: no edit distance, no initials, no
+    surname-only fallback.
+    """
+    if not isinstance(name, str):
+        return ""
+    return "".join(ch for ch in name.casefold() if ch.isalnum() or ch.isspace()).strip()
+
+
+def join_player_ids(
+    prop_names: Sequence[tuple[str, str]],
+    espn_players: Sequence[dict],
+) -> list[str]:
+    """Map (name, team) prop rows onto ESPN player ids, dropping the unmatched.
+
+    ESPN keys players by id; the sportsbook props feed keys them by name. That
+    gap is closed here by exact match on the normalised (name, team) pair, and
+    **only** that: an unmatched prop is logged and skipped, never fuzzy-matched.
+    A wrong line attributed to a real player is worse than a missing line,
+    which is the same asymmetry `api/availability.py` is built around.
+
+    Team is part of the key, so a player who transferred does not inherit the
+    row recorded under their old team.
+
+    Returns ids in the order the prop rows were given.
+    """
+    index = {
+        (normalise_player_name(p.get("player_name")), (p.get("team") or "").strip().upper()): p["player_id"]
+        for p in espn_players
+        if p.get("player_id")
+    }
+    resolved: list[str] = []
+    for name, team in prop_names:
+        key = (normalise_player_name(name), (team or "").strip().upper())
+        player_id = index.get(key)
+        if player_id:
+            resolved.append(player_id)
+        else:
+            logger.warning(
+                "props feed player %r/%r did not match any ESPN player id; skipped "
+                "rather than fuzzy-matched", name, team,
+            )
+    return resolved

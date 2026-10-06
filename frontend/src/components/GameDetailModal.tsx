@@ -3,7 +3,7 @@ import { api, type GameDetail, type OutPlayer, type PlayerProp, type PlayerHubRo
 import TopCalls from "./TopCalls";
 import { favourite } from "../lib/pick";
 import { teamName } from "../lib/teams";
-import { ErrorState, FixtureExplainer, SignalRows, Skeleton, kickoff, pct, stat, statusWords, type Signal } from "../predictor-ui";
+import { ErrorState, FixtureExplainer, SignalRows, Skeleton, kickoff, pct, signalIsDrawn, stat, statusWords, type Signal } from "../predictor-ui";
 import { panelFacts } from "../predictor-ui/lib/panelFacts";
 import PlayerBoxScore from "./PlayerBoxScore";
 
@@ -103,6 +103,11 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
   // Spec §4's signal rows. `[]` and never null once settled -- and `[]` is also
   // what every failure leaves behind, see the effect below.
   const [signals, setSignals] = useState<Signal[]>([]);
+  // The rows that will ACTUALLY render, computed by the same exported predicate
+  // `SignalRows` filters with. Without this the section mounted on the raw count
+  // and rendered an empty band whenever every row was undrawable; see the block's
+  // comment. `useMemo` because `signalIsDrawn` walks every row on every render.
+  const drawnSignals = useMemo(() => signals.filter((s) => signalIsDrawn(s)), [signals]);
   // The per-game player feed carries no team, so the box score's split comes
   // from the season hub feed. Fetched separately, and allowed to fail: losing
   // the split must not take the game detail down with it.
@@ -614,6 +619,40 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
           </section>
         )}
 
+        {/* The signal rows (spec §4), ABOVE the projections -- the same position
+            Sports' `GameDetailModal` and PL's `FixtureModal` put them, so a fixture
+            page reads the same way in all three.
+
+            On NBA this is the only place the out player's own projection appears at
+            all: `/games/{id}/players` withholds his rows before serialising, so the
+            mention under the lists below is all he gets today. This row is the first
+            thing on the page that says what the model expected of him.
+
+            **Gated on `drawnSignals`, NOT on `signals`.** `signals.length > 0` counts
+            the RAW list, and `SignalRows` drops any row it cannot draw and returns
+            `null` when none survive -- so the raw guard mounted a `<section>` with no
+            heading and no rows inside it, which is the empty state spec §2 forbids
+            ("no data, no row"). The filter is exported by the shared component
+            precisely so a caller can gate on the same answer the renderer computes,
+            rather than re-deriving it and getting it subtly wrong. Caught by
+            CodeRabbit on #36.
+
+            **The heading exists because `aria-labelledby` names it.** The first
+            version carried `aria-labelledby={`${titleId}-signals`}` with no element
+            of that id anywhere, so the reference dangled and the section was
+            announced with no name at all -- worse than an unlabelled section, because
+            it reads as labelled to anyone auditing the attribute. The sibling
+            `-box` and `-calls` sections each pair the attribute with a real `<h3>`;
+            this one now does too. Caught by CodeRabbit on #36. */}
+        {drawnSignals.length > 0 && (
+          <section aria-labelledby={`${titleId}-signals`} className="mt-4">
+            <h3 id={`${titleId}-signals`} className="mb-2 text-sm text-[var(--color-net-faint)]">
+              Signals
+            </h3>
+            <SignalRows signals={drawnSignals} />
+          </section>
+        )}
+
         {/* The ranked calls, as a block of their own rather than another column
             of the box score: a ranking that a reader could mistake for the full
             roster is the thing this must not be, and one list per category with
@@ -625,23 +664,6 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
               Player projections
             </h3>
             <TopCalls props={players} out={outPlayers} />
-          </section>
-        )}
-        {/* The signal rows (spec §4), ABOVE the projections -- the same position
-            Sports' `GameDetailModal` and PL's `FixtureModal` put them, so a fixture
-            page reads the same way in all three.
-
-            On NBA this is the only place the out player's own projection appears at
-            all: `/games/{id}/players` withholds his rows before serialising, so the
-            mention under the lists above is all he gets today. This row is the first
-            thing on the page that says what the model expected of him.
-
-            `{signals.length > 0 && ...}` rather than a guard around the block:
-            spec §2 says a game with nothing to say renders NO rows -- not an empty
-            section, not a heading. */}
-        {signals.length > 0 && (
-          <section aria-labelledby={`${titleId}-signals`} className="mt-4">
-            <SignalRows signals={signals} />
           </section>
         )}
         {players && players.length > 0 && !outPlayers && (

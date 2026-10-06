@@ -77,8 +77,16 @@ def build_prop_features(
 
     # ---- usage_trend: share of the team's attempts, trailing.
     # A rate, not a count: raw FGA would only rank big men.
-    team_fga = games.groupby(["game_id", "team"])["fga"].transform("sum")
-    games["_usage"] = games["fga"] / team_fga.replace(0, np.nan)
+    #
+    # NaN, not zero, when the frame carries no `fga`. A usage share computed
+    # without shot volume is not a small number, it is a wrong one, and an
+    # all-NaN column here is the honest signal that the extract is missing
+    # something (spec 12.2) rather than that players have no usage.
+    if "fga" in games.columns:
+        team_fga = games.groupby(["game_id", "team"])["fga"].transform("sum")
+        games["_usage"] = games["fga"] / team_fga.replace(0, np.nan)
+    else:
+        games["_usage"] = np.nan
 
     games["_usage_trend"] = games.groupby("player_id")["_usage"].transform(
         lambda s: s.shift(1).rolling(window=window, min_periods=2).mean()

@@ -529,6 +529,7 @@ def to_player_training_frame(games: list[dict], player_boxscores: dict[str, list
             continue
         for row in boxscore_rows:
             fg3m, _ = _parse_made_attempted(row["three_made_attempted"])
+            fgm, fga = _parse_made_attempted(row.get("fg_made_attempted"))
             rows.append(
                 {
                     "player_id": row["player_id"],
@@ -542,6 +543,19 @@ def to_player_training_frame(games: list[dict], player_boxscores: dict[str, list
                     "fg3m": fg3m,
                     "minutes": row["minutes"],
                     "position": row.get("position"),
+                    # Shot volume, carried so features/prop_matchup.py has a real
+                    # usage rate to work with. ESPN sends `fg_made_attempted`
+                    # ("10-18"); the frame was dropping it, which left
+                    # usage_trend uncomputable from real data rather than absent.
+                    "fgm": fgm,
+                    "fga": fga,
+                    # Who the player was playing against, and where. The
+                    # opponent is what makes a matchup feature a matchup
+                    # feature; without it opp_def_vs_pos has nothing to key on.
+                    "home_team": game.get("home_team"),
+                    "away_team": game.get("away_team"),
+                    "opponent": (game["away_team"] if row["team"] == game.get("home_team")
+                                 else game.get("home_team")),
                 }
             )
     return pd.DataFrame(rows)

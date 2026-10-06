@@ -41,12 +41,20 @@ full local setup, or change the proxy target.
 
 ## Deployment
 
-NBA_Predictor deploys the same way as PL_Predictor, F1_Predictor, and the
-NFL/CFB predictor: GitHub Actions builds the Docker image, pushes it to
-GHCR, and updates an Azure Container App in the shared `predictor-hub-rg`
-resource group. See `.github/workflows/deploy-azure.yml`.
+**Production runs on a VPS, not in Azure.** The site is deployed by hand to
+the VPS; nothing deploys on push.
 
-### One-time setup (run once, by a human, before the first automated deploy)
+`.github/workflows/deploy-azure.yml` is still here and still works — it builds
+the Docker image, pushes it to GHCR and updates an Azure Container App in the
+shared `predictor-hub-rg` resource group — but it is `workflow_dispatch` only.
+It does not fire on push or on a PR, and no automated deploy is wired up.
+
+This README previously claimed "every push to `main` redeploys automatically
+via `.github/workflows/deploy-azure.yml`". That was false: the workflow has
+been manual-only since the move to the VPS, and the sentence described a
+pipeline that no longer existed. It is stated correctly now.
+
+### One-time setup (run once, by a human, if Azure is ever needed)
 
 1. Find the existing Container Apps environment the other predictors share:
    ```bash
@@ -72,8 +80,12 @@ resource group. See `.github/workflows/deploy-azure.yml`.
    or found via `az containerapp show --name nba-predictor --resource-group
    predictor-hub-rg --query properties.configuration.ingress.fqdn`).
 
-After this one-time setup, every push to `main` redeploys automatically via
-`.github/workflows/deploy-azure.yml`.
+After this one-time setup, a deploy is run by hand: **Actions → Deploy to
+Azure Container Apps → Run workflow**.
+
+Whether the Azure path should come back as a push-triggered deploy, or be
+deleted along with the setup steps above, is an open question. Nothing here
+depends on the answer — the site is on the VPS either way.
 
 ### Data refresh
 

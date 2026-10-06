@@ -23,6 +23,9 @@ cannot divide by zero, and the derived probabilities are coherent with each
 other (a 50% cover line must read 0.5 whatever the predicted margin).
 """
 
+import json
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -139,30 +142,51 @@ def test_an_all_nan_residual_set_refuses_to_fit_rather_than_returning_nan():
     with pytest.raises(ValueError):
         win_prob(5.0, float("nan"))
 
-def test_sigmas_fitted_from_real_walk_forward_residuals_land_in_a_plausible_range():
-    """σ must come from the race-winning model's actual out-of-fold errors on
-    the real data, and land near the spread the spec quotes (margin σ≈12,
-    total σ≈15-16). A σ fitted on in-sample errors would be far too small and
-    every probability would read as confident."""
-    import json
+def _synthetic_season(n_games: int = 400) -> "pd.DataFrame":
+    """A frame with the real feature schema, built from real column names.
 
+    The first version of this test read `data/cache/training/games.json`, which
+    is gitignored, so it passed locally and failed in CI with FileNotFoundError
+    -- a test that only runs on one machine is not a test.
+    """
     from nba_predictor.features.build import build_training_frame
-    from nba_predictor.models.candidate_race import default_candidates
-    from nba_predictor.models.evaluate.walk_forward_eval import expanding_windows
 
-    frame, cols = build_training_frame(
-        pd.DataFrame(json.load(open("data/cache/training/games.json")))
-    )
+    rng = np.random.default_rng(3)
+    teams = ["BOS", "MIA", "LAL", "GSW", "DEN", "PHX", "MIL", "OKC"]
+    dates = pd.date_range("2025-10-22", periods=n_games).astype(str)
+    strength = {t: rng.normal(0, 5) for t in teams}
+    rows = []
+    for i, day in enumerate(dates):
+        for k in range(len(teams) // 2):
+            home, away = teams[2 * k], teams[2 * k + 1]
+            margin = strength[home] - strength[away] + rng.normal(0, 13)
+            total = 222 + rng.normal(0, 13)
+            rows.append({
+                "game_id": f"g{i}-{k}", "game_date": day,
+                "home_team": home, "away_team": away,
+                "home_pts": round((total + margin) / 2),
+                "away_pts": round((total - margin) / 2),
+                "home_fgm": 40, "home_fga": 88, "home_fg3m": 12,
+                "home_tov": 11, "home_oreb": 9, "home_dreb": 32, "home_fta": 20,
+                "away_fgm": 38, "away_fga": 90, "away_fg3m": 10,
+                "away_tov": 13, "away_oreb": 10, "away_dreb": 30, "away_fta": 18,
+                "home_win": int(margin > 0),
+            })
+    frame, _ = build_training_frame(pd.DataFrame(rows))
     frame = frame.sort_values("game_date").reset_index(drop=True)
-    frame = frame.assign(
+    return frame.assign(
         home_margin=frame["home_pts"] - frame["away_pts"],
         home_total=frame["home_pts"] + frame["away_pts"],
     )
-    candidates = default_candidates(cols)
-    ridge = candidates["ridge"]
 
+
+def _out_of_fold_errors(frame, cols, n_windows: int = 4):
+    from nba_predictor.models.candidate_race import default_candidates
+    from nba_predictor.models.evaluate.walk_forward_eval import expanding_windows
+
+    ridge = default_candidates(cols)["ridge"]
     margin_errors, total_errors = [], []
-    for train_idx, test_idx in expanding_windows(frame["game_date"], n_windows=4):
+    for train_idx, test_idx in expanding_windows(frame["game_date"], n_windows=n_windows):
         train_df, test_df = frame.iloc[train_idx], frame.iloc[test_idx]
         for target, col, bucket in (
             ("margin", "home_margin", margin_errors),
@@ -170,9 +194,49 @@ def test_sigmas_fitted_from_real_walk_forward_residuals_land_in_a_plausible_rang
         ):
             preds = ridge[target](train_df)(test_df)
             bucket.extend((test_df[col].to_numpy() - np.asarray(preds)).tolist())
+    return margin_errors, total_errors
 
-    sigmas = residual_sigmas(
-        margin_errors=margin_errors, total_errors=total_errors
+
+def test_sigmas_from_out_of_fold_errors_are_never_tighter_than_the_mae():
+    """sigma = MAE * sqrt(pi/2), so it must always exceed the MAE it came from.
+
+    Using MAE directly as sigma understates the spread by ~25% and makes every
+    served probability read more confident than the evidence supports -- the
+    failure mode this whole module exists to prevent.
+    """
+    from nba_predictor.features.build import FEATURE_COLUMNS
+
+    frame = _synthetic_season()
+    cols = [c for c in FEATURE_COLUMNS if c in frame.columns]
+    margin_errors, total_errors = _out_of_fold_errors(frame, cols)
+
+    for errors, name in ((margin_errors, "margin"), (total_errors, "total")):
+        mae = float(np.mean(np.abs(errors)))
+        sigma = fit_residual_sigma(errors)
+        assert sigma > mae, f"{name}: sigma {sigma:.3f} <= MAE {mae:.3f}"
+        assert sigma == pytest.approx(mae * np.sqrt(np.pi / 2), rel=1e-9)
+        assert 5.0 < sigma < 40.0, f"{name}: sigma {sigma:.3f} is not NBA-scaled"
+
+
+@pytest.mark.skipif(
+    not Path("data/cache/training/games.json").exists(),
+    reason="real training cache is gitignored; runs where the pipeline has been executed",
+)
+def test_sigmas_on_the_real_training_set_land_in_a_plausible_range():
+    """The real 1,390-game set, where the fitted sigmas were margin 16.58 /
+    total 20.69 -- wider than the spec's naive references (12 / 15-16) because
+    the model's real error is worse than naive."""
+    from nba_predictor.features.build import build_training_frame
+
+    frame, cols = build_training_frame(
+        pd.DataFrame(json.loads(Path("data/cache/training/games.json").read_text()))
     )
+    frame = frame.sort_values("game_date").reset_index(drop=True)
+    frame = frame.assign(
+        home_margin=frame["home_pts"] - frame["away_pts"],
+        home_total=frame["home_pts"] + frame["away_pts"],
+    )
+    margin_errors, total_errors = _out_of_fold_errors(frame, cols)
+    sigmas = residual_sigmas(margin_errors=margin_errors, total_errors=total_errors)
     assert 8.0 < sigmas["margin_sigma"] < 20.0, sigmas
     assert 10.0 < sigmas["total_sigma"] < 25.0, sigmas

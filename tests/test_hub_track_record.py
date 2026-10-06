@@ -109,3 +109,44 @@ def test_prop_mae_counts_the_earliest_snapshot_not_the_latest(tmp_path):
         f"MAE {by_stat['points'].mae} -- the latest snapshot was graded; the "
         "earliest (24.0 vs actual 20.0 => 4.0) is the pick that counts"
     )
+
+
+def test_prop_mae_pairs_the_earliest_recorded_outcome(tmp_path):
+    """The join can return two outcomes for one key on a legacy database.
+
+    `uq_game_player_outcomes_key` is deliberately left OUT of such a file --
+    rule 1 forbids deleting rows that conflict -- so the snapshot/outcome join
+    yields both. Which one the MAE is graded against then decides the number,
+    and with no ORDER BY SQLite's answer is not even stable. The repo's rule is
+    the earliest recorded outcome; this pins it.
+    """
+    db_path = _db(tmp_path)
+    store.insert_player_prediction(
+        db_path, game_id="g1", player_id="p1", stat="points",
+        predicted_value=24.0, created_at="2026-10-21T18:00:00+00:00", position="G",
+    )
+    # Simulate the legacy file: drop the index, then write the contradicting row
+    # straight to the table the way the pre-index pipeline did.
+    with store.get_connection(db_path) as conn:
+        conn.execute("DROP INDEX IF EXISTS uq_game_player_outcomes_key")
+        conn.execute(
+            "INSERT INTO game_player_outcomes "
+            "(game_id, player_id, stat, actual_value, recorded_at) "
+            "VALUES ('g1','p1','points',20.0,?)",
+            ("2026-10-22T02:00:00+00:00",),
+        )
+        conn.execute(
+            "INSERT INTO game_player_outcomes "
+            "(game_id, player_id, stat, actual_value, recorded_at) "
+            "VALUES ('g1','p1','points',60.0,?)",
+            ("2026-10-23T02:00:00+00:00",),
+        )
+        conn.commit()
+
+    rows = {r.market: r for r in hub_service.compute_track_record(db_path, _schedule())}
+    by_stat = {s.stat: s for s in rows["player_props"].per_stat}
+    assert by_stat["points"].n == 1, "the duplicate outcome was counted twice"
+    assert by_stat["points"].mae == 4.0, (
+        f"MAE {by_stat['points'].mae} -- graded against an outcome other than "
+        "the earliest recorded (24.0 vs 20.0 => 4.0)"
+    )

@@ -8,9 +8,17 @@ interface TeamLogoProps {
 }
 
 export default function TeamLogo({ team, size = 20, className = "" }: TeamLogoProps) {
-  const [failed, setFailed] = useState(false);
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
   const url = teamLogoUrl(team);
   const initial = (team.trim().charAt(0) || "?").toUpperCase();
+
+  // Keyed by URL, not a bare boolean. A plain `failed` flag was sticky: once a
+  // logo errored, this instance showed the fallback for every *later* team
+  // without ever attempting the new URL -- so a card showing both teams would
+  // put the wrong team's initial on the half that was fine. Storing which URL
+  // failed also drops the fallback automatically when the team changes to one
+  // that has not failed, with no effect needed at all for that case.
+  const failed = failedUrl !== null && failedUrl === url;
 
   if (!url || failed) {
     return (
@@ -32,7 +40,7 @@ export default function TeamLogo({ team, size = 20, className = "" }: TeamLogoPr
       width={size}
       height={size}
       loading="lazy"
-      onError={() => setFailed(true)}
+      onError={() => setFailedUrl(url)}
       className={`shrink-0 object-contain ${className}`}
     />
   );

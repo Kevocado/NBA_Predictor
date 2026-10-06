@@ -19,6 +19,7 @@ from nba_predictor.tracking import store
 from nba_predictor.tracking.store import get_connection
 from nba_predictor.tracking.timing import (
     earliest_recorded,
+    earliest_recorded_outcome,
     earliest_run,
     latest_pre_tip,
     made_before_tip,
@@ -498,7 +499,8 @@ def _summarize_player_props(db_path: Path) -> TrackRecordOut | None:
         rows = conn.execute(
             """
             SELECT s.game_id, s.player_id, s.stat, s.predicted_value,
-                   o.actual_value, s.position, s.created_at
+                   o.actual_value, s.position, s.created_at,
+                   o.recorded_at AS recorded_at
             FROM player_prediction_snapshots s
             JOIN game_player_outcomes o
               ON o.game_id = s.game_id AND o.player_id = s.player_id AND o.stat = s.stat
@@ -506,14 +508,20 @@ def _summarize_player_props(db_path: Path) -> TrackRecordOut | None:
         ).fetchall()
     if not rows:
         return None
-    # The EARLIEST snapshot per key, not the latest. This table carries no
-    # uniqueness constraint (the scheduled refresh re-scores a rolling window
-    # every day, so a rerun genuinely lands twice), which is why every
-    # aggregate path dedupes here. Keeping the latest let a rerun replace the
-    # original pre-tip pick and restate the published MAE -- the exact failure
-    # rule 2 of the 2026-10-01 spec exists to prevent, and the same one
-    # `counted_picks` already guards for the hit rate.
-    counted = earliest_recorded(rows)
+    # Two dedupes, in this order, because the join multiplies them together.
+    #
+    # 1. The OUTCOME first. On a legacy file `uq_game_player_outcomes_key` could
+    #    not be built -- rule 1 forbids deleting conflicting rows -- so this join
+    #    can return two outcomes for one key. Deduping the snapshot first would
+    #    leave which outcome it pairs with to chance.
+    # 2. Then the snapshot: EARLIEST per key, not the latest. This table carries
+    #    no uniqueness constraint by design (the daily refresh re-scores a
+    #    rolling window, so a rerun genuinely lands twice), which is why every
+    #    aggregate path dedupes here. Keeping the latest let a rerun replace the
+    #    original pre-tip pick and restate the published MAE -- the failure rule
+    #    2 of the 2026-10-01 spec exists to prevent, and the same one
+    #    `counted_picks` already guards for the hit rate.
+    counted = earliest_recorded(earliest_recorded_outcome(rows))
     by_stat: dict[str, list[float]] = {}
     by_pos: dict[str, list[float]] = {}
     for r in counted:

@@ -168,9 +168,16 @@ def build_game_features(
                 return {"net": float("nan"), "rest": float("nan"), "poss": float("nan")}
             i = row_of[team][game.game_id]
             net = _prior(form, i, "_net")
+            # `_rest` is not windowed like the others: it already *is* the gap
+            # between this game and the team's previous one, so it is read at row
+            # i rather than averaged over the rows before it.
+            rest = form["_rest"].iloc[i]
             return {
                 "net": net,
-                "rest": float(i),
+                # Days since this team's previous game, not its row index. The
+                # index is a games-played count, and the two disagree the moment
+                # a team misses a night -- which is exactly when rest matters.
+                "rest": float(rest) if pd.notna(rest) else float("nan"),
                 "poss": _prior(form, i, "_poss"),
             }
 

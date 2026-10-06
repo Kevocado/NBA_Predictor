@@ -506,14 +506,17 @@ def _summarize_player_props(db_path: Path) -> TrackRecordOut | None:
         ).fetchall()
     if not rows:
         return None
-    latest: dict[tuple[str, str, str], sqlite3.Row] = {}
-    for r in rows:
-        key = (r["game_id"], r["player_id"], r["stat"])
-        if key not in latest or r["created_at"] > latest[key]["created_at"]:
-            latest[key] = r
+    # The EARLIEST snapshot per key, not the latest. This table carries no
+    # uniqueness constraint (the scheduled refresh re-scores a rolling window
+    # every day, so a rerun genuinely lands twice), which is why every
+    # aggregate path dedupes here. Keeping the latest let a rerun replace the
+    # original pre-tip pick and restate the published MAE -- the exact failure
+    # rule 2 of the 2026-10-01 spec exists to prevent, and the same one
+    # `counted_picks` already guards for the hit rate.
+    counted = earliest_recorded(rows)
     by_stat: dict[str, list[float]] = {}
     by_pos: dict[str, list[float]] = {}
-    for r in latest.values():
+    for r in counted:
         err = r["predicted_value"] - r["actual_value"]
         by_stat.setdefault(r["stat"], []).append(err)
         by_pos.setdefault(r["position"] or "Unknown", []).append(abs(err))
@@ -525,7 +528,7 @@ def _summarize_player_props(db_path: Path) -> TrackRecordOut | None:
     ]
     return TrackRecordOut(
         market="player_props",
-        total_predictions=len(latest),
+        total_predictions=len(counted),
         correct_predictions=0,
         hit_rate=0.0,
         per_stat=per_stat,

@@ -75,3 +75,37 @@ def test_no_prop_data_no_prop_row(tmp_path):
     db_path = _db(tmp_path)
     rows = {r.market: r for r in hub_service.compute_track_record(db_path, _schedule())}
     assert "player_props" not in rows
+
+
+def test_prop_mae_counts_the_earliest_snapshot_not_the_latest(tmp_path):
+    """A rerun must not restate the record.
+
+    The scheduled refresh re-scores a rolling window every day, so a second
+    snapshot for the same pick genuinely lands in the table -- that is the
+    product working as specified, not a bug to constrain away. What matters is
+    that the pick that counts is the one published FIRST. An earlier version
+    kept the latest, which meant re-running the model after a bad number quietly
+    replaced it: re-running until the record looked good would have been free.
+    """
+    db_path = _db(tmp_path)
+    store.insert_player_prediction(
+        db_path, game_id="g1", player_id="p1", stat="points",
+        predicted_value=24.0, created_at="2026-10-21T18:00:00+00:00", position="G",
+    )
+    store.insert_player_prediction(
+        db_path, game_id="g1", player_id="p1", stat="points",
+        predicted_value=4.0, created_at="2026-10-21T19:30:00+00:00", position="G",
+    )
+    store.insert_player_outcome(
+        db_path, game_id="g1", player_id="p1", stat="points", actual_value=20.0, recorded_at=TS,
+    )
+
+    rows = {r.market: r for r in hub_service.compute_track_record(db_path, _schedule())}
+    prop = rows["player_props"]
+    by_stat = {s.stat: s for s in prop.per_stat}
+
+    assert by_stat["points"].n == 1, "the rerun was graded as a second pick"
+    assert by_stat["points"].mae == 4.0, (
+        f"MAE {by_stat['points'].mae} -- the latest snapshot was graded; the "
+        "earliest (24.0 vs actual 20.0 => 4.0) is the pick that counts"
+    )

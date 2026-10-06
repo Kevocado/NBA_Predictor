@@ -82,7 +82,6 @@ export default function ModelSummaryPage() {
             </tr>
           ))}
         </tbody>
-        </tbody>
         </table>
       </div>
 

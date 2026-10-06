@@ -197,14 +197,75 @@ def test_features_never_use_the_game_they_describe():
 
     assert checked > 20, f"only {checked} games had two-sided history; too weak a check"
 
+def _rotating_games(n_days: int = 14) -> pd.DataFrame:
+    """Four teams, pairings rotate nightly, so a team really does miss nights.
+
+    `make_games` pairs the same teams every night, so deleting one night puts
+    *both* its teams on a break and the rest difference is always zero. That is
+    why the first version of this test could not tell a days-off feature from a
+    games-played count -- the fixture could not express the case at all.
+    """
+    teams = ["AAA", "BBB", "CCC", "DDD"]
+    rows = []
+    for d, day in enumerate(pd.date_range("2025-11-01", periods=n_days).astype(str)):
+        pair = 0 if d % 2 == 0 else 1
+        for k in range(2):
+            home = teams[(2 * k + pair) % 4]
+            away = teams[(2 * k + pair + 1) % 4]
+            rows.append({
+                "game_id": f"g{d}-{k}", "game_date": day,
+                "home_team": home, "away_team": away,
+                "home_pts": 110, "away_pts": 105,
+                "home_fgm": 40, "home_fga": 88, "home_fg3m": 12,
+                "home_tov": 11, "home_oreb": 9, "home_dreb": 32, "home_fta": 20,
+                "away_fgm": 38, "away_fga": 90, "away_fg3m": 10,
+                "away_tov": 13, "away_oreb": 10, "away_dreb": 30, "away_fta": 18,
+            })
+    return pd.DataFrame(rows)
+
+
+def test_rest_delta_reflects_days_off_not_games_played():
+    """`rest_delta` is home's days-since-last-game minus the away team's.
+
+    An earlier version returned the row index of the game in the team's own log
+    -- a games-played count wearing the name "rest days".
+    """
+    games = _rotating_games()
+    skipped = "2025-11-05"
+    games = games[
+        ~((games["game_date"] == skipped)
+          & (((games["home_team"] == "AAA") & (games["away_team"] == "BBB"))
+            | ((games["home_team"] == "BBB") & (games["away_team"] == "AAA"))))
+    ].reset_index(drop=True)
+
+    feats = build_game_features(games, availability=[])
+
+    # The night after, the side that sat out has rested two days while the other
+    # has rested one. A games-played count gets this BACKWARDS, because the team
+    # that sat out has played one *fewer* game -- so the sign is the tell.
+    after = feats[feats["game_date"] == "2025-11-06"]
+    rested = after[
+        after["home_team"].isin(["AAA", "BBB"]) & after["away_team"].isin(["CCC", "DDD"])
+    ]
+    assert not rested.empty, "fixture produced no game on 2025-11-06 to check"
+    expected = 1.0 if rested.iloc[0]["home_team"] in ("AAA", "BBB") else -1.0
+    assert float(rested.iloc[0]["rest_delta"]) == pytest.approx(expected), (
+        "rest_delta is not days-off; a games-played count gives the opposite sign"
+    )
+
+    # Every other night both sides have exactly one day of rest.
+    same = feats[feats["game_date"] != "2025-11-06"]["rest_delta"].dropna()
+    assert (same == 0).all()
+
 
 def test_rest_delta_is_home_rest_minus_away_rest_and_is_zero_on_a_back_to_back():
     games = make_games()
     feats = build_game_features(games, availability=[])
 
-    assert set(feats["rest_delta"].unique()) <= {0.0, 1.0, 2.0, 3.0}
+    # NaN for a team's first game: no previous game to be rested from.
+    assert set(feats["rest_delta"].dropna().unique()) <= {0.0, 1.0, 2.0, 3.0}
     # Two teams play the same night, so their rest days must match.
-    same_night = feats.groupby("game_date")["rest_delta"].nunique()
+    same_night = feats.dropna(subset=["rest_delta"]).groupby("game_date")["rest_delta"].nunique()
     assert (same_night == 1).all(), "teams on the same night got different rest counts"
 
 

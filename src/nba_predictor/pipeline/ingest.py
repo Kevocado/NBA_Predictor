@@ -27,18 +27,30 @@ BOX_FIELDS = ["fgm", "fga", "fg3m", "tov", "oreb", "dreb", "fta"]
 
 
 def default_window_start(today: date | None = None) -> str:
-    """Start of the NBA season *before* the one in progress: Oct 1 of the
-    previous calendar year.
+    """Oct 1 of the season **before the one in progress**.
 
     The window used to be `date -d '60 days ago'`, which cannot cover a season
     and left the offseason run training on one game before crashing in
-    chronological_split -- see docs/nba-retrain-diagnosis-2026-10.md. The
-    rolling features in features/build.py need a season of history behind them,
-    so the floor is one full season back, whatever day it is. Sep 30 -> 2025-10-01;
-    Oct 20 -> 2025-10-01; Feb 3 -> 2026-10-01.
+    chronological_split -- see docs/nba-retrain-diagnosis-2026-10.md. The rolling
+    features in features/build.py need a season of history behind them, so the
+    floor is one full season back whatever day it is.
+
+    Anchored to the season, not to the calendar year. Oct-Dec belongs to the
+    season starting that year; Jan-Sep to the season that started the year
+    before -- the same rule `pipeline/retrain.py::_nba_season_start_year` uses.
+    So the *previous* season's Oct 1 is:
+
+        2026-10-05 -> 2025-10-01   (offseason: the season just finished)
+        2027-02-03 -> 2025-10-01   (mid-season: last season plus this one so far)
+        2027-10-20 -> 2026-10-01   (early season)
+
+    An earlier version returned `today.year - 1` unconditionally, which for the
+    nine months from January to September was the *current* season's start --
+    four months of history, not the full season the docstring promised.
     """
     today = today or date.today()
-    return f"{today.year - 1}-10-01"
+    season_year = today.year if today.month >= 10 else today.year - 1
+    return f"{season_year - 1}-10-01"
 
 
 def default_window_end(today: date | None = None) -> str:

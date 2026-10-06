@@ -67,13 +67,21 @@ def test_default_window_start_reaches_back_a_whole_season():
 
     from nba_predictor.pipeline.ingest import default_window_start
 
-    # Offseason is when the 60-day window broke: the regular season had not
-    # started, so there was nothing to train on.
-    for today in (date(2026, 10, 5), date(2027, 1, 20), date(2027, 6, 15)):
-        start = date.fromisoformat(default_window_start(today))
-        assert start <= date(today.year - 1, 10, 1), (
-            f"window starting {start} on {today} cannot cover a season -- the "
-            "offseason run trains on nothing (G3)"
+    # The season in progress started in `today.year` if today is Oct-Dec, and in
+    # `today.year - 1` otherwise. The window must start Oct 1 of the season
+    # BEFORE that one -- so a mid-season run gets last season plus this one, not
+    # just the current season's opening months.
+    for today in (
+        date(2026, 10, 5),   # offseason, season just finished
+        date(2027, 2, 3),    # mid-season
+        date(2027, 6, 15),   # offseason again
+        date(2027, 10, 20),  # early season
+    ):
+        season_year = today.year if today.month >= 10 else today.year - 1
+        expected = date(season_year - 1, 10, 1)
+        assert date.fromisoformat(default_window_start(today)) == expected, (
+            f"on {today} the window should start {expected} (the previous "
+            "season's Oct 1)"
         )
 
 

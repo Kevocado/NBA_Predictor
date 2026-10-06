@@ -271,7 +271,11 @@ export interface StandingsRow {
   losses: number;
   win_pct: number;
   games_back: number;
-  playoff_status: "clinched" | "play-in" | "eliminated" | "in-hunt";
+  // null, not a status string, when the schedule says there is no race to be in
+  // (off-season or pre-season). The backend drops the label rather than
+  // inventing one, so the type has to admit its absence.
+  playoff_status: "clinched" | "play-in" | "eliminated" | "in-hunt" | null;
+  season_state: "offseason" | "preseason" | "regular" | "postseason";
 }
 
 export interface Manifest {

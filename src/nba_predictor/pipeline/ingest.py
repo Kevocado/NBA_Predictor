@@ -478,8 +478,110 @@ def compute_power_rankings(games: list[dict]) -> list[dict]:
     return rows
 
 
-def compute_standings(games: list[dict]) -> list[dict]:
+#: The phases a schedule can be in, in the order they occur. Off-season first so
+#: a lookup by index reads as the calendar.
+SEASON_STATES = ("offseason", "preseason", "regular", "postseason")
+
+#: How stale the most recent completed game may be and still read as a season
+#: that just ended. Sixty days is roughly the gap between the Finals and opening
+#: night; past it, the next season simply has not loaded and calling it
+#: "postseason" would be a claim about a race that is months away.
+OFFSEASON_GAP_DAYS = 60
+
+
+def _game_date(game: dict) -> date | None:
+    """`game_date` as a `date`, or None when it is missing or unreadable.
+
+    Unreadable dates are skipped rather than fatal: one malformed row in a
+    schedule cache should cost that row, not the whole classification.
+    """
+    raw = game.get("game_date")
+    if isinstance(raw, date):
+        return raw
+    try:
+        return date.fromisoformat(str(raw)[:10])
+    except (TypeError, ValueError):
+        return None
+
+
+def season_state(games: list[dict], today: date | None = None) -> str:
+    """Which phase of the season this schedule is in, derived from the schedule.
+
+    The schedule is the only thing here that knows whether there is a season to
+    be in -- everything else in this repo can look like a live league while the
+    league is shut, which is exactly how "clinched" ended up describing a table
+    nobody is playing in.
+
+    Four cases, from the two questions that matter: are there games scheduled on
+    or after today, and are there any results at all?
+
+    * no games scheduled on or after today, and no recent result -> `offseason`
+    * scheduled ahead, nothing recent played -> `preseason` (the league is
+      loaded, nobody has played)
+    * a recent result and games ahead -> `regular`
+    * a recent result, nothing ahead -> `postseason`
+
+    "Recent" is the load-bearing word. The rolling ingest window holds last
+    season's finished games all summer *alongside* the new season's upcoming
+    schedule, so "there are results" and "there are games ahead" are both true
+    in October. Reading that as a season in progress is exactly how six teams
+    got labelled "clinched" about a league nobody had played in, so a result
+    only counts toward the current season if it is within `OFFSEASON_GAP_DAYS`.
+
+    That gap is the one thing the schedule cannot settle by shape alone -- a
+    season that ended last month and one that ended in April are both "finished,
+    nothing ahead". Rather than guess from a month number, it asks how long ago,
+    which is a fact in the data.
+
+    A game dated *today* with no score counts as scheduled. "Today" is ambiguous
+    at the edges, and reading it the other way labels the entire league
+    `preseason` on opening day.
+    """
+    today = today or date.today()
+    upcoming = False
+    newest_finished: date | None = None
+    for g in games:
+        game_date = _game_date(g)
+        if game_date is None:
+            continue
+        played = g.get("home_pts") is not None and g.get("away_pts") is not None
+        if played:
+            newest_finished = max(filter(None, (newest_finished, game_date)))
+        if game_date >= today:
+            upcoming = True
+
+    # A result only counts as belonging to THIS season if it is recent enough.
+    # The rolling ingest window holds last season's finished games all summer,
+    # alongside the new season's upcoming schedule -- so "there are results" and
+    # "there are games ahead" are both true in October, and treating that as a
+    # season in progress is precisely how six teams got labelled "clinched"
+    # about a league nobody had played in.
+    in_season = (
+        newest_finished is not None
+        and (today - newest_finished).days <= OFFSEASON_GAP_DAYS
+    )
+    if not upcoming and not in_season:
+        return "offseason"
+    if in_season:
+        return "regular" if upcoming else "postseason"
+    return "preseason"
+
+
+def compute_standings(games: list[dict], today: date | None = None) -> list[dict]:
+    """Conference standings by win percentage.
+
+    `playoff_status` is `None` whenever the schedule says there is no season in
+    progress. During the off-season the completed-games window holds last
+    season's results, and seeding on those produced confident labels about a
+    season nobody is playing: six teams "clinched" because they led an empty
+    table, the leader "eliminated" because it was the only team with a record.
+    The seed ordering and the win percentages stay -- they are real arithmetic
+    on real games -- but the label is dropped rather than softened, because the
+    honest statement is that the race does not exist yet.
+    """
     completed = _completed_with_box(games)
+    state = season_state(games, today=today)
+    racing = state in ("regular", "postseason")
     records: dict[str, list[int]] = {}
 
     for g in completed:
@@ -499,7 +601,11 @@ def compute_standings(games: list[dict]) -> list[dict]:
             wins, losses = records[team]
             win_pct = wins / (wins + losses) if (wins + losses) else 0.0
             games_back = ((leader_wins - wins) + (losses - leader_losses)) / 2
-            status = "clinched" if seed <= 6 else "play-in" if seed <= 10 else "eliminated"
+            status = (
+                ("clinched" if seed <= 6 else "play-in" if seed <= 10 else "eliminated")
+                if racing
+                else None
+            )
             standings.append(
                 {
                     "conference": conference,
@@ -510,6 +616,7 @@ def compute_standings(games: list[dict]) -> list[dict]:
                     "win_pct": round(win_pct, 3),
                     "games_back": round(games_back, 1),
                     "playoff_status": status,
+                    "season_state": state,
                 }
             )
     return standings

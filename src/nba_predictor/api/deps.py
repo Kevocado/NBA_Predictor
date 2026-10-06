@@ -45,6 +45,21 @@ def get_injury_report() -> list[dict]:
         ) from exc
 
 
+def get_injury_report_best_effort() -> list[dict]:
+    """Best-effort injury report for game detail: returns empty list on failure.
+
+    The game detail page must render even when ESPN is unavailable. The
+    injury_summary will reflect the unavailable state. Player-pick routes
+    continue to use the fail-closed get_injury_report dependency.
+    """
+    from nba_predictor.data import espn
+
+    try:
+        return espn.get_injuries()
+    except Exception:
+        return []
+
+
 def require_admin() -> None:
     if config.PUBLIC_MODE:
         raise HTTPException(status_code=404, detail="Not found")

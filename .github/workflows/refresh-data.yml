@@ -21,18 +21,14 @@ jobs:
       - name: Install package
         run: pip install -e .
 
-      - name: Compute rolling window
-        id: window
-        run: |
-          echo "start=$(date -u -d '60 days ago' +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
-          echo "end=$(date -u -d '14 days' +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
-
+      # No --start/--end: the window defaults to the start of the previous NBA
+      # season, which is the only one that can carry a season of history into
+      # the rolling features. The old rolling window trained on one game in the
+      # offseason and died before writing a manifest -- see
+      # docs/nba-retrain-diagnosis-2026-10.md.
       - name: Fetch schedule/box scores, refresh hub caches, retrain
         run: |
-          python -m nba_predictor.pipeline.ingest \
-            --start "${{ steps.window.outputs.start }}" \
-            --end "${{ steps.window.outputs.end }}" \
-            --skip-predictions
+          python -m nba_predictor.pipeline.ingest --skip-predictions
 
       - name: Regenerate public snapshot
         run: python -m nba_predictor.public_snapshot

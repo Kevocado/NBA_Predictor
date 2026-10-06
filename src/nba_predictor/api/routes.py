@@ -597,6 +597,14 @@ def get_manifest(models_dir: Path = Depends(get_models_dir)) -> dict:
     return json.loads(manifest_path.read_text())
 
 
+@router.get("/player-props-manifest")
+def get_player_props_manifest(models_dir: Path = Depends(get_models_dir)) -> dict:
+    manifest_path = models_dir / "player_props_manifest.json"
+    if not manifest_path.exists():
+        raise HTTPException(status_code=404, detail="No player props manifest found — run /retrain first")
+    return json.loads(manifest_path.read_text())
+
+
 @router.post("/retrain", dependencies=[Depends(require_admin)])
 def retrain(
     models_dir: Path = Depends(get_models_dir),

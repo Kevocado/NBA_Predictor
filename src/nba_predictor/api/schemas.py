@@ -185,59 +185,13 @@ class TrackRecordPickOut(BaseModel):
     gameday: str | None = None
 
 
-class TrackRecordOut(BaseModel):
-    market: str
+class ConfidenceBucketOut(BaseModel):
+    bucket: str
     total_predictions: int
     correct_predictions: int
-    # None when nothing was graded: 0.0 would claim every graded pick missed,
-    # which is a different statement from "never measured".
-    #
-    # These three are the HEADLINE: every COUNTED pick, whenever it was made.
-    # One counted pick per (game, market) -- the EARLIEST recorded, so a rerun
-    # of the model neither replaces the pick nor grades a second time. Before
-    # 2026-10-01 (predictor-hub #66) they were the pre-tip-only figures and a
-    # game whose every pick came from a rerun was reported as `n_rebuilt` and
-    # left out of all three; the names are unchanged, so every existing reader
-    # now sees the fuller record without being renamed out of it.
     hit_rate: float | None = None
-    # RENAMED IN MEANING, name kept: this used to count finals LEFT OUT of the
-    # record. It is now the number of graded counted picks made at or after
-    # their own tip-off, which makes it the reconciliation between the two
-    # figures -- `total_predictions == pre_tip.total_predictions + n_rebuilt` --
-    # rather than a confession that a third of the record was withheld. A
-    # reader who wants to know how much of the headline is the rerun rather
-    # than the night subtracts; a reader who wants the night reads `pre_tip`.
-    n_rebuilt: int = 0
-    # The size of the pre-tip subset, for a one-number read without descending
-    # into `pre_tip`. Equal to `pre_tip.total_predictions` by construction.
-    n_pre_tip: int = 0
-    # Picks left out of the rate because there was nothing to grade them
-    # against: the margin landed exactly on the line (a push), or the row
-    # carried no line. Counted, never scored as a miss. In `n_push` for both
-    # the headline and the pre-tip figure, so the reconciliation above holds
-    # across a push.
-    n_push: int = 0
-    # Counted picks the schedule cannot date (no game_date and no tip_off), so
-    # they are in the headline and in `per_pick` but in no week row. Stated
-    # rather than dropped: a week table that sums to `total - n_unplaced` reads
-    # as a broken identity until the difference is named.
-    n_unplaced: int = 0
-    # False when this repo has no rule for judging the market (or no results
-    # to judge it against). The site shows the stored count and says so, and
-    # never a fabricated 0%. An unsettled row has no pre-tip figure: there is
-    # no rule to apply it with.
-    settled: bool = True
-    # The pre-tip subset beside the headline: what the model would have said on
-    # the night. None only where `settled` is false.
-    pre_tip: TrackRecordTallyOut | None = None
-    # Every recorded pick for this market, counted or not, with its own
-    # timestamp and its own pre-tip label.
-    per_pick: list[TrackRecordPickOut] = []
-    # Every week from the first tracked week through this week, gaps filled in
-    # with tracked=false so a week with no picks reads as "not tracked"
-    # instead of vanishing. Empty when the tracking DB has nothing to date.
-    # This is the HEADLINE's week table: its n adds up to `total_predictions`.
-    weekly: list["TrackRecordWeekOut"] = []
+
+
 
 
 class TrackRecordWeekOut(BaseModel):
@@ -291,6 +245,49 @@ class VsMarketOut(BaseModel):
     scope: VsMarketScopeOut
     # Sentences the page prints verbatim; see hub_service._VS_MARKET_METHOD.
     method: dict[str, str | float] = {}
+
+
+class PropStatOut(BaseModel):
+    stat: str
+    n: int
+    mae: float
+    mean_signed_error: float
+
+
+class TrackRecordOut(BaseModel):
+    market: str
+    total_predictions: int
+    correct_predictions: int
+    # None when nothing was graded: 0.0 would claim every graded pick missed,
+    # which is a different statement from "never measured".
+    hit_rate: float | None = None
+    # The number of graded counted picks made at or after their own tip-off:
+    # the reconciliation between the headline and the pre-tip subset.
+    n_rebuilt: int = 0
+    # The size of the pre-tip subset. Equal to `pre_tip.total_predictions`.
+    n_pre_tip: int = 0
+    # Picks left out of the rate because there was nothing to grade them
+    # against (a push, or a row with no line). Counted, never scored as a miss.
+    n_push: int = 0
+    # Counted picks the schedule cannot date: in the headline and in
+    # `per_pick` but in no week row.
+    n_unplaced: int = 0
+    # False when there is no rule for judging the market (or no results).
+    settled: bool = True
+    # The pre-tip subset beside the headline. None only where `settled` is false.
+    pre_tip: TrackRecordTallyOut | None = None
+    # Every recorded pick for this market, counted or not.
+    per_pick: list[TrackRecordPickOut] = []
+    # Weekly table; the headline's n adds up to `total_predictions`.
+    weekly: list["TrackRecordWeekOut"] = []
+    # Confidence buckets over the counted graded picks (50-60/60-70/70%+).
+    confidence_buckets: list[ConfidenceBucketOut] | None = None
+    # Per-stat MAE + signed error for player props.
+    per_stat: list[PropStatOut] | None = None
+    # Per-position MAE for player props.
+    per_position_mae: dict[str, float] | None = None
+
+
 
 
 class SeasonBoundsOut(BaseModel):

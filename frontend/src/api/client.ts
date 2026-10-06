@@ -279,6 +279,22 @@ export interface Manifest {
   trained_at: string;
   models: string[];
   metrics: Record<string, Record<string, number | null>>;
+  training?: {
+    n_train_games?: number;
+    n_holdout_games?: number;
+    n_current_season_games?: number;
+  };
+}
+
+export interface PlayerPropsManifest {
+  model_version: string;
+  trained_at: string;
+  models: string[];
+  metrics: Record<string, Record<string, number | null>>;
+  training?: {
+    n_train_player_games?: number;
+    in_sample_metrics?: boolean;
+  };
 }
 
 export interface CalibrationBin {
@@ -333,5 +349,6 @@ export const api = {
   getTrackRecord: () => fetchJson<TrackRecord[]>("/hub/track-record"),
   getVsMarket: () => fetchJson<VsMarket>("/hub/vs-market"),
   getManifest: () => fetchJson<Manifest>("/manifest"),
+  getPlayerPropsManifest: () => fetchJson<PlayerPropsManifest>("/player-props-manifest"),
   getCalibration: () => fetchJson<CalibrationBin[]>("/calibration"),
 };

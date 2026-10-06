@@ -1,11 +1,14 @@
 import argparse
 import json
+import logging
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import joblib
 import numpy as np
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 from nba_predictor import config
 from nba_predictor.data import espn
@@ -21,6 +24,39 @@ from nba_predictor.pipeline.retrain import run_retrain_pipeline
 from nba_predictor.tracking import store
 
 BOX_FIELDS = ["fgm", "fga", "fg3m", "tov", "oreb", "dreb", "fta"]
+
+
+def default_window_start(today: date | None = None) -> str:
+    """Oct 1 of the season **before the one in progress**.
+
+    The window used to be `date -d '60 days ago'`, which cannot cover a season
+    and left the offseason run training on one game before crashing in
+    chronological_split -- see docs/nba-retrain-diagnosis-2026-10.md. The rolling
+    features in features/build.py need a season of history behind them, so the
+    floor is one full season back whatever day it is.
+
+    Anchored to the season, not to the calendar year. Oct-Dec belongs to the
+    season starting that year; Jan-Sep to the season that started the year
+    before -- the same rule `pipeline/retrain.py::_nba_season_start_year` uses.
+    So the *previous* season's Oct 1 is:
+
+        2026-10-05 -> 2025-10-01   (offseason: the season just finished)
+        2027-02-03 -> 2025-10-01   (mid-season: last season plus this one so far)
+        2027-10-20 -> 2026-10-01   (early season)
+
+    An earlier version returned `today.year - 1` unconditionally, which for the
+    nine months from January to September was the *current* season's start --
+    four months of history, not the full season the docstring promised.
+    """
+    today = today or date.today()
+    season_year = today.year if today.month >= 10 else today.year - 1
+    return f"{season_year - 1}-10-01"
+
+
+def default_window_end(today: date | None = None) -> str:
+    """Fourteen days out: enough of the schedule to score every upcoming game
+    the same horizon the workflow always wanted."""
+    return ((today or date.today()) + timedelta(days=14)).isoformat()
 
 
 def _daterange(start_date: str, end_date: str) -> list[str]:
@@ -130,6 +166,7 @@ def to_player_scoring_frame(games: list[dict], player_boxscores: dict[str, list[
                                     "assists": None,
                                     "fg3m": None,
                                     "minutes": None,
+                                    "position": box_row.get("position"),
                                 })
     # Also include completed player's real rows so feature frame can compute
     completed_rows = to_player_training_frame(games, player_boxscores)
@@ -147,13 +184,19 @@ def score_upcoming_player_props(games: list[dict], player_boxscores: dict[str, l
     if len(upcoming_frame) == 0:
         return 0
 
-    models = {stat: joblib.load(models_dir / f"player_{stat}_model.pkl") for stat in PLAYER_STAT_TARGET_COLUMNS}
+    models: dict[str, object] = {}
+    for stat in PLAYER_STAT_TARGET_COLUMNS:
+        path = models_dir / f"player_{stat}_model.pkl"
+        try:
+            models[stat] = joblib.load(path)
+        except FileNotFoundError:
+            logger.warning("player model missing, skipping market: %s", path)
     predictions = {stat: predict_player_stat(model, upcoming_frame[feature_cols]) for stat, model in models.items()}
 
     created_at = datetime.now(timezone.utc).isoformat()
     stored = 0
     for i, row in upcoming_frame.iterrows():
-        for stat in PLAYER_STAT_TARGET_COLUMNS:
+        for stat in models:
             store.insert_player_prediction(
                 db_path,
                 game_id=row["game_id"],
@@ -161,6 +204,7 @@ def score_upcoming_player_props(games: list[dict], player_boxscores: dict[str, l
                 stat=stat,
                 predicted_value=float(predictions[stat][i]),
                 created_at=created_at,
+                position=row.get("position"),
             )
             stored += 1
     return stored
@@ -190,6 +234,7 @@ def train_player_prop_models(training_df: pd.DataFrame, models_dir: Path, model_
         metrics=metrics,
         model_version=model_version,
         trained_at=trained_at,
+        training={"n_train_player_games": int(len(frame)), "in_sample_metrics": True},
     )
     write_manifest(manifest, models_dir / "player_props_manifest.json")
     return manifest
@@ -203,13 +248,19 @@ def score_and_store_player_predictions(training_df: pd.DataFrame, models_dir: Pa
     if len(frame) == 0:
         return 0
 
-    models = {stat: joblib.load(models_dir / f"player_{stat}_model.pkl") for stat in PLAYER_STAT_TARGET_COLUMNS}
+    models: dict[str, object] = {}
+    for stat in PLAYER_STAT_TARGET_COLUMNS:
+        path = models_dir / f"player_{stat}_model.pkl"
+        try:
+            models[stat] = joblib.load(path)
+        except FileNotFoundError:
+            logger.warning("player model missing, skipping market: %s", path)
     predictions = {stat: predict_player_stat(model, frame[feature_cols]) for stat, model in models.items()}
 
     created_at = datetime.now(timezone.utc).isoformat()
     stored = 0
     for i, row in frame.iterrows():
-        for stat in PLAYER_STAT_TARGET_COLUMNS:
+        for stat in models:
             store.insert_player_prediction(
                 db_path,
                 game_id=row["game_id"],
@@ -217,6 +268,7 @@ def score_and_store_player_predictions(training_df: pd.DataFrame, models_dir: Pa
                 stat=stat,
                 predicted_value=float(predictions[stat][i]),
                 created_at=created_at,
+                position=row.get("position"),
             )
             stored += 1
     return stored
@@ -332,9 +384,13 @@ def score_upcoming_games(games: list[dict], models_dir: Path, db_path: Path, mod
     # Trusted artifacts: these .pkl files are written by run_retrain_pipeline
     # (via joblib.dump) in this same pipeline run — not from an external or
     # user-uploaded source (same trust boundary as score_and_store_predictions).
-    win_model = joblib.load(models_dir / "win_probability_model.pkl")
-    margin_model = joblib.load(models_dir / "margin_model.pkl")
-    total_model = joblib.load(models_dir / "total_model.pkl")
+    try:
+        win_model = joblib.load(models_dir / "win_probability_model.pkl")
+        margin_model = joblib.load(models_dir / "margin_model.pkl")
+        total_model = joblib.load(models_dir / "total_model.pkl")
+    except FileNotFoundError as exc:
+        logger.warning("game model missing, skipping game scoring: %s", exc.filename)
+        return 0
 
     win_probs = predict_win_probability(win_model, upcoming_frame[feature_cols])
     margins = margin_model.predict(upcoming_frame[feature_cols])
@@ -485,6 +541,7 @@ def to_player_training_frame(games: list[dict], player_boxscores: dict[str, list
             continue
         for row in boxscore_rows:
             fg3m, _ = _parse_made_attempted(row["three_made_attempted"])
+            fgm, fga = _parse_made_attempted(row.get("fg_made_attempted"))
             rows.append(
                 {
                     "player_id": row["player_id"],
@@ -497,6 +554,20 @@ def to_player_training_frame(games: list[dict], player_boxscores: dict[str, list
                     "assists": row["assists"],
                     "fg3m": fg3m,
                     "minutes": row["minutes"],
+                    "position": row.get("position"),
+                    # Shot volume, carried so features/prop_matchup.py has a real
+                    # usage rate to work with. ESPN sends `fg_made_attempted`
+                    # ("10-18"); the frame was dropping it, which left
+                    # usage_trend uncomputable from real data rather than absent.
+                    "fgm": fgm,
+                    "fga": fga,
+                    # Who the player was playing against, and where. The
+                    # opponent is what makes a matchup feature a matchup
+                    # feature; without it opp_def_vs_pos has nothing to key on.
+                    "home_team": game.get("home_team"),
+                    "away_team": game.get("away_team"),
+                    "opponent": (game["away_team"] if row["team"] == game.get("home_team")
+                                 else game.get("home_team")),
                 }
             )
     return pd.DataFrame(rows)
@@ -603,9 +674,13 @@ def score_and_store_predictions(games_df: pd.DataFrame, models_dir: Path, db_pat
     # Trusted artifacts: these .pkl files are written by run_retrain_pipeline
     # (via joblib.dump) in this same pipeline run — not from an external or
     # user-uploaded source.
-    win_model = joblib.load(models_dir / "win_probability_model.pkl")
-    margin_model = joblib.load(models_dir / "margin_model.pkl")
-    total_model = joblib.load(models_dir / "total_model.pkl")
+    try:
+        win_model = joblib.load(models_dir / "win_probability_model.pkl")
+        margin_model = joblib.load(models_dir / "margin_model.pkl")
+        total_model = joblib.load(models_dir / "total_model.pkl")
+    except FileNotFoundError as exc:
+        logger.warning("game model missing, skipping game scoring: %s", exc.filename)
+        return 0
 
     frame, feature_cols = build_training_frame(games_df)
     if len(frame) == 0:
@@ -682,6 +757,15 @@ def run_ingest(
 
     training_df = to_training_frame(games)
     log(f"Training on {len(training_df)} completed games with full box scores...")
+    # api/deps.py resolves this path and POST /retrain 400s without it, but
+    # nothing in src/ ever wrote it -- so that endpoint was unrunnable in every
+    # environment, including the VPS. It carries the box-score fields, which
+    # to_schedule_cache deliberately drops, so this is its own file.
+    training_path = config.DATA_DIR / "cache" / "training" / "games.json"
+    training_path.parent.mkdir(parents=True, exist_ok=True)
+    training_path.write_text(json.dumps(training_df.to_dict(orient="records")))
+    summary["training_games_written"] = len(training_df)
+    log(f"  wrote {training_path}")
 
     models_dir = config.PROJECT_ROOT / "models"
     model_version = datetime.now(timezone.utc).strftime("v%Y%m%d%H%M%S")
@@ -726,8 +810,8 @@ def run_ingest(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Ingest real NBA schedule/box-score data and refresh caches.")
-    parser.add_argument("--start", default="2025-10-01")
-    parser.add_argument("--end", default="2026-11-30")
+    parser.add_argument("--start", default=default_window_start(), help="Defaults to the start of the previous NBA season (Oct 1) -- see default_window_start.")
+    parser.add_argument("--end", default=default_window_end(), help="Defaults to 14 days out.")
     parser.add_argument(
         "--player-hub-days", type=int, default=21,
         help="How many days (most recent, within --start/--end) to fetch per-player box scores for. "

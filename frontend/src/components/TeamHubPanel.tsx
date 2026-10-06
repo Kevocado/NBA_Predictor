@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, type TeamHubRow } from "../api/client";
+import TeamLogo from "./TeamLogo";
 import { signed, streak } from "../predictor-ui";
 
 export default function TeamHubPanel() {
@@ -40,7 +41,12 @@ export default function TeamHubPanel() {
                   .sort((a, b) => b.points_per_game - a.points_per_game)
                   .map((row) => (
                     <tr key={row.abbreviation}>
-                      <td>{row.abbreviation}</td>
+                      <td>
+                        <span className="inline-flex items-center gap-1.5">
+                          <TeamLogo team={row.abbreviation} size={18} />
+                          {row.abbreviation}
+                        </span>
+                      </td>
                       <td>
                         {row.wins}-{row.losses}
                       </td>

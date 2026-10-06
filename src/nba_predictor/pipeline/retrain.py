@@ -1,3 +1,5 @@
+from datetime import datetime
+import logging
 from pathlib import Path
 
 import joblib
@@ -6,6 +8,10 @@ import pandas as pd
 
 from nba_predictor.features.build import build_training_frame
 from nba_predictor.models.evaluate.walk_forward import chronological_split
+from nba_predictor.models.evaluate.walk_forward_eval import (
+    walk_forward_metrics,
+    walk_forward_regression,
+)
 from nba_predictor.models.game_outcome import (
     predict_win_probability,
     train_margin_model,
@@ -13,12 +19,25 @@ from nba_predictor.models.game_outcome import (
     train_win_probability_model,
 )
 from nba_predictor.models.manifest import append_manifest_history, build_manifest, write_manifest
+from nba_predictor.models.probability import MAE_TO_SIGMA
+
+
+def _nba_season_start_year(game_date: str) -> int:
+    """NBA season starting year: Oct-Dec belongs to the season starting that
+    calendar year, Jan-Sep to the season that started the prior year."""
+    dt = datetime.fromisoformat(str(game_date).replace("Z", "+00:00"))
+    return dt.year if dt.month >= 10 else dt.year - 1
 
 
 def run_retrain_pipeline(games: pd.DataFrame, models_dir: Path, model_version: str, trained_at: str) -> dict:
     models_dir.mkdir(parents=True, exist_ok=True)
 
     train_games, holdout_games = chronological_split(games, date_col="game_date", holdout_fraction=0.2)
+
+    latest_season = _nba_season_start_year(games["game_date"].max())
+    n_current_season_games = int(
+        (train_games["game_date"].apply(_nba_season_start_year) == latest_season).sum()
+    )
 
     train_df, feature_cols = build_training_frame(train_games)
     holdout_df, _ = build_training_frame(pd.concat([train_games, holdout_games], ignore_index=True))
@@ -29,6 +48,50 @@ def run_retrain_pipeline(games: pd.DataFrame, models_dir: Path, model_version: s
     total_model = train_total_model(train_df[feature_cols], train_df["home_pts"] + train_df["away_pts"])
 
     metrics = {}
+    # Compute walk-forward metrics as required
+    wf_win = None
+    wf_margin = None
+    wf_total = None
+    logger = logging.getLogger(__name__)
+    try:
+        wf_win = walk_forward_metrics(
+            train_df,
+            model_factory=lambda tr: (
+                lambda X: predict_win_probability(
+                    train_win_probability_model(tr[feature_cols], tr["home_win"]), X[feature_cols]
+                )
+            ),
+            windows=4,
+        )
+    except Exception:
+        logger.exception("walk_forward win failed")
+        wf_win = None
+    try:
+        wf_margin = walk_forward_regression(
+            train_df.assign(home_margin=train_df["home_pts"] - train_df["away_pts"]),
+            model_factory=lambda tr: (
+                lambda X: train_margin_model(tr[feature_cols], tr["home_margin"]).predict(X[feature_cols])
+            ),
+            target="home_margin",
+            windows=4,
+        )
+    except Exception:
+        logger.exception("walk_forward margin failed")
+        wf_margin = None
+    try:
+        total_target = train_df["home_pts"] + train_df["away_pts"]
+        wf_total = walk_forward_regression(
+            train_df.assign(home_total=total_target),
+            model_factory=lambda tr: (
+                lambda X: train_total_model(tr[feature_cols], tr["home_total"]).predict(X[feature_cols])
+            ),
+            target="home_total",
+            windows=4,
+        )
+    except Exception:
+        logger.exception("walk_forward total failed")
+        wf_total = None
+
     if len(holdout_df) > 0:
         win_probs = predict_win_probability(win_model, holdout_df[feature_cols])
         win_preds = (win_probs >= 0.5).astype(int)
@@ -48,11 +111,35 @@ def run_retrain_pipeline(games: pd.DataFrame, models_dir: Path, model_version: s
     joblib.dump(margin_model, models_dir / "margin_model.pkl")
     joblib.dump(total_model, models_dir / "total_model.pkl")
 
+    # Place probability metrics under metrics.win_probability (frontend reads per-model metrics)
+    # win_probability: unprefixed so labels light up (G10); keep accuracy as-is
+    if wf_win:
+        metrics.setdefault("win_probability", {})["log_loss"] = wf_win["pooled"].get("log_loss")
+        metrics.setdefault("win_probability", {})["brier"] = wf_win["pooled"].get("brier")
+        metrics.setdefault("win_probability", {})["auc"] = wf_win["pooled"].get("auc")
+    if wf_margin:
+        metrics.setdefault("margin", {})["wf_mae"] = wf_margin["pooled"]["mae"]
+        if "naive_mae_fixed" in wf_margin["pooled"]:
+            metrics.setdefault("margin", {})["wf_naive_mae_fixed"] = wf_margin["pooled"]["naive_mae_fixed"]
+        # The residual sigma that drives every served probability
+        # (models/probability.py). Derived from the out-of-fold MAE via the
+        # Normal relationship rather than plumbing raw residuals through: same
+        # number, one line. Its own key, so the holdout `mae` above is untouched.
+        metrics["margin"]["residual_sigma"] = wf_margin["pooled"]["mae"] * MAE_TO_SIGMA
+    if wf_total:
+        metrics.setdefault("total", {})["wf_mae"] = wf_total["pooled"]["mae"]
+        metrics["total"]["residual_sigma"] = wf_total["pooled"]["mae"] * MAE_TO_SIGMA
+
     manifest = build_manifest(
         model_names=["win_probability", "margin", "total"],
         metrics=metrics,
         model_version=model_version,
         trained_at=trained_at,
+        training={
+            "n_train_games": int(len(train_games)),
+            "n_holdout_games": int(len(holdout_games)),
+            "n_current_season_games": n_current_season_games,
+        },
     )
     write_manifest(manifest, models_dir / "manifest.json")
     append_manifest_history(manifest, models_dir / "manifest_history.jsonl")

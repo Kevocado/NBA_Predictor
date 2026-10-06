@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, type PowerRankingRow } from "../api/client";
+import TeamLogo from "./TeamLogo";
 
 const TREND_GLYPH: Record<PowerRankingRow["trend"], string> = { up: "▲", down: "▼", steady: "–" };
 const TREND_COLOR: Record<PowerRankingRow["trend"], string> = {
@@ -26,8 +27,9 @@ export default function PowerRankingsPanel() {
         .sort((a, b) => a.rank - b.rank)
         .map((row) => (
           <li key={row.abbreviation} className="flex justify-between border-b border-[var(--color-line)] py-1">
-            <span>
-              #{row.rank} <span>{row.abbreviation}</span>
+            <span className="flex items-center gap-1.5">
+              #{row.rank} <TeamLogo team={row.abbreviation} size={18} />
+              <span>{row.abbreviation}</span>
             </span>
             <span>
               {row.power_rating.toFixed(0)} <span className={TREND_COLOR[row.trend]}>{TREND_GLYPH[row.trend]}</span>

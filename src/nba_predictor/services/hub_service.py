@@ -1,9 +1,12 @@
 import json
+import sqlite3
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from nba_predictor.api.schemas import (
+    ConfidenceBucketOut,
+    PropStatOut,
     TrackRecordOut,
     TrackRecordPickOut,
     TrackRecordTallyOut,
@@ -16,10 +19,52 @@ from nba_predictor.tracking import store
 from nba_predictor.tracking.store import get_connection
 from nba_predictor.tracking.timing import (
     earliest_recorded,
+    earliest_recorded_outcome,
     earliest_run,
     latest_pre_tip,
     made_before_tip,
 )
+
+
+_CONFIDENCE_BUCKETS = [("50-60%", 0.50, 0.60), ("60-70%", 0.60, 0.70), ("70%+", 0.70, 1.01)]
+
+
+def _bucket_for(prob: float) -> str | None:
+    for label, lo, hi in _CONFIDENCE_BUCKETS:
+        if lo <= prob < hi:
+            return label
+    return None
+
+
+def _bucket_tally(bucket_stats: dict[str, list[int]], prob: float | None, hit: bool) -> None:
+    """Tallies one counted graded pick into its confidence bucket.
+
+    Buckets are computed over the COUNTED picks only (one per game+market),
+    so the bucket rates reconcile with the headline rate.
+    """
+    if prob is None:
+        return
+    bucket = _bucket_for(prob)
+    if bucket is not None:
+        bucket_stats[bucket][0] += 1
+        if hit:
+            bucket_stats[bucket][1] += 1
+
+
+def _confidence_buckets(bucket_stats: dict[str, list[int]]) -> list[ConfidenceBucketOut] | None:
+    """Builds the bucket panel; None when nothing was graded (never measured,
+    which is a different statement from 0%)."""
+    if sum(n for n, _ in bucket_stats.values()) == 0:
+        return None
+    return [
+        ConfidenceBucketOut(
+            bucket=label,
+            total_predictions=b_total,
+            correct_predictions=b_correct,
+            hit_rate=round(b_correct / b_total, 3) if b_total else None,
+        )
+        for label, (b_total, b_correct) in bucket_stats.items()
+    ]
 
 
 def load_hub_cache(path: Path) -> list[dict]:
@@ -185,6 +230,7 @@ def _tally(
     *, market: str, graded: list[tuple[date, bool]], pre_tip_graded: list[tuple[date, bool]],
     n_rebuilt: int, n_push: int = 0, n_unplaced: int = 0, unplaced_correct: int = 0,
     per_pick: list[TrackRecordPickOut] | None = None, window: list[date] | None = None,
+    confidence_buckets: list[ConfidenceBucketOut] | None = None,
 ) -> TrackRecordOut:
     """One market's record: the headline, the pre-tip subset beside it, and the
     per-pick disclosure.
@@ -226,6 +272,7 @@ def _tally(
             n_push=n_push, weekly=_weekly_rows(pre_tip_graded, window or []),
         ),
         per_pick=per_pick or [],
+        confidence_buckets=confidence_buckets,
     )
 
 
@@ -311,6 +358,7 @@ def _settle_market_predictions(
             "SELECT * FROM game_market_predictions WHERE market = ?", (market,)
         ).fetchall()
 
+    bucket_stats: dict[str, list[int]] = {label: [0, 0] for label, _, _ in _CONFIDENCE_BUCKETS}
     by_game: dict[str, list] = {}
     for row in rows:
         by_game.setdefault(row["game_id"], []).append(row)
@@ -341,6 +389,7 @@ def _settle_market_predictions(
             n_push += 1
         else:
             graded.append((day, verdict))
+            _bucket_tally(bucket_stats, pick["model_probability"], verdict)
             if before:
                 pre_tip_graded.append((day, verdict))
             else:
@@ -360,6 +409,7 @@ def _settle_market_predictions(
     return _tally(
         market=market, graded=graded, pre_tip_graded=pre_tip_graded,
         n_rebuilt=n_rebuilt, n_push=n_push, per_pick=_sorted_picks(per_pick),
+        confidence_buckets=_confidence_buckets(bucket_stats),
     ), graded, pre_tip_graded
 
 
@@ -438,6 +488,72 @@ def _game_date(game: dict | None) -> date | None:
         except ValueError:
             return None
     return None
+
+
+def _summarize_player_props(db_path: Path) -> TrackRecordOut | None:
+    """Joins prediction snapshots to recorded outcomes. Uses the latest
+    snapshot per (game_id, player_id, stat) so re-scores don't double-count.
+    mean_signed_error is mean(predicted - actual): positive means systematic
+    over-prediction. Snapshots with no recorded position group as "Unknown"."""
+    with get_connection(db_path) as conn:
+        snapshot_rows = conn.execute(
+            "SELECT game_id, player_id, stat, predicted_value, position, created_at "
+            "FROM player_prediction_snapshots"
+        ).fetchall()
+        outcome_rows = conn.execute(
+            "SELECT game_id, player_id, stat, actual_value, recorded_at "
+            "FROM game_player_outcomes"
+        ).fetchall()
+    if not snapshot_rows:
+        return None
+
+    # Dedupe each table on its OWN rows, then pair the survivors by key.
+    #
+    # Joining first and deduping once does not work: `earliest_recorded` and
+    # `earliest_recorded_outcome` key on the same (game, player, stat), so
+    # applying the outcome one to joined rows would decide which *snapshot*
+    # survives by join order -- and the join carries no ORDER BY.
+    #
+    # Both sides need it. A snapshot table with no uniqueness constraint (the
+    # daily refresh re-scores a rolling window, so a rerun genuinely lands twice)
+    # means keeping the latest would let a rerun replace the original pre-tip
+    # pick and restate the published MAE. An outcome table whose index could not
+    # be built on a legacy file means two outcomes per key, and which one the
+    # MAE is graded against would otherwise be left to chance.
+    snapshots = {
+        (r["game_id"], r["player_id"], r["stat"]): r
+        for r in earliest_recorded(snapshot_rows)
+    }
+    outcomes = {
+        (r["game_id"], r["player_id"], r["stat"]): r
+        for r in earliest_recorded_outcome(outcome_rows)
+    }
+
+    by_stat: dict[str, list[float]] = {}
+    by_pos: dict[str, list[float]] = {}
+    counted = 0
+    for key, r in snapshots.items():
+        outcome = outcomes.get(key)
+        if outcome is None:
+            continue
+        counted += 1
+        err = r["predicted_value"] - outcome["actual_value"]
+        by_stat.setdefault(r["stat"], []).append(err)
+        by_pos.setdefault(r["position"] or "Unknown", []).append(abs(err))
+    per_stat = [
+        PropStatOut(stat=stat, n=len(errs),
+                    mae=round(sum(abs(e) for e in errs) / len(errs), 3),
+                    mean_signed_error=round(sum(errs) / len(errs), 3))
+        for stat, errs in sorted(by_stat.items())
+    ]
+    return TrackRecordOut(
+        market="player_props",
+        total_predictions=counted,
+        correct_predictions=0,
+        hit_rate=0.0,
+        per_stat=per_stat,
+        per_position_mae={p: round(sum(v) / len(v), 3) for p, v in sorted(by_pos.items())},
+    )
 
 
 def _week_start(day: date) -> date:
@@ -545,6 +661,9 @@ def compute_track_record(
         pre_tip_by_market["game_outcome"] = outcome_pre_tip
         rows.append(game_outcome)
 
+    player_props = _summarize_player_props(db_path)
+    if player_props is not None:
+        rows.append(player_props)
     # Every settled market gets the SAME window, so the weekly tables align
     # row for row on the page without the frontend inventing a join -- and the
     # pre-tip week table gets the same window, or the two figures would be laid

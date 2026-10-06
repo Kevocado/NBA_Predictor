@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, type PlayerHubRow } from "../api/client";
+import TeamLogo from "./TeamLogo";
 
 const PAGE_SIZE = 20;
 
@@ -42,7 +43,12 @@ export default function PlayerHubPanel() {
             {pageRows.map((row) => (
               <tr key={row.player_id}>
                 <td>{row.player_name}</td>
-                <td>{row.team}</td>
+                <td>
+                  <span className="inline-flex items-center gap-1.5">
+                    <TeamLogo team={row.team} size={18} />
+                    {row.team}
+                  </span>
+                </td>
                 <td>{row.position}</td>
                 <td>{row.rating.toFixed(1)}</td>
                 <td>{row.points_per_game.toFixed(1)}</td>

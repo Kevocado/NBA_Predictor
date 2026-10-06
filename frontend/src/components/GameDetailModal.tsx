@@ -1,5 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { api, type GameDetail, type OutPlayer, type PlayerProp, type PlayerHubRow, type MarketPrediction, type TrackRecord } from "../api/client";
+import TeamLogo from "./TeamLogo";
 import TopCalls from "./TopCalls";
 import { favourite } from "../lib/pick";
 import { teamName } from "../lib/teams";
@@ -398,8 +399,18 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
       >
         <div className="mb-4 flex items-center justify-between">
           <div>
-            <h2 id={titleId} className="text-xl font-bold uppercase tracking-wide">
-              {detail ? `${teamName(detail.away_team)} at ${teamName(detail.home_team)}` : "Game detail"}
+            <h2 id={titleId} className="flex items-center gap-1.5 text-xl font-bold uppercase tracking-wide">
+              {detail ? (
+                <>
+                  <TeamLogo team={detail.away_team} size={22} />
+                  <span>{teamName(detail.away_team)}</span>
+                  <span className="font-normal normal-case">at</span>
+                  <TeamLogo team={detail.home_team} size={22} />
+                  <span>{teamName(detail.home_team)}</span>
+                </>
+              ) : (
+                "Game detail"
+              )}
             </h2>
             {detail && <p className="text-xs text-pr-text-dim">{kickoff(detail.tip_off ?? detail.game_date)}</p>}
           </div>
@@ -415,12 +426,18 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
           <div className="mb-5 flex items-center justify-center gap-6 border-b border-[var(--color-line)] pb-5">
             <div className="text-center">
               <div className="stat-display text-3xl leading-none">{detail.away_pts}</div>
-              <div className="mt-1 text-xs text-[var(--color-net-faint)]">{detail.away_team}</div>
+              <div className="mt-1 flex items-center justify-center gap-1 text-xs text-[var(--color-net-faint)]">
+                <TeamLogo team={detail.away_team} size={16} />
+                {detail.away_team}
+              </div>
             </div>
             <div className="text-xs uppercase text-[var(--color-net-faint)]">Final</div>
             <div className="text-center">
               <div className="stat-display text-3xl leading-none">{detail.home_pts}</div>
-              <div className="mt-1 text-xs text-[var(--color-net-faint)]">{detail.home_team}</div>
+              <div className="mt-1 flex items-center justify-center gap-1 text-xs text-[var(--color-net-faint)]">
+                <TeamLogo team={detail.home_team} size={16} />
+                {detail.home_team}
+              </div>
             </div>
           </div>
         ) : (
@@ -590,8 +607,11 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
               {detail.head_to_head.map((meeting) => (
                 <li key={meeting.game_id} className="flex justify-between border-b border-[var(--color-line)] py-1">
                   <span>{kickoff(meeting.game_date)}</span>
-                  <span>
-                    {meeting.away_team} {meeting.away_pts} – {meeting.home_pts} {meeting.home_team}
+                  <span className="inline-flex items-center gap-1">
+                    <TeamLogo team={meeting.away_team} size={16} />
+                    {meeting.away_team} {meeting.away_pts} – {meeting.home_pts}{" "}
+                    <TeamLogo team={meeting.home_team} size={16} />
+                    {meeting.home_team}
                   </span>
                 </li>
               ))}

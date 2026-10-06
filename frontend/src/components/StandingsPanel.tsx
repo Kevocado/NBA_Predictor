@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, type StandingsRow } from "../api/client";
+import TeamLogo from "./TeamLogo";
 
 const STATUS: Record<StandingsRow["playoff_status"], string> = {
   clinched: "Clinched",
@@ -45,7 +46,12 @@ export default function StandingsPanel() {
                   .map((row) => (
                     <tr key={row.abbreviation}>
                       <td>{row.seed}</td>
-                      <td>{row.abbreviation}</td>
+                      <td>
+                        <span className="inline-flex items-center gap-1.5">
+                          <TeamLogo team={row.abbreviation} size={18} />
+                          {row.abbreviation}
+                        </span>
+                      </td>
                       <td>
                         {row.wins}-{row.losses}
                       </td>

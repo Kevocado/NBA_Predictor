@@ -2,12 +2,19 @@ import json
 from pathlib import Path
 
 
-def build_manifest(model_names: list[str], metrics: dict, model_version: str, trained_at: str) -> dict:
+def build_manifest(
+    model_names: list[str],
+    metrics: dict,
+    model_version: str,
+    trained_at: str,
+    training: dict | None = None,
+) -> dict:
     return {
         "model_version": model_version,
         "trained_at": trained_at,
         "models": model_names,
         "metrics": metrics,
+        "training": training or {},
     }
 
 

@@ -15,6 +15,7 @@ export default defineConfig({
       "/games": "http://127.0.0.1:8020",
       "/hub": "http://127.0.0.1:8020",
       "/manifest": "http://127.0.0.1:8020",
+      "/player-props-manifest": "http://127.0.0.1:8020",
       "/retrain": "http://127.0.0.1:8020",
       "/refresh-odds": "http://127.0.0.1:8020",
       "/calibration": "http://127.0.0.1:8020",

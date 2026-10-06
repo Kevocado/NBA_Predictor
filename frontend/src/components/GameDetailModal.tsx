@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { api, type GameDetail, type OutPlayer, type PlayerProp, type PlayerHubRow, type MarketPrediction, type TrackRecord } from "../api/client";
+import { api, type GameDetail, type OutPlayer, type PlayerProp, type PlayerHubRow, type MarketPrediction, type TrackRecord, type Prediction } from "../api/client";
 import TeamLogo from "./TeamLogo";
 import TopCalls from "./TopCalls";
 import { favourite } from "../lib/pick";
@@ -388,6 +388,14 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
     ? `${marginFav.team} by ${marginFav.value.toFixed(1)}`
     : "Toss-up";
 
+  // Show legacy header strip only when: pre-tip game, no cover probabilities
+  // available (meaning no market line / no new block data). The "Other model
+  // markets" block below is the canonical source.
+  const showLegacyStrip = (
+    detail && detail.prediction && !detail.completed &&
+    !detail.prediction.cover_prob_spread && !detail.prediction.cover_prob_total
+  );
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70" onClick={onClose}>
       <div
@@ -441,7 +449,7 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
             </div>
           </div>
         ) : (
-          detail?.prediction && (
+          showLegacyStrip && (
             /* THE FIELD-BY-FIELD AUDIT, and the reason this strip is two cells
                rather than three or none.
                This used to read `53% TOR to win | TOR by 4.8 | 230.6` ABOVE the
@@ -451,26 +459,19 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
                GONE -- the block's tile states the probability and which side it
                is, which is what this cell was saying in two pieces.
 
-               The other two are KEPT, and the reason is measured rather than
-               assumed: the game carries no market line (142 of 142 bundles), so
-               `panelFacts` builds no spread tile and no total tile for it. The
-               block therefore has no copy of the projected margin or the
-               projected total, and this strip is their only source on the page.
-               Deleting the strip wholesale would have removed two figures that
-               exist nowhere else -- which is the opposite of the duplication
-               rule, which is about a figure appearing twice, not once.
-
-               Finished games do not render this strip at all (the Final block
-               above owns that state, and the post-match review below states the
-               prediction against what actually happened, which is a different
-               set of figures entirely). */
+               The other two WERE KEPT when the game carried no market line and
+               the "Other model markets" block had no cover probabilities. Now
+               that block draws them with ± and σ, so this legacy strip is
+               hidden when cover probabilities are available -- it only renders
+               as a fallback for games with no market line and no cover probs.
+               Finished games never render it (the Final block owns that state). */
             <div className="mb-5 grid grid-cols-2 gap-4 border-b border-[var(--color-line)] pb-5">
               <div>
                 <div className="stat-display text-2xl leading-none">{marginLabel}</div>
                 <div className="mt-1 text-xs text-[var(--color-net-dim)]">Projected margin</div>
               </div>
               <div>
-                <div className="stat-display text-2xl leading-none">{detail.prediction.predicted_total.toFixed(1)}</div>
+                <div className="stat-display text-2xl leading-none">{detail.prediction?.predicted_total.toFixed(1)}</div>
                 <div className="mt-1 text-xs text-[var(--color-net-dim)]">Projected total points</div>
               </div>
             </div>

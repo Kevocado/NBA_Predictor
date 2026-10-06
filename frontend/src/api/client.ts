@@ -14,6 +14,13 @@ export interface Prediction {
   home_win_probability: number;
   predicted_margin: number;
   predicted_total: number;
+  // Spread cover probability (None when no line available)
+  cover_prob_spread?: number | null;
+  // Total over probability (None when no line available)
+  cover_prob_total?: number | null;
+  // Residual sigma from the manifest, driving the above
+  margin_sigma?: number | null;
+  total_sigma?: number | null;
 }
 
 export interface HeadToHeadMeeting {
@@ -65,6 +72,8 @@ export interface GameDetail extends Game {
   head_to_head: HeadToHeadMeeting[];
   home_recent_form: string[];
   away_recent_form: string[];
+  /** The availability gate's own sentence. */
+  injury_summary?: string | null;
 }
 
 export interface SeasonBounds {

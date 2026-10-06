@@ -408,7 +408,11 @@ it("is a labelled dialog, and a failed load offers Try again", async () => {
 
   expect(await screen.findByRole("alert")).toHaveTextContent("We couldn't load this game.");
   await userEvent.click(screen.getByRole("button", { name: "Try again" }));
-  expect(await screen.findByRole("dialog", { name: "Heat at Celtics" })).toHaveAttribute("aria-modal", "true");
+  // The dialog is already in the DOM; after retry the heading updates.
+  // Find the heading (which gives the dialog its accessible name) and verify the dialog.
+  const heading = await screen.findByRole("heading", { name: "Heat at Celtics" });
+  const dialog = heading.closest('[role="dialog"]');
+  expect(dialog).toHaveAttribute("aria-modal", "true");
 });
 
 it("labels rebuilt player props and market rows, and never judges them", async () => {

@@ -10,9 +10,12 @@ import pandas as pd
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 
 from nba_predictor.api.availability import resolve_doubtful_players, resolve_out_players
+from nba_predictor.models.probability import cover_prob
+from nba_predictor.models.manifest import build_manifest
 from nba_predictor.api.deps import (
     get_db_path,
     get_injury_report,
+    get_injury_report_best_effort,
     get_models_dir,
     get_schedule,
     get_schedule_path,
@@ -58,6 +61,7 @@ from nba_predictor.services.schedule_repository import (
     load_schedule,
 )
 from nba_predictor.tracking import store
+from nba_predictor import config
 from nba_predictor.tracking.store import get_recent_market_predictions
 from nba_predictor.tracking.player_props import (
     actuals_by_player_stat,
@@ -94,28 +98,51 @@ def get_team_detail(abbreviation: str) -> TeamOut:
     return TeamOut(abbreviation=team.abbreviation, name=team.name, conference=team.conference, division=team.division)
 
 
-def _prediction_out(db_path: Path, game: dict) -> tuple[PredictionOut | None, bool]:
+def _cover_and_sigma_from_manifest(manifest: dict | None) -> tuple[float | None, float | None, float | None]:
+    """(margin_sigma, total_sigma, win_auc) from the manifest, or None if not present."""
+    if not manifest:
+        return None, None, None
+    margin = manifest.get("metrics", {}).get("margin", {})
+    total = manifest.get("metrics", {}).get("total", {})
+    win = manifest.get("metrics", {}).get("win_probability", {})
+    return margin.get("residual_sigma"), total.get("residual_sigma"), win.get("auc")
+
+
+def _prediction_out(db_path: Path, g: dict, manifest: dict | None = None) -> tuple[PredictionOut | None, bool]:
     """The pick to show and whether it was rebuilt after tip-off. The latest
     pick made before tip-off wins; a later backtest row only shows (labelled
     rebuilt) when no pre-tip pick exists."""
-    rows = store.get_predictions_for_game(db_path, game["game_id"])
+    rows = store.get_predictions_for_game(db_path, g["game_id"])
     if not rows:
         return None, False
-    row = latest_pre_tip(rows, game)
+    row = latest_pre_tip(rows, g)
     rebuilt = row is None
     row = row if row is not None else latest_by_instant(rows)
+    margin_sigma, total_sigma, _ = _cover_and_sigma_from_manifest(manifest)
     return (
         PredictionOut(
             home_win_probability=row["home_win_prob"],
             predicted_margin=row["predicted_margin"],
             predicted_total=row["predicted_total"],
+            cover_prob_spread=cover_prob(row["predicted_margin"], row["market_point"] if "market_point" in row.keys() else None, margin_sigma) if margin_sigma is not None else None,
+            cover_prob_total=cover_prob(row["predicted_total"], row["market_total_point"] if "market_total_point" in row.keys() else None, total_sigma) if total_sigma is not None else None,
+            margin_sigma=margin_sigma,
+            total_sigma=total_sigma,
         ),
         rebuilt,
     )
 
 
+def load_latest_manifest() -> dict | None:
+    path = config.PROJECT_ROOT / "models" / "manifest.json"
+    if path.exists():
+        return json.loads(path.read_text())
+    return None
+
+
 def _game_out(g: dict, db_path: Path) -> GameOut:
-    prediction, rebuilt = _prediction_out(db_path, g)
+    manifest = load_latest_manifest()
+    prediction, rebuilt = _prediction_out(db_path, g, manifest)
     return GameOut(
         game_id=g["game_id"], game_date=g["game_date"], tip_off=g.get("tip_off"),
         home_team=g["home_team"], away_team=g["away_team"],
@@ -140,7 +167,10 @@ def list_games_for_week(
 
 @router.get("/games/{game_id}", response_model=GameDetailOut)
 def get_game_detail(
-    game_id: str, schedule: list[dict] = Depends(get_schedule), db_path: Path = Depends(get_db_path)
+    game_id: str,
+    schedule: list[dict] = Depends(get_schedule),
+    db_path: Path = Depends(get_db_path),
+    injuries: list[dict] = Depends(get_injury_report_best_effort),
 ) -> GameDetailOut:
     game = get_game(schedule, game_id)
     if game is None:
@@ -165,12 +195,20 @@ def get_game_detail(
     ]
 
     base = _game_out(game, db_path)
+
+    # Injury summary: the availability gate's own sentence
+    picks = picks_by_player_stat(db_path, game_id, game)
+    out_entries = resolve_out_players(injuries, {key[0] for key in picks})
+    doubtful_entries = resolve_doubtful_players(injuries, {key[0] for key in picks})
+    injury_summary = f"Checked against ESPN availability — {len(out_entries)} Out, {len(doubtful_entries)} Day-to-Day"
+
     return GameDetailOut(
         **base.model_dump(),
         markets=markets,
         head_to_head=head_to_head,
         home_recent_form=get_recent_form(schedule, game["home_team"], before_date=game["game_date"]),
         away_recent_form=get_recent_form(schedule, game["away_team"], before_date=game["game_date"]),
+        injury_summary=injury_summary,
     )
 
 

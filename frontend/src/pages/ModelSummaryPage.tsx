@@ -9,14 +9,23 @@ const MODEL_NAMES: Record<string, string> = {
   margin: "Margin",
   total: "Total points",
 };
-const METRIC_NAMES: Record<string, string> = {
-  accuracy: "Accuracy",
-  log_loss: "Log loss",
-  brier: "Brier score",
-  brier_score: "Brier score",
-  mae: "Mean abs. error",
-  rmse: "RMSE",
-  auc: "AUC",
+// One entry per metric `pipeline/retrain.py` emits, and no others. An unlabelled
+// key renders as raw snake_case on the page, and a label for a metric nothing
+// produces reads as coverage rather than as a gap — both are why
+// `metricNames.test.ts` pins this map against the emitter rather than trusting
+// it. `mae` is the holdout figure and `wf_mae` the pooled walk-forward one;
+// they are different measurements and are labelled as such, because comparing
+// the published total MAE against the naive walk-forward baseline as though
+// they were alike is exactly the comparison that goes wrong.
+export const METRIC_NAMES: Record<string, string> = {
+  accuracy: "Accuracy (holdout)",
+  log_loss: "Log loss (walk-forward)",
+  brier: "Brier (walk-forward)",
+  auc: "AUC (walk-forward)",
+  mae: "MAE (holdout)",
+  wf_mae: "MAE (walk-forward)",
+  wf_naive_mae_fixed: "Naive baseline MAE (walk-forward)",
+  residual_sigma: "Residual σ (drives served probability)",
 };
 
 // Metrics are fractions or points; three significant places read cleanly.

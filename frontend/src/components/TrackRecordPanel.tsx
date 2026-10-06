@@ -19,6 +19,7 @@ const MARKETS: Record<string, string> = {
   h2h: "Moneyline vs the market",
   spread: "Spread",
   total: "Total points",
+  player_props: "Player props",
 };
 // Shorter labels for the weekly table's columns, same order.
 const SHORT: Record<string, string> = {
@@ -26,6 +27,7 @@ const SHORT: Record<string, string> = {
   h2h: "Moneyline",
   spread: "Spread",
   total: "Total",
+  player_props: "Props",
 };
 const ORDER = Object.keys(MARKETS);
 const rank = (market: string) => (ORDER.includes(market) ? ORDER.indexOf(market) : ORDER.length);
@@ -494,6 +496,111 @@ export default function TrackRecordPanel() {
       </Section>
 
       <VsMarketSection vsMarket={vsMarket} error={vsError} onRetry={() => setReloadKey((k) => k + 1)} />
+
+      {/* Per-pick detail table: every recorded pick, one row. */}
+      <Section
+        id="tr-picks"
+        title="Every pick"
+        blurb="One row per recorded pick, in the order they were made. The timing badge says whether it was made before tip-off. Only counted picks (the first recorded) contribute to the headline rate; reruns are shown for history but not scored."
+      >
+        {(() => {
+          const allPicks = rows.flatMap((r) => (r.per_pick ?? []).map((p) => ({ ...p, market: r.market })));
+          if (allPicks.length === 0) return <NotRecorded why="No pick-level data in this response." />;
+          const sorted = [...allPicks].sort((a, b) => a.created_at.localeCompare(b.created_at));
+          return (
+            <StatTable
+              rows={sorted}
+              rowKey={(r) => `${r.market}-${r.game_id}-${r.created_at}`}
+              caption="Every recorded pick for settled markets"
+              columns={[
+                { key: "gameday", label: "Game", value: (r) => r.gameday ?? r.created_at, render: (r) => r.gameday ? kickoff(r.gameday) : <span className="text-pr-text-dim">Unknown</span> },
+                { key: "market", label: "Market", value: (r) => r.market, render: (r) => labelFor(r.market) },
+                { key: "pick", label: "Pick", value: (r) => r.pick },
+                { key: "actual", label: "Actual", value: (r) => r.actual },
+                {
+                  key: "hit",
+                  label: "Result",
+                  value: (r) => (r.hit === null ? 2 : r.hit ? 1 : 0),
+                  render: (r) => r.hit === null ? (
+                    <span className="text-pr-text-faint">No result</span>
+                  ) : r.hit ? (
+                    <span className="text-pr-win font-semibold">✓</span>
+                  ) : (
+                    <span className="text-pr-loss font-semibold">✗</span>
+                  ),
+                },
+                {
+                  key: "timing",
+                  label: "Made",
+                  value: (r) => (r.made_before_tip ? 1 : r.counted ? 0 : -1),
+                  render: (r) => r.made_before_tip ? (
+                    <span className="text-pr-win font-semibold">Before tip-off</span>
+                  ) : r.counted ? (
+                    <span className="text-pr-text-faint">After tip-off</span>
+                  ) : (
+                    <span className="text-pr-text-dim">Rebuilt (not counted)</span>
+                  ),
+                },
+                { key: "when", label: "When", value: (r) => r.created_at, render: (r) => kickoff(r.created_at) },
+              ]}
+            />
+          );
+        })()}
+      </Section>
+
+      {/* Biggest upsets and biggest misses tables. */}
+      <Section
+        id="tr-extremes"
+        title="Biggest upsets & biggest misses"
+        blurb="The counted picks where the model was confident and wrong (misses), and where the market was confident and wrong (upsets — the model backed the winner and the market didn't). Placeholder sort by gameday; full sort by model probability needs pick probability in per_pick."
+      >
+        {(() => {
+          const allPicks = rows.flatMap((r) => (r.per_pick ?? []).map((p) => ({ ...p, market: r.market })));
+          const counted = allPicks.filter((p) => p.counted && p.hit !== null);
+          if (counted.length === 0) return <NotRecorded why="No counted picks graded yet." />;
+
+          const misses = counted.filter((p) => p.hit === false);
+          const upsets = counted.filter((p) => p.hit === true);
+
+          return (
+            <div className="grid gap-4 sm:grid-cols-2">
+              <StatTable
+                rows={misses.slice().sort((a, b) => a.created_at.localeCompare(b.created_at)).slice(0, 10)}
+                rowKey={(r) => `${r.market}-${r.game_id}-${r.created_at}`}
+                caption="Biggest misses (model wrong)"
+                columns={[
+                  { key: "gameday", label: "Game", value: (r) => r.gameday ?? r.created_at, render: (r) => r.gameday ? kickoff(r.gameday) : <span className="text-pr-text-dim">Unknown</span> },
+                  { key: "market", label: "Market", value: (r) => r.market, render: (r) => labelFor(r.market) },
+                  { key: "pick", label: "Pick", value: (r) => r.pick },
+                  { key: "actual", label: "Actual", value: (r) => r.actual },
+                  { key: "when", label: "When", value: (r) => r.created_at, render: (r) => kickoff(r.created_at) },
+                ]}
+              />
+              <StatTable
+                rows={upsets.slice().sort((a, b) => a.created_at.localeCompare(b.created_at)).slice(0, 10)}
+                rowKey={(r) => `${r.market}-${r.game_id}-${r.created_at}`}
+                caption="Biggest upsets (market wrong, model right)"
+                columns={[
+                  { key: "gameday", label: "Game", value: (r) => r.gameday ?? r.created_at, render: (r) => r.gameday ? kickoff(r.gameday) : <span className="text-pr-text-dim">Unknown</span> },
+                  { key: "market", label: "Market", value: (r) => r.market, render: (r) => labelFor(r.market) },
+                  { key: "pick", label: "Pick", value: (r) => r.pick },
+                  { key: "actual", label: "Actual", value: (r) => r.actual },
+                  { key: "when", label: "When", value: (r) => r.created_at, render: (r) => kickoff(r.created_at) },
+                ]}
+              />
+            </div>
+          );
+        })()}
+      </Section>
+
+      {/* Projected final standings panel. */}
+      <Section
+        id="tr-projected"
+        title="Projected final standings"
+        blurb="Each team's current win percentage and games back, projected to 82 games. The model's win probability on every remaining game is summed to produce a projected win total."
+      >
+        <NotRecorded why="Projected standings endpoint not yet implemented." />
+      </Section>
     </div>
   );
 }

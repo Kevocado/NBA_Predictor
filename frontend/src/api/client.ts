@@ -14,6 +14,13 @@ export interface Prediction {
   home_win_probability: number;
   predicted_margin: number;
   predicted_total: number;
+  // Spread cover probability (None when no line available)
+  cover_prob_spread?: number | null;
+  // Total over probability (None when no line available)
+  cover_prob_total?: number | null;
+  // Residual sigma from the manifest, driving the above
+  margin_sigma?: number | null;
+  total_sigma?: number | null;
 }
 
 export interface HeadToHeadMeeting {
@@ -65,6 +72,8 @@ export interface GameDetail extends Game {
   head_to_head: HeadToHeadMeeting[];
   home_recent_form: string[];
   away_recent_form: string[];
+  /** The availability gate's own sentence. */
+  injury_summary?: string | null;
 }
 
 export interface SeasonBounds {
@@ -159,6 +168,11 @@ export interface TrackRecordPick {
   /** False for a rerun that lost the earliest-pick contest. */
   counted: boolean;
   gameday: string | null;
+  /** The line the pick was priced at. Present for spreads and totals, null
+   *  for moneylines and markets without a line. Used to distinguish a push
+   *  (hit=null but point present) from a row with no line (hit=null, no point).
+   */
+  point: number | null;
 }
 
 export interface TrackRecord {
@@ -271,7 +285,11 @@ export interface StandingsRow {
   losses: number;
   win_pct: number;
   games_back: number;
-  playoff_status: "clinched" | "play-in" | "eliminated" | "in-hunt";
+  // null, not a status string, when the schedule says there is no race to be in
+  // (off-season or pre-season). The backend drops the label rather than
+  // inventing one, so the type has to admit its absence.
+  playoff_status: "clinched" | "play-in" | "eliminated" | "in-hunt" | null;
+  season_state: "offseason" | "preseason" | "regular" | "postseason";
 }
 
 export interface Manifest {

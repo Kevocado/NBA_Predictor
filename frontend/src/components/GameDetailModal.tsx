@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { api, type GameDetail, type OutPlayer, type PlayerProp, type PlayerHubRow, type MarketPrediction, type TrackRecord } from "../api/client";
+import { api, type GameDetail, type OutPlayer, type PlayerProp, type PlayerHubRow, type MarketPrediction, type TrackRecord, type Prediction } from "../api/client";
 import TeamLogo from "./TeamLogo";
 import TopCalls from "./TopCalls";
 import { favourite } from "../lib/pick";
@@ -388,6 +388,18 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
     ? `${marginFav.team} by ${marginFav.value.toFixed(1)}`
     : "Toss-up";
 
+  // Show legacy header strip only when: pre-tip game, NO cover probabilities
+  // available. If ANY cover probability exists (meaning a market line exists),
+  // the "Other model markets" block below is the canonical source and owns all
+  // figures (margin/total ±, cover probs, σ). This satisfies the one-source rule.
+  // Use falsy check to handle both null and undefined.
+  const hasCoverProb = detail?.prediction && (
+    detail.prediction.cover_prob_spread || detail.prediction.cover_prob_total
+  );
+  const showLegacyStrip = (
+    detail && detail.prediction && !detail.completed && !hasCoverProb
+  );
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70" onClick={onClose}>
       <div
@@ -404,7 +416,7 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
                 <>
                   <TeamLogo team={detail.away_team} size={22} />
                   <span>{teamName(detail.away_team)}</span>
-                  <span className="font-normal normal-case">at</span>
+                  <span className="font-normal normal-case"> at </span>
                   <TeamLogo team={detail.home_team} size={22} />
                   <span>{teamName(detail.home_team)}</span>
                 </>
@@ -441,7 +453,7 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
             </div>
           </div>
         ) : (
-          detail?.prediction && (
+          showLegacyStrip && (
             /* THE FIELD-BY-FIELD AUDIT, and the reason this strip is two cells
                rather than three or none.
                This used to read `53% TOR to win | TOR by 4.8 | 230.6` ABOVE the
@@ -451,26 +463,19 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
                GONE -- the block's tile states the probability and which side it
                is, which is what this cell was saying in two pieces.
 
-               The other two are KEPT, and the reason is measured rather than
-               assumed: the game carries no market line (142 of 142 bundles), so
-               `panelFacts` builds no spread tile and no total tile for it. The
-               block therefore has no copy of the projected margin or the
-               projected total, and this strip is their only source on the page.
-               Deleting the strip wholesale would have removed two figures that
-               exist nowhere else -- which is the opposite of the duplication
-               rule, which is about a figure appearing twice, not once.
-
-               Finished games do not render this strip at all (the Final block
-               above owns that state, and the post-match review below states the
-               prediction against what actually happened, which is a different
-               set of figures entirely). */
+               The other two WERE KEPT when the game carried no market line and
+               the "Other model markets" block had no cover probabilities. Now
+               that block draws them with ± and σ, so this legacy strip is
+               hidden when cover probabilities are available -- it only renders
+               as a fallback for games with no market line and no cover probs.
+               Finished games never render it (the Final block owns that state). */
             <div className="mb-5 grid grid-cols-2 gap-4 border-b border-[var(--color-line)] pb-5">
               <div>
                 <div className="stat-display text-2xl leading-none">{marginLabel}</div>
                 <div className="mt-1 text-xs text-[var(--color-net-dim)]">Projected margin</div>
               </div>
               <div>
-                <div className="stat-display text-2xl leading-none">{detail.prediction.predicted_total.toFixed(1)}</div>
+                <div className="stat-display text-2xl leading-none">{detail.prediction?.predicted_total.toFixed(1)}</div>
                 <div className="mt-1 text-xs text-[var(--color-net-dim)]">Projected total points</div>
               </div>
             </div>
@@ -539,6 +544,76 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
                 ))}
               </div>
             </div>
+          </div>
+        )}
+
+        {/* Other model markets: cover chances and projected margin ±, total ±, σ */}
+        {detail && detail.prediction && hasCoverProb && (
+          <div className="mb-5 border-b border-[var(--color-line)] pb-5 text-sm">
+            <h3 className="mb-2 text-xs uppercase tracking-wide text-[var(--color-net-faint)]">
+              Other model markets
+            </h3>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {detail.prediction.cover_prob_spread !== null && detail.prediction.cover_prob_spread !== undefined && (
+                <div className="p-2 rounded border border-[var(--color-line)] bg-[var(--color-court-950)]">
+                  <div className="text-xs text-[var(--color-net-faint)]">Spread cover chance</div>
+                  <div className="text-lg font-pr-display font-semibold">
+                    {pct(detail.prediction.cover_prob_spread)}
+                  </div>
+                  {detail.prediction.margin_sigma && (
+                    <div className="text-xs text-[var(--color-net-dim)]">
+                      σ = {detail.prediction.margin_sigma.toFixed(1)} pts
+                    </div>
+                  )}
+                </div>
+              )}
+              {detail.prediction.cover_prob_total !== null && detail.prediction.cover_prob_total !== undefined && (
+                <div className="p-2 rounded border border-[var(--color-line)] bg-[var(--color-court-950)]">
+                  <div className="text-xs text-[var(--color-net-faint)]">
+                    Over {detail.prediction.predicted_total.toFixed(1)} chance
+                  </div>
+                  <div className="text-lg font-pr-display font-semibold">
+                    {pct(detail.prediction.cover_prob_total)}
+                  </div>
+                  {detail.prediction.total_sigma && (
+                    <div className="text-xs text-[var(--color-net-dim)]">
+                      σ = {detail.prediction.total_sigma.toFixed(1)} pts
+                    </div>
+                  )}
+                </div>
+              )}
+              <div className="p-2 rounded border border-[var(--color-line)] bg-[var(--color-court-950)]">
+                <div className="text-xs text-[var(--color-net-faint)]">Projected margin ±</div>
+                <div className="text-lg font-pr-display font-semibold">
+                  {detail.prediction.predicted_margin >= 0
+                    ? `${detail.home_team} +${detail.prediction.predicted_margin.toFixed(1)}`
+                    : `${detail.away_team} +${Math.abs(detail.prediction.predicted_margin).toFixed(1)}`}
+                </div>
+                {detail.prediction.margin_sigma && (
+                  <div className="text-xs text-[var(--color-net-dim)]">
+                    ±{detail.prediction.margin_sigma.toFixed(1)} pts (1 σ)
+                  </div>
+                )}
+              </div>
+              <div className="p-2 rounded border border-[var(--color-line)] bg-[var(--color-court-950)]">
+                <div className="text-xs text-[var(--color-net-faint)]">Projected total ±</div>
+                <div className="text-lg font-pr-display font-semibold">
+                  {detail.prediction.predicted_total.toFixed(1)}
+                </div>
+                {detail.prediction.total_sigma && (
+                  <div className="text-xs text-[var(--color-net-dim)]">
+                    ±{detail.prediction.total_sigma.toFixed(1)} pts (1 σ)
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Injury report line */}
+        {detail && detail.injury_summary && (
+          <div className="mb-5 border-b border-[var(--color-line)] pb-5 text-sm">
+            <div className="text-xs text-[var(--color-net-faint)]">{detail.injury_summary}</div>
           </div>
         )}
 

@@ -27,6 +27,7 @@ describe("ModelSummaryPage", () => {
 
   it("survives a manifest without a model list", async () => {
     vi.mocked(api.getManifest).mockResolvedValue({ model_version: "v1", trained_at: "", models: undefined, metrics: {} } as never);
+    vi.mocked(api.getPlayerPropsManifest).mockRejectedValue(new Error("404"));
     render(<ModelSummaryPage />);
     expect(await screen.findByText(/no model has been trained/i)).toBeInTheDocument();
   });

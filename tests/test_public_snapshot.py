@@ -1,4 +1,15 @@
 import json
+from datetime import datetime, timedelta, timezone
+
+
+def _fresh_stamp() -> str:
+    """A recent, parseable `trained_at`.
+
+    These fixtures used to carry `trained_at: "t"`, which the staleness gate
+    (spec section 10) now refuses on purpose: an unparseable stamp is
+    indistinguishable from a fresh one.
+    """
+    return (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
 
 
 def _write_json(path, data):
@@ -20,7 +31,7 @@ def test_generate_snapshot_bundles_all_sources(tmp_path):
     _write_json(hub_dir / "standings.json", [])
 
     manifest_path = tmp_path / "models" / "manifest.json"
-    _write_json(manifest_path, {"model_version": "v1", "trained_at": "t", "models": [], "metrics": {}})
+    _write_json(manifest_path, {"model_version": "v1", "trained_at": _fresh_stamp(), "models": [], "metrics": {}})
 
     db_path = tmp_path / "tracking.db"
     store.init_db(db_path)

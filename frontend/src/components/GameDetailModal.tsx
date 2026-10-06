@@ -3,7 +3,7 @@ import { api, type GameDetail, type OutPlayer, type PlayerProp, type PlayerHubRo
 import TopCalls from "./TopCalls";
 import { favourite } from "../lib/pick";
 import { teamName } from "../lib/teams";
-import { ErrorState, FixtureExplainer, Skeleton, kickoff, pct, stat, statusWords } from "../predictor-ui";
+import { ErrorState, FixtureExplainer, SignalRows, Skeleton, kickoff, pct, signalIsDrawn, stat, statusWords, type Signal } from "../predictor-ui";
 import { panelFacts } from "../predictor-ui/lib/panelFacts";
 import PlayerBoxScore from "./PlayerBoxScore";
 
@@ -100,6 +100,14 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
   // so the two cases stay apart. Showing the top three of a list we cannot prove
   // is complete would be the dishonest reading, not the cautious one.
   const [outPlayers, setOutPlayers] = useState<OutPlayer[] | null>(null);
+  // Spec §4's signal rows. `[]` and never null once settled -- and `[]` is also
+  // what every failure leaves behind, see the effect below.
+  const [signals, setSignals] = useState<Signal[]>([]);
+  // The rows that will ACTUALLY render, computed by the same exported predicate
+  // `SignalRows` filters with. Without this the section mounted on the raw count
+  // and rendered an empty band whenever every row was undrawable; see the block's
+  // comment. `useMemo` because `signalIsDrawn` walks every row on every render.
+  const drawnSignals = useMemo(() => signals.filter((s) => signalIsDrawn(s)), [signals]);
   // The per-game player feed carries no team, so the box score's split comes
   // from the season hub feed. Fetched separately, and allowed to fail: losing
   // the split must not take the game detail down with it.
@@ -127,6 +135,54 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
       })
       .catch(() => setError("We couldn't load this game. Check your connection and try again."));
   }, [gameId, reloadKey]);
+
+  // The signal rows (spec §4). Its own fetch, allowed to fail on its own, and
+  // GATED ON `detail.game_id === gameId` -- the same shape PL's `FixtureModal` uses,
+  // and for PL's reason: this modal keeps the PREVIOUS game in state until the new
+  // one lands (the reset is a `setDetail(null)` inside the effect above, and an
+  // effect reads the value captured by ITS OWN render), so a `!detail` or
+  // `detail?.game_status` gate would read the OLD game's status to decide about the
+  // new one.
+  //
+  // A COMPLETED game is not asked about at all. The endpoint answers `[]` for one,
+  // because a completed game's roster is the one known BEFORE tip-off -- the same
+  // reason `get_game_players` withholds those rows and the same reason this page's
+  // own `outPlayers` list stops being information. Asking for an answer already known
+  // is a request per game for nothing.
+  //
+  // **`completed` AND NOT "has started".** The endpoint's own rule is
+  // `facts._status(game, now) in ("live", "final")`, and `completed` is only the
+  // `final` half of it: a LIVE game has `completed=False` with a tip-off in the
+  // past. So a live game is still asked, and the endpoint answers `[]`. That is
+  // deliberate -- reproducing `_status` on the client means comparing `tip_off`
+  // against the browser's clock, which duplicates the server's rule on the wrong
+  // side of a network boundary for the sake of one avoided request. One extra
+  // request per live game is cheaper than a status rule that can disagree with the
+  // endpoint it is mirroring.
+  //
+  // EVERY failure is silence, and the failures are deliberately indistinguishable:
+  // a 404, a network error and an honest empty list all leave `[]`. Spec §2 forbids a
+  // placeholder, and a signal is an enhancement on this page -- it must never become
+  // the page's error state. Sports' `GameDetailModal` does the same at the same
+  // place, so this is one implementation and not one per sport.
+  useEffect(() => {
+    let cancelled = false;
+    setSignals([]);
+    if (!detail || detail.game_id !== gameId) return;
+    if (detail.completed) return;
+    api
+      .getGameSignals(gameId)
+      .then((response) => {
+        if (!cancelled) setSignals(response?.signals ?? []);
+      })
+      // Swallow only. The `[]` at this effect's head already covers every re-run, so
+      // repeating it here would be a second place to keep the same rule -- PL's
+      // proved that redundant, by passing its whole suite with the clear deleted.
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [gameId, detail, reloadKey]);
 
   // Its own fetch, allowed to fail on its own. Deliberately NOT folded into the
   // Promise.all above: that one failing would take the whole game detail down,
@@ -560,6 +616,40 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
               homeTeam={detail?.home_team ?? ""}
               awayTeam={detail?.away_team ?? ""}
             />
+          </section>
+        )}
+
+        {/* The signal rows (spec §4), ABOVE the projections -- the same position
+            Sports' `GameDetailModal` and PL's `FixtureModal` put them, so a fixture
+            page reads the same way in all three.
+
+            On NBA this is the only place the out player's own projection appears at
+            all: `/games/{id}/players` withholds his rows before serialising, so the
+            mention under the lists below is all he gets today. This row is the first
+            thing on the page that says what the model expected of him.
+
+            **Gated on `drawnSignals`, NOT on `signals`.** `signals.length > 0` counts
+            the RAW list, and `SignalRows` drops any row it cannot draw and returns
+            `null` when none survive -- so the raw guard mounted a `<section>` with no
+            heading and no rows inside it, which is the empty state spec §2 forbids
+            ("no data, no row"). The filter is exported by the shared component
+            precisely so a caller can gate on the same answer the renderer computes,
+            rather than re-deriving it and getting it subtly wrong. Caught by
+            CodeRabbit on #36.
+
+            **The heading exists because `aria-labelledby` names it.** The first
+            version carried `aria-labelledby={`${titleId}-signals`}` with no element
+            of that id anywhere, so the reference dangled and the section was
+            announced with no name at all -- worse than an unlabelled section, because
+            it reads as labelled to anyone auditing the attribute. The sibling
+            `-box` and `-calls` sections each pair the attribute with a real `<h3>`;
+            this one now does too. Caught by CodeRabbit on #36. */}
+        {drawnSignals.length > 0 && (
+          <section aria-labelledby={`${titleId}-signals`} className="mt-4">
+            <h3 id={`${titleId}-signals`} className="mb-2 text-sm text-[var(--color-net-faint)]">
+              Signals
+            </h3>
+            <SignalRows signals={drawnSignals} />
           </section>
         )}
 

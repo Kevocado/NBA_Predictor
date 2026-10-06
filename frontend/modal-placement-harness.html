@@ -1,0 +1,40 @@
+<!doctype html>
+<!--
+  The REAL `GameDetailModal` with stubbed feeds, to photograph WHERE the signal rows
+  sit. See `src/modal-placement-harness.tsx`.
+
+  Why this page exists separately from `signals-harness.html`: that page draws the
+  absence row in ISOLATION, which proves the visual and says nothing about its
+  position on a fixture page. #36's comment claimed the rows render above the player
+  projections while the code placed them last, and no screenshot of an isolated row
+  could ever have caught that. A position is a claim about a rendered page.
+
+  Illustrative data, labelled here on the page itself: every one of the 33 real games
+  on the October 5, 2026 slate answers `{"signals": []}`, which is the honest answer
+  and the reason no real game page carries this row today. No real fixture's status is
+  altered to produce this capture.
+
+  Served by `npm run dev`. Not part of the deployed bundle.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>NBA · absence row placement (illustrative)</title>
+    <link rel="stylesheet" href="/src/index.css" />
+  </head>
+  <body class="bg-pr-950 text-pr-text">
+    <main class="mx-auto flex max-w-3xl flex-col gap-4 p-6">
+      <div class="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-200">
+        <strong>Illustrative.</strong> Every real game on the October 5, 2026 slate
+        answers <code>signals: []</code>, so no real NBA game page carries this row
+        today. The teams, players, figure and rank below are stubbed to show
+        <strong>where the block sits</strong>: the signals section renders
+        <strong>above</strong> "Player projections", matching PL&apos;s
+        <code>FixtureModal</code> and Sports&apos; <code>GameDetailModal</code>.
+      </div>
+      <div id="root"></div>
+    </main>
+    <script type="module" src="/src/modal-placement-harness.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,50 @@
+<!doctype html>
+<!--
+  NBA's vendored `SignalRows`, rendering ONE ILLUSTRATIVE absence row.
+
+  WHY THIS PAGE EXISTS. On 2026-10-05 the live `/api/signals/{game_id}` endpoint was
+  queried for every one of the 33 real games on the slate, and **every one answered
+  `{"signals": []}`**. That is the honest answer, not a fault: the league-wide injury
+  feed carried 15 players with status `Out`, and none of them appears in the
+  projected roster of any of today's games. So there is no real NBA absence to
+  photograph on a real game page.
+
+  Rather than fabricate an injury, or mark a real game as carrying an absence it does
+  not, the row is drawn here in isolation and LABELLED, below. The player, stat,
+  figure and rank are invented to demonstrate the visual; nothing here is a real NBA
+  observation, and the caption says so on the page itself.
+
+  What it does prove: the vendored copy in NBA's build draws `absence_strip`, states
+  the figure beside the headline, carries the count and the date, and keeps the
+  `n >= 30` rate floor off a row whose `n` counts injured players.
+
+  Served by `npm run dev` alongside the app. Not part of the deployed bundle -- vite
+  builds `index.html` only.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>NBA · absence row (illustrative)</title>
+    <!-- The app's own stylesheet, imported by `src/main.tsx`. Without this the
+         capture shows the component's MARKUP correctly and none of its styling,
+         which is a worse screenshot than no screenshot: it invites a reader to
+         judge colours and spacing from a page that never loaded them. -->
+    <link rel="stylesheet" href="/src/index.css" />
+  </head>
+  <body class="bg-pr-950 text-pr-text">
+    <main id="case" class="mx-auto flex max-w-2xl flex-col gap-4 p-6">
+      <div class="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-200">
+        <strong>Illustrative.</strong> All 33 real games on the October 5, 2026 slate
+        answer <code>signals: []</code> — the league injury feed listed 15 players
+        <code>Out</code> and none was in any of that day's projected rosters. The
+        player, stat, figure and rank below are invented to demonstrate the visual.
+        <strong>The slate is named rather than called "today's"</strong> so this
+        caption stays true once read again: "today's" silently re-described a
+        different set of games after the date passed. CodeRabbit on #36.
+      </div>
+      <div id="root"></div>
+    </main>
+    <script type="module" src="/src/signals-harness.tsx"></script>
+  </body>
+</html>

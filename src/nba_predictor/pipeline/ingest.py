@@ -504,6 +504,22 @@ def _game_date(game: dict) -> date | None:
         return None
 
 
+def _season_start_year(game_date: date) -> int:
+    """NBA season starting year: Oct-Dec belongs to the season starting that
+    calendar year, Jan-Sep to the season that started the prior year."""
+    return game_date.year if game_date.month >= 10 else game_date.year - 1
+
+
+def _current_season_year(games: list[dict]) -> int | None:
+    """The latest season start year present in the schedule."""
+    years = []
+    for g in games:
+        d = _game_date(g)
+        if d is not None:
+            years.append(_season_start_year(d))
+    return max(years) if years else None
+
+
 def season_state(games: list[dict], today: date | None = None) -> str:
     """Which phase of the season this schedule is in, derived from the schedule.
 
@@ -518,6 +534,7 @@ def season_state(games: list[dict], today: date | None = None) -> str:
     * no games scheduled on or after today, and no recent result -> `offseason`
     * scheduled ahead, nothing recent played -> `preseason` (the league is
       loaded, nobody has played)
+
     * a recent result and games ahead -> `regular`
     * a recent result, nothing ahead -> `postseason`
 
@@ -540,13 +557,18 @@ def season_state(games: list[dict], today: date | None = None) -> str:
     today = today or date.today()
     upcoming = False
     newest_finished: date | None = None
+    current_season_year = _current_season_year(games)
     for g in games:
         game_date = _game_date(g)
         if game_date is None:
             continue
         played = g.get("home_pts") is not None and g.get("away_pts") is not None
         if played:
-            newest_finished = max(filter(None, (newest_finished, game_date)))
+            # Only count games from the current season toward "in season" status.
+            # This prevents a completed preseason game (or prior-season game)
+            # from activating the regular season.
+            if current_season_year is not None and _season_start_year(game_date) == current_season_year:
+                newest_finished = max(filter(None, (newest_finished, game_date)))
         if game_date >= today:
             upcoming = True
 
@@ -578,10 +600,24 @@ def compute_standings(games: list[dict], today: date | None = None) -> list[dict
     The seed ordering and the win percentages stay -- they are real arithmetic
     on real games -- but the label is dropped rather than softened, because the
     honest statement is that the race does not exist yet.
+
+    When the season is active (regular/postseason), standings are computed from
+    current-season games only. Prior-season results are excluded from the
+    racing calculation but remain visible in the win/loss columns during
+    offseason/preseason when the page explicitly labels them as prior-season.
     """
     completed = _completed_with_box(games)
     state = season_state(games, today=today)
     racing = state in ("regular", "postseason")
+
+    # Filter to current-season games only when the season is active.
+    current_season_year = _current_season_year(games)
+    if racing and current_season_year is not None:
+        completed = [
+            g for g in completed
+            if _game_date(g) is not None and _season_start_year(_game_date(g)) == current_season_year
+        ]
+
     records: dict[str, list[int]] = {}
 
     for g in completed:

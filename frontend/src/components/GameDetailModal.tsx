@@ -416,7 +416,7 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
                 <>
                   <TeamLogo team={detail.away_team} size={22} />
                   <span>{teamName(detail.away_team)}</span>
-                  <span className="font-normal normal-case">at</span>
+                  <span className="font-normal normal-case"> at </span>
                   <TeamLogo team={detail.home_team} size={22} />
                   <span>{teamName(detail.home_team)}</span>
                 </>
@@ -544,6 +544,76 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
                 ))}
               </div>
             </div>
+          </div>
+        )}
+
+        {/* Other model markets: cover chances and projected margin ±, total ±, σ */}
+        {detail && detail.prediction && hasCoverProb && (
+          <div className="mb-5 border-b border-[var(--color-line)] pb-5 text-sm">
+            <h3 className="mb-2 text-xs uppercase tracking-wide text-[var(--color-net-faint)]">
+              Other model markets
+            </h3>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {detail.prediction.cover_prob_spread !== null && detail.prediction.cover_prob_spread !== undefined && (
+                <div className="p-2 rounded border border-[var(--color-line)] bg-[var(--color-court-950)]">
+                  <div className="text-xs text-[var(--color-net-faint)]">Spread cover chance</div>
+                  <div className="text-lg font-pr-display font-semibold">
+                    {pct(detail.prediction.cover_prob_spread)}
+                  </div>
+                  {detail.prediction.margin_sigma && (
+                    <div className="text-xs text-[var(--color-net-dim)]">
+                      σ = {detail.prediction.margin_sigma.toFixed(1)} pts
+                    </div>
+                  )}
+                </div>
+              )}
+              {detail.prediction.cover_prob_total !== null && detail.prediction.cover_prob_total !== undefined && (
+                <div className="p-2 rounded border border-[var(--color-line)] bg-[var(--color-court-950)]">
+                  <div className="text-xs text-[var(--color-net-faint)]">
+                    Over {detail.prediction.predicted_total.toFixed(1)} chance
+                  </div>
+                  <div className="text-lg font-pr-display font-semibold">
+                    {pct(detail.prediction.cover_prob_total)}
+                  </div>
+                  {detail.prediction.total_sigma && (
+                    <div className="text-xs text-[var(--color-net-dim)]">
+                      σ = {detail.prediction.total_sigma.toFixed(1)} pts
+                    </div>
+                  )}
+                </div>
+              )}
+              <div className="p-2 rounded border border-[var(--color-line)] bg-[var(--color-court-950)]">
+                <div className="text-xs text-[var(--color-net-faint)]">Projected margin ±</div>
+                <div className="text-lg font-pr-display font-semibold">
+                  {detail.prediction.predicted_margin >= 0
+                    ? `${detail.home_team} +${detail.prediction.predicted_margin.toFixed(1)}`
+                    : `${detail.away_team} +${Math.abs(detail.prediction.predicted_margin).toFixed(1)}`}
+                </div>
+                {detail.prediction.margin_sigma && (
+                  <div className="text-xs text-[var(--color-net-dim)]">
+                    ±{detail.prediction.margin_sigma.toFixed(1)} pts (1 σ)
+                  </div>
+                )}
+              </div>
+              <div className="p-2 rounded border border-[var(--color-line)] bg-[var(--color-court-950)]">
+                <div className="text-xs text-[var(--color-net-faint)]">Projected total ±</div>
+                <div className="text-lg font-pr-display font-semibold">
+                  {detail.prediction.predicted_total.toFixed(1)}
+                </div>
+                {detail.prediction.total_sigma && (
+                  <div className="text-xs text-[var(--color-net-dim)]">
+                    ±{detail.prediction.total_sigma.toFixed(1)} pts (1 σ)
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Injury report line */}
+        {detail && detail.injury_summary && (
+          <div className="mb-5 border-b border-[var(--color-line)] pb-5 text-sm">
+            <div className="text-xs text-[var(--color-net-faint)]">{detail.injury_summary}</div>
           </div>
         )}
 

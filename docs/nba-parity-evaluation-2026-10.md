@@ -111,6 +111,62 @@ byte-identical entries. Fixed with a season-anchored window, plus a write for
 `src/` ever produced**, making that endpoint unrunnable everywhere including the
 VPS.
 
+## Props: the in-sample numbers were flattering, and matchup features help
+
+The prop models shipped with in-sample metrics only, which the manifest admits
+(`training={"in_sample_metrics": True}`). Real numbers on **3,104 player-games /
+435 players / 140 games** (ESPN keyless box scores, 2026-04-07 → 2026-06-13):
+
+| market | in-sample | holdout | gap |
+|---|---|---|---|
+| points | 4.059 | 4.660 | +0.601 |
+| rebounds | 1.706 | 1.819 | +0.113 |
+| assists | 1.167 | 1.181 | +0.014 |
+| threes | 0.793 | 0.909 | +0.116 |
+
+**Every market degrades out-of-sample.** Points degrades most — 14.8% worse. So
+the prop models' published MAEs were optimistic by up to 0.6 points, and the
+site has been showing in-sample numbers.
+
+Adding the four matchup features (`opp_def_vs_pos`, `rest_days`, `usage_trend`,
+`minutes_trend`) — 5 features to 9, same holdout:
+
+| market | baseline | + matchup | change |
+|---|---|---|---|
+| points | 4.636 | **4.332** | **−0.304** (6.6%) |
+| rebounds | 1.812 | 1.776 | −0.036 |
+| assists | 1.178 | 1.123 | −0.056 |
+| threes | 0.907 | 0.880 | −0.027 |
+
+All four improve. On points the new features more than close the
+generalisation gap (holdout 4.660 → 4.332).
+
+**Caveat, stated rather than buried:** 140 games is a small sample for a
+per-market MAE, and these four features have not been through the serving path.
+Treat the direction as evidence and the magnitude as provisional.
+
+**A data finding worth keeping:** ESPN already sends `fg_made_attempted`, and the
+schedule already knows home/away — but `to_player_training_frame` dropped both,
+so `usage_trend` was uncomputable from real data and `opp_def_vs_pos` had nothing
+to key on. Fixed additively.
+
+## The same bug, four times
+
+Four separate instances of one defect class, each caught by a test that asserts
+a *date* boundary rather than a row boundary:
+
+1. `walk_forward_eval` windows — the NBA plays 10–12 games a night, so a row-wise
+   cut splits a date. This one refused to evaluate the real data at all.
+2. `prop_holdout` — `chronological_split` cuts on rows; on the real player frame
+   it produced `train_max == holdout_min == 2026-05-09`, one game on both sides.
+3. `prop_matchup` `opp_def_vs_pos` — several players share one matchup on one
+   night, so `shift(1)` alone left same-night rows inside the window.
+4. The naive baselines — derived from test labels rather than training data.
+
+This is worth a shared helper rather than four careful implementations. Not done
+here; flagged as the highest-value follow-up, because the next window anyone
+writes will have the same bug.
+
 ## Gates, honestly
 
 | gate | result |
@@ -121,6 +177,8 @@ VPS.
 | total MAE beats naive | **FAIL** (16.512 vs 16.375) |
 | margin/total MAE improved vs §5 baseline | **MARGINAL** — total still ≥ naive |
 | manifest emits log_loss/brier/auc | **PASS** — G10 labels now live |
+| prop holdout exists and reports both | **PASS** — was in-sample only |
+| prop matchup features improve holdout MAE | **PASS** — all 4 markets |
 
 **Two gates fail. Both are reported as failures.** No gate was relaxed to make
 it pass, and the numbers above are reproducible from the committed code.

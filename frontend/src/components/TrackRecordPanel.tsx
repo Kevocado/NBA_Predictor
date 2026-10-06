@@ -19,6 +19,7 @@ const MARKETS: Record<string, string> = {
   h2h: "Moneyline vs the market",
   spread: "Spread",
   total: "Total points",
+  player_props: "Player props",
 };
 // Shorter labels for the weekly table's columns, same order.
 const SHORT: Record<string, string> = {
@@ -26,6 +27,7 @@ const SHORT: Record<string, string> = {
   h2h: "Moneyline",
   spread: "Spread",
   total: "Total",
+  player_props: "Props",
 };
 const ORDER = Object.keys(MARKETS);
 const rank = (market: string) => (ORDER.includes(market) ? ORDER.indexOf(market) : ORDER.length);
@@ -520,7 +522,7 @@ export default function TrackRecordPanel() {
                   label: "Result",
                   value: (r) => (r.hit === null ? 2 : r.hit ? 1 : 0),
                   render: (r) => r.hit === null ? (
-                    <span className="text-pr-text-faint">Push</span>
+                    <span className="text-pr-text-faint">No result</span>
                   ) : r.hit ? (
                     <span className="text-pr-win font-semibold">✓</span>
                   ) : (
@@ -550,37 +552,22 @@ export default function TrackRecordPanel() {
       <Section
         id="tr-extremes"
         title="Biggest upsets & biggest misses"
-        blurb="The counted picks where the model was most confident and wrong (misses), and where the market was most confident and wrong (upsets — the model backed the other side and it won). Sorted by the model's probability, so the top row is the biggest surprise."
+        blurb="The counted picks where the model was confident and wrong (misses), and where the market was confident and wrong (upsets — the model backed the winner and the market didn't). Placeholder sort by gameday; full sort by model probability needs pick probability in per_pick."
       >
         {(() => {
           const allPicks = rows.flatMap((r) => (r.per_pick ?? []).map((p) => ({ ...p, market: r.market })));
           const counted = allPicks.filter((p) => p.counted && p.hit !== null);
           if (counted.length === 0) return <NotRecorded why="No counted picks graded yet." />;
 
-          // Upsets: model had LOW prob on the winner (market was right, model was wrong on the winner)
-          // i.e., hit === true AND model prob was low
-          // Misses: model had HIGH prob on the loser (model was confident and wrong)
-          // i.e., hit === false AND model prob was high
-
-          // We need the model probability for each pick. The per_pick doesn't carry it directly,
-          // but we can infer from the market's hit rate? No, we need the actual prob.
-          // For now, sort by gameday and show as placeholder.
-          const withProb = counted.map((p) => {
-            // Find the market's hit rate as a proxy? No, we need the pick's prob.
-            // The backend doesn't send it in per_pick. For now, skip prob sort.
-            return p;
-          });
+          const misses = counted.filter((p) => p.hit === false);
+          const upsets = counted.filter((p) => p.hit === true);
 
           return (
             <div className="grid gap-4 sm:grid-cols-2">
               <StatTable
-                rows={withProb.slice().sort((a, b) => {
-                  // Biggest misses: model was confident (we'd need prob) and wrong
-                  // For now, sort by created_at as placeholder
-                  return a.created_at.localeCompare(b.created_at);
-                }).slice(0, 10)}
+                rows={misses.slice().sort((a, b) => a.created_at.localeCompare(b.created_at)).slice(0, 10)}
                 rowKey={(r) => `${r.market}-${r.game_id}-${r.created_at}`}
-                caption="Biggest misses (model confident, wrong)"
+                caption="Biggest misses (model wrong)"
                 columns={[
                   { key: "gameday", label: "Game", value: (r) => r.gameday ?? r.created_at, render: (r) => r.gameday ? kickoff(r.gameday) : <span className="text-pr-text-dim">Unknown</span> },
                   { key: "market", label: "Market", value: (r) => r.market, render: (r) => labelFor(r.market) },
@@ -590,10 +577,7 @@ export default function TrackRecordPanel() {
                 ]}
               />
               <StatTable
-                rows={withProb.slice().sort((a, b) => {
-                  // Biggest upsets: model backed the winner but market didn't
-                  return a.created_at.localeCompare(b.created_at);
-                }).slice(0, 10)}
+                rows={upsets.slice().sort((a, b) => a.created_at.localeCompare(b.created_at)).slice(0, 10)}
                 rowKey={(r) => `${r.market}-${r.game_id}-${r.created_at}`}
                 caption="Biggest upsets (market wrong, model right)"
                 columns={[

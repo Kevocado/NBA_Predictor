@@ -168,6 +168,11 @@ export interface TrackRecordPick {
   /** False for a rerun that lost the earliest-pick contest. */
   counted: boolean;
   gameday: string | null;
+  /** The line the pick was priced at. Present for spreads and totals, null
+   *  for moneylines and markets without a line. Used to distinguish a push
+   *  (hit=null but point present) from a row with no line (hit=null, no point).
+   */
+  point: number | null;
 }
 
 export interface TrackRecord {

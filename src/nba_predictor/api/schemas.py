@@ -194,6 +194,11 @@ class TrackRecordPickOut(BaseModel):
     created_at: str
     counted: bool = True
     gameday: str | None = None
+    # The line the pick was priced at. Present for spreads and totals, null
+    # for moneylines and markets without a line. Used by the frontend to
+    # distinguish a push (hit=null but point present) from a row with no line
+    # (hit=null and no point).
+    point: float | None = None
 
 
 class ConfidenceBucketOut(BaseModel):

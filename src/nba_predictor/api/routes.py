@@ -15,6 +15,7 @@ from nba_predictor.models.manifest import build_manifest
 from nba_predictor.api.deps import (
     get_db_path,
     get_injury_report,
+    get_injury_report_best_effort,
     get_models_dir,
     get_schedule,
     get_schedule_path,
@@ -169,7 +170,7 @@ def get_game_detail(
     game_id: str,
     schedule: list[dict] = Depends(get_schedule),
     db_path: Path = Depends(get_db_path),
-    injuries: list[dict] = Depends(get_injury_report),
+    injuries: list[dict] = Depends(get_injury_report_best_effort),
 ) -> GameDetailOut:
     game = get_game(schedule, game_id)
     if game is None:

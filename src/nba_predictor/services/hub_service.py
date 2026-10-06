@@ -433,11 +433,13 @@ def _counted_market_pick(game: dict, game_rows: list, market: str):
 def _market_pick_row(game: dict, row, market: str, verdict: bool | None, before: bool,
                      day: date | None, counted: bool = True) -> TrackRecordPickOut:
     """One disclosed priced pick, in words a reader can check against the score."""
+    point = row["point"] if "point" in row.keys() else None
     return TrackRecordPickOut(
         game_id=game["game_id"], market=market, pick=_pick_words(row, market),
         actual=_actual_words(game, market, row), hit=verdict, made_before_tip=before,
         created_at=row["created_at"], counted=counted,
         gameday=day.isoformat() if day else None,
+        point=point,
     )
 
 

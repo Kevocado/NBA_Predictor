@@ -514,46 +514,6 @@ def write_prop_snapshot(
         return True
 
 
-def write_player_outcome(
-    db_path: Path,
-    *,
-    game_id: str,
-    player_id: str,
-    stat: str,
-    actual_value: float,
-    recorded_at: str,
-) -> int:
-    """Record a realised prop value. An outcome is a fact, so it is immutable:
-    a disagreeing value raises `ConflictingOutcome` rather than overwriting."""
-    with get_connection(db_path) as conn:
-        try:
-            cur = conn.execute(
-                """
-                INSERT INTO game_player_outcomes
-                    (game_id, player_id, stat, actual_value, recorded_at)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (game_id, player_id, stat, actual_value, recorded_at),
-            )
-            conn.commit()
-            return cur.lastrowid
-        except sqlite3.IntegrityError:
-            row = conn.execute(
-                """
-                SELECT actual_value FROM game_player_outcomes
-                WHERE game_id = ? AND player_id = ? AND stat = ?
-                """,
-                (game_id, player_id, stat),
-            ).fetchone()
-            conn.rollback()
-            if row is not None and float(row[0]) != float(actual_value):
-                raise ConflictingOutcome(
-                    f"{player_id}/{stat} in {game_id} already recorded as "
-                    f"{row[0]}, now {actual_value}"
-                ) from None
-            return 0
-
-
 def read_prop_ledger(db_path: Path, game_id: str) -> list[dict]:
     """Every snapshotted prop pick for a game, graded where an outcome exists.
 

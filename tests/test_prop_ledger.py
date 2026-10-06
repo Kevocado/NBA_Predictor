@@ -121,7 +121,7 @@ def test_ledger_is_gradeable_against_outcomes(tmp_path):
     assert ungraded["points"]["hit"] is None, "an ungraded pick must not read as a miss"
     assert ungraded["points"]["error"] is None
 
-    store.write_player_outcome(db, game_id="g1", player_id="p1", stat="points",
+    store.insert_player_outcome(db, game_id="g1", player_id="p1", stat="points",
                                actual_value=25.0, recorded_at="2026-10-22T02:00:00+00:00")
 
     rows = {r["stat"]: r for r in read_prop_ledger(db, game_id="g1")}
@@ -135,7 +135,7 @@ def test_recording_an_outcome_without_a_prediction_does_not_invent_one(tmp_path)
     """An outcome with no snapshot has no pick to grade. Inventing one would
     report a prediction nobody made."""
     db = _db(tmp_path)
-    store.write_player_outcome(db, game_id="g9", player_id="p9", stat="points",
+    store.insert_player_outcome(db, game_id="g9", player_id="p9", stat="points",
                                actual_value=30.0, recorded_at=PRE_TIP)
     assert read_prop_ledger(db, game_id="g9") == []
 
@@ -181,3 +181,39 @@ def test_join_will_not_match_a_player_on_the_wrong_team():
 def test_join_preserves_input_order_and_drops_only_unmatched(tmp_path, caplog):
     names = [("Jayson Tatum", "BOS"), ("Nobody Here", "XXX"), ("Bam Adebayo", "MIA")]
     assert join_player_ids(names, ESPN_PLAYERS) == ["111", "222"]
+
+def test_a_contradicting_outcome_is_refused_even_without_the_unique_index(tmp_path):
+    """Why the ledger uses `insert_player_outcome` and not a plain insert.
+
+    `game_player_outcomes` carries a unique index, but `_ensure_unique_indexes`
+    deliberately LEAVES IT OUT on a legacy database whose existing rows conflict,
+    because rule 1 forbids deleting recorded facts. An insert-then-catch writer
+    therefore succeeds on such a database and quietly files a second, different
+    value for a key already recorded -- the MAE then depends on which row a
+    reader happens to see.
+
+    `insert_player_outcome` checks first, so it is correct either way. This
+    simulates the index-less database directly, by dropping the index.
+    """
+    db_path = tmp_path / "tracking.db"
+    store.init_db(db_path)
+    db = str(db_path)
+    with store.get_connection(db) as conn:
+        conn.execute("DROP INDEX IF EXISTS uq_game_player_outcomes_key")
+        conn.commit()
+
+    store.insert_player_outcome(db, game_id="g1", player_id="p1", stat="points",
+                                actual_value=20.0, recorded_at=PRE_TIP)
+    # Same key, different value: a contradiction, and it must be loud.
+    with pytest.raises(store.ConflictingOutcome):
+        store.insert_player_outcome(db, game_id="g1", player_id="p1", stat="points",
+                                    actual_value=99.0, recorded_at=PRE_TIP_LATER)
+
+    with store.get_connection(db) as conn:
+        rows = conn.execute(
+            "SELECT actual_value FROM game_player_outcomes "
+            "WHERE game_id='g1' AND player_id='p1' AND stat='points'"
+        ).fetchall()
+    assert [r[0] for r in rows] == [20.0], (
+        "a second, contradicting outcome was filed on a database with no index"
+    )

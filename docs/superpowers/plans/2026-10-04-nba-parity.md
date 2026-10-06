@@ -472,13 +472,15 @@ git push origin nba-parity-review
 ```python
 def test_gate_applies_all_rules():
     rows = [
-        fresh_row(edge=0.06, game="g1"),   # passes
+        fresh_row(edge=0.06, game="g1"),   # passes the 5% threshold, but is not
+                                          # the best edge on g1
         fresh_row(edge=0.04, game="g1"),   # fails 5% threshold
         stale_row(edge=0.09, game="g2"),   # fails 1h freshness
-        fresh_row(edge=0.07, game="g1", second_best=True),  # fails one-single-per-game
+        fresh_row(edge=0.07, game="g1", second_best=True),  # best edge on g1: this one
     ]
     picks = gated_picks(rows, model_probs)
-    assert [p["id"] for p in picks] == ["fresh_row_6pct"]
+    # One single per game, highest edge wins -- so the 0.07 row, not the 0.06 one.
+    assert [p["id"] for p in picks] == ["fresh_row_7pct"]
 
 def test_totals_pair_same_book_same_point():
     # a total edge computed across different books/points is rejected

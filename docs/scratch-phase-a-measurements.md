@@ -27,11 +27,14 @@ brier 0.2516 | auc 0.5912 | accuracy 0.5844 (n=758)
 2. **The old 0.6354 accuracy was flattering.** The manifest reported accuracy
    from one 80/20 `chronological_split`. Walk-forward accuracy on out-of-fold
    data is 0.5844. Same model, honest method, ~5 points lower.
-3. **It improves monotonically with data.** log_loss 0.7569 -> 0.6180 as
-   training goes 610 -> 1313 games. The early-season weakness is a
-   sample-size problem, which is what a candidate race (Task 5) may or may not
-   fix — Ridge with 24 features on 600 rows may beat a 200-tree depth-4
-   booster outright. NFL's Ridge beat XGBoost for exactly this reason.
+3. **It improves with more training data, though not monotonically.**
+   log_loss 0.7569 -> 0.6180 as training goes 610 -> 1313 games, then back up to
+   0.6283 in the final window — which is 4 games, so that last number is noise
+   rather than a reversal. The trend through the meaningful windows is
+   downward, and the early-season weakness is a sample-size problem, which is
+   what a candidate race (Task 5) may or may not fix — Ridge with 24 features on
+   600 rows may beat a 200-tree depth-4 booster outright. NFL's Ridge beat
+   XGBoost for exactly this reason.
 4. **Window 4 is 4 games.** Date-aligned slicing leaves a sliver at the end;
    it contributes 4 rows to the pooled figure. Not material at n=758, but the
    report should not quote a per-window table as if every row were equal.

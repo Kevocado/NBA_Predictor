@@ -25,7 +25,11 @@ These audit gaps are **fixed** — do not redo them:
 | Model summary training-data block | `86c19dc` + `13d355d` |
 | Missing-model safe skip | `376a749` |
 
-### 2.2 On `origin/main` but not on this branch (merge these — see Phase 0)
+### 2.2 Originally on `origin/main` only — **merged into this branch since**
+
+> **Status update (2026-10-05):** these are now on `nba-parity-review`. The merge
+> commit is `903b60b`, and Phase 0 / Task 0 of the plan says in terms: the merge
+> is **done**, do not re-merge. The list is kept for provenance.
 
 - `6bf7316` — **odds refresh loop**: `POST /refresh-odds` now runs on a scheduler thread in the app lifespan (it existed but never ran; Kevin: *"call it on a schedule because nba games are spread throughout the week"*). The deployed container holds `SPORTSBOOK_API_KEY`. **This changes the value-layer design: odds now refresh on a loop — the edge gate and ledger (Phase B) build on this, they don't need to schedule it.**
 - `6af77e5` — CI now runs the suite that was never run.

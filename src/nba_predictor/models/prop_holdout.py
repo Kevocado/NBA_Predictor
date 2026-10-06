@@ -44,6 +44,36 @@ MARKET_TARGETS = {
 MARKETS = tuple(MARKET_TARGETS)
 
 
+def _date_aligned_split(
+    df: pd.DataFrame, holdout_fraction: float
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Chronological split whose cut lands **between** dates.
+
+    `chronological_split` cuts on rows, which is wrong here: a player-game frame
+    holds ~20 rows per game date, so a row-wise cut puts one game on both sides
+    and a model can score a holdout game from a feature that saw it. This was not
+    hypothetical -- on 3,104 real player-games the row cut produced
+    `train_max == holdout_min == 2026-05-09`, and the assertion below refused it.
+
+    Reuses `chronological_split` for the row target, then walks the cut back to
+    the nearest preceding date boundary so no date is shared.
+    """
+    train, holdout = chronological_split(
+        df, date_col="game_date", holdout_fraction=holdout_fraction
+    )
+    train_dates = set(train["game_date"])
+    leaked = set(holdout["game_date"]) & train_dates
+    if not leaked:
+        return train, holdout
+
+    # Move every shared date to the training side, so the holdout starts strictly
+    # after. Loses those games from the holdout -- which is the point.
+    return (
+        df[df["game_date"].isin(train_dates | leaked)],
+        df[~df["game_date"].isin(train_dates | leaked)],
+    )
+
+
 def prop_holdout_metrics(
     df: pd.DataFrame,
     factories: dict[str, Callable],
@@ -63,9 +93,7 @@ def prop_holdout_metrics(
     if "game_date" not in df.columns:
         raise ValueError("player-game frame has no game_date; cannot split chronologically")
 
-    train, holdout = chronological_split(
-        df, date_col="game_date", holdout_fraction=holdout_fraction
-    )
+    train, holdout = _date_aligned_split(df, holdout_fraction)
 
     # One feature build over train+holdout, so holdout rolling features inherit
     # the training history a real prediction would have (see module docstring).

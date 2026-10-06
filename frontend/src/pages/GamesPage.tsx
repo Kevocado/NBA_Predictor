@@ -5,7 +5,16 @@ import { EmptyState, ErrorState, MatchCard, RoundNavigator, Skeleton } from "../
 import { addDays, mondayOf } from "../lib/weeks";
 import { dayHeading, nextUpIds, tipZones, toCardModel, weekLabel, weekTally } from "../lib/nightCards";
 
+type SortMode = "tip-off" | "confidence";
+
 const byTip = (a: Game, b: Game) => (a.tip_off ?? "").localeCompare(b.tip_off ?? "") || a.game_id.localeCompare(b.game_id);
+const byConfidence = (a: Game, b: Game) => {
+  const ap = a.prediction?.home_win_probability ?? 0.5;
+  const bp = b.prediction?.home_win_probability ?? 0.5;
+  const aConf = Math.abs(ap - 0.5);
+  const bConf = Math.abs(bp - 0.5);
+  return bConf - aConf || a.game_id.localeCompare(b.game_id);
+};
 
 export default function GamesPage() {
   // The week the API lands on (the one with the next games), for "Jump to current week".
@@ -15,6 +24,7 @@ export default function GamesPage() {
   const [error, setError] = useState<string | null>(null);
   const [selectedGameId, setSelectedGameId] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const [sort, setSort] = useState<SortMode>("tip-off");
   // A deep link (?game=<id> on "/" — the hub's teaser rows point here) names
   // one game. Read once, on arrival, and matched against the week's games
   // after each successful load: only an id this page actually shows is
@@ -62,16 +72,18 @@ export default function GamesPage() {
 
   const step = (days: number) => setWeekStart((w) => addDays(w ?? mondayOf(new Date()), days));
 
+  const sortedGames = [...(games ?? [])].sort(sort === "confidence" ? byConfidence : byTip);
+  const isCurrentWeek = weekStart !== null && weekStart === currentWeek;
+  const nextUp = nextUpIds(sortedGames, isCurrentWeek);
+  const zones = tipZones(sortedGames);
+
   const gamesByDay = new Map<string, Game[]>();
-  for (const game of [...(games ?? [])].sort(byTip)) {
+  for (const game of sortedGames) {
     const existing = gamesByDay.get(game.game_date) ?? [];
     existing.push(game);
     gamesByDay.set(game.game_date, existing);
   }
   const days = [...gamesByDay.entries()].sort(([a], [b]) => a.localeCompare(b));
-  const isCurrentWeek = weekStart !== null && weekStart === currentWeek;
-  const nextUp = nextUpIds(games ?? [], isCurrentWeek);
-  const zones = tipZones(games ?? []);
 
   return (
     <div>
@@ -93,6 +105,22 @@ export default function GamesPage() {
         <EmptyState message="No games this week." action={{ label: "Go to next week", onClick: () => step(7) }} />
       )}
       {zones && <p className="mb-4 text-xs text-pr-text-dim">Tip-off times in {zones}</p>}
+
+      <div className="mb-4 flex items-center gap-2 text-sm text-pr-text-dim">
+        <span>Sort:</span>
+        <button
+          onClick={() => setSort("tip-off")}
+          className={`px-2 py-1 rounded border text-xs ${sort === "tip-off" ? "bg-pr-accent text-pr-accent-ink" : "border-pr-rule hover:border-pr-accent"}`}
+        >
+          Tip-off order
+        </button>
+        <button
+          onClick={() => setSort("confidence")}
+          className={`px-2 py-1 rounded border text-xs ${sort === "confidence" ? "bg-pr-accent text-pr-accent-ink" : "border-pr-rule hover:border-pr-accent"}`}
+        >
+          Most confident
+        </button>
+      </div>
 
       <div className="space-y-6">
         {days.map(([day, dayGames]) => (

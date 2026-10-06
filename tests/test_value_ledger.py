@@ -214,3 +214,63 @@ def test_settlement_is_immutable(tmp_path):
     with pytest.raises(store.ConflictingOutcome):
         settle_pick(db, game_id="g1", market="spread", selection="home", bookmaker="bovita",
                     outcome="lost", settled_at="2026-10-22T03:00:00+00:00")
+
+def test_clv_handles_positive_american_odds():
+    """Underdog prices are the case my first version got wrong.
+
+    `+150` is decimal **2.5**, not 1.667. Converting it as `1 + 100/o` inverts
+    the whole scale for every underdog: +150 ranks below +100, and the CLV sign
+    flips with it. Every earlier test here used a negative price, which is why
+    it survived.
+    """
+    # Entering at +150 and the market closing at +130 means the price got
+    # SHORTER, which is worse for the bettor -- so CLV is negative. Longer
+    # odds pay more, so a bigger number must be worth more decimal.
+    assert clv_pct(150, 130) < 0, "a shorter closing price must read as negative CLV"
+    assert clv_pct(130, 150) > 0, "a longer closing price must read as positive CLV"
+    assert clv_pct(150, 150) == pytest.approx(0.0, abs=1e-9)
+
+
+def test_decimal_conversion_is_the_standard_one():
+    """The four reference points: -110 -> 1.909, +110 -> 2.10, +200 -> 3.00,
+    -200 -> 1.50. Monotonic in the price, which is the property the sign depends
+    on."""
+    from nba_predictor.tracking.value_ledger import to_decimal
+
+    assert to_decimal(-110) == pytest.approx(1.9091, abs=1e-3)
+    assert to_decimal(110) == pytest.approx(2.10, abs=1e-6)
+    assert to_decimal(200) == pytest.approx(3.00, abs=1e-6)
+    assert to_decimal(-200) == pytest.approx(1.50, abs=1e-6)
+    # Longer odds must be worth more.
+    assert to_decimal(200) > to_decimal(150) > to_decimal(110)
+    assert to_decimal(-110) > to_decimal(-150)
+
+
+def test_yield_accounts_for_the_price_not_just_the_count(tmp_path):
+    """11 wins and 11 losses at -110 is about -1 unit, not zero.
+
+    Counting a win as +1 unit ignores the vig: -110 is decimal 1.909, so a win
+    returns 0.909 of a unit staked. Over an even record the shortfall is real and
+    the report has to show it.
+    """
+    db = _db(tmp_path)
+    for i in range(11):
+        gid = f"won{i}"
+        snapshot_pick(db, game_id=gid, market="spread", selection="home", bookmaker="b",
+                      american_odds=-110, point=2.5, model_probability=0.55,
+                      market_probability=0.5, edge=0.05, snapshot_at=PRE_TIP,
+                      game=dict(GAME, game_id=gid))
+        settle_pick(db, game_id=gid, market="spread", selection="home", bookmaker="b",
+                    outcome="won", settled_at="2026-10-22T02:00:00+00:00")
+        gid = f"lost{i}"
+        snapshot_pick(db, game_id=gid, market="spread", selection="home", bookmaker="b",
+                      american_odds=-110, point=2.5, model_probability=0.45,
+                      market_probability=0.5, edge=-0.05, snapshot_at=PRE_TIP,
+                      game=dict(GAME, game_id=gid))
+        settle_pick(db, game_id=gid, market="spread", selection="home", bookmaker="b",
+                    outcome="lost", settled_at="2026-10-22T02:00:00+00:00")
+
+    report = weekly_ledger_report(db)
+    assert "| Hit rate | 50.0% |" in report
+    # 11 * (1.9091 - 1) - 11 * 1 = -0.9999...
+    assert "-1.000" in report, "an even record at -110 must show the vig shortfall"

@@ -37,9 +37,34 @@ def manifest_trained(days_ago: float) -> dict:
 
 
 def test_a_twenty_day_old_model_is_refused():
-    """The Phase A measurement, pinned. 16 days is what actually shipped."""
     with pytest.raises(StaleModels):
         assert_models_fresh(manifest_trained(20), now=NOW)
+
+
+def test_the_documented_sixteen_day_case_is_refused():
+    """The exact figure that shipped: on 2026-10-04 the manifest was 16 days
+    old and nothing complained. Pinned at 16 rather than a rounder number so that
+    raising MAX_MODEL_AGE_DAYS into the 16-19 band fails this test instead of
+    quietly reversing the threshold decision.
+    """
+    with pytest.raises(StaleModels):
+        assert_models_fresh(manifest_trained(16), now=NOW)
+
+
+def test_a_future_dated_manifest_is_refused():
+    """A future `trained_at` gives a NEGATIVE age, which every "too old?"
+    comparison passes -- so a manifest dated next month would keep publishing
+    for a month past the limit. Refuse it."""
+    with pytest.raises(StaleModels, match="future"):
+        assert_models_fresh(manifest_trained(-10), now=NOW)
+
+
+def test_a_few_minutes_of_clock_skew_is_tolerated():
+    """A retrain and a publish on machines whose clocks disagree can stamp a few
+    seconds ahead. That is not the same as days ahead."""
+    from nba_predictor.public_snapshot import MAX_CLOCK_SKEW
+    skew_minutes = MAX_CLOCK_SKEW.total_seconds() / 60
+    assert_models_fresh(manifest_trained(-skew_minutes / 1440), now=NOW)
 
 
 def test_a_two_day_old_model_publishes():

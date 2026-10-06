@@ -35,6 +35,12 @@ from nba_predictor.tracking.store import init_db
 #: 2026-10-04, and nothing noticed.
 MAX_MODEL_AGE_DAYS = 14
 
+#: Clock-skew tolerance for a `trained_at` in the future. A retrain and a
+#: publish on machines whose clocks disagree can produce a stamp a few seconds
+#: ahead; that is not the same as a stamp days ahead, which is either a clock
+#: fault or a manifest written by something that never trained.
+MAX_CLOCK_SKEW = timedelta(minutes=5)
+
 
 class StaleModels(Exception):
     """The snapshot would publish numbers from a model that is too old.
@@ -90,6 +96,16 @@ def assert_models_fresh(
         return None
 
     age = model_age_days(manifest, now)
+    if age is not None and age < -MAX_CLOCK_SKEW.total_seconds() / 86400.0:
+        # A future stamp yields a NEGATIVE age, which every "is it too old?"
+        # comparison passes -- so a manifest dated next month would keep
+        # publishing for a month plus the limit. Refuse rather than clamp.
+        raise StaleModels(
+            f"manifest trained_at={manifest.get('trained_at')} is in the future "
+            f"({-age:.1f} days ahead). That is a clock fault or a manifest that "
+            "was never really trained on; refusing rather than treating it as "
+            "brand new."
+        )
     if age is None:
         raise StaleModels(
             f"manifest has no readable trained_at (model_version="

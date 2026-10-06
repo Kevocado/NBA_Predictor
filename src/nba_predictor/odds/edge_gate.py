@@ -90,15 +90,28 @@ def pair_total_sides(rows: list[dict]):
 
 
 def _has_counterpart(row: dict, rows: list[dict]) -> bool:
-    """A two-sided market row needs its other side on the same book and point."""
+    """A two-sided market row needs its other side: same GAME, same book, same point.
+
+    Scoped to the row's own game because `/value-picks` hands the gate every
+    recent row at once. Without the game filter, a total for one game could be
+    "paired" with a total from another, or with another book's -- which would
+    admit a cross-game edge, or reject a perfectly good row because some other
+    game happened to have an unmatched side.
+    """
     market = row.get("market")
     if market not in TWO_SIDED_MARKETS:
         return True
-    pair = pair_total_sides(rows) if market == "total" else None
+
+    same_game = [
+        r for r in rows
+        if r.get("game_id") == row.get("game_id") and r.get("market") == market
+    ]
     if market == "total":
-        return pair is not None and row in pair
+        pair = pair_total_sides(same_game)
+        return pair is not None and any(r is row or r == row for r in pair)
+
     home, away = SIDES["spread"]
-    found = {r.get("selection"): r for r in rows if r.get("market") == "spread"}
+    found = {r.get("selection"): r for r in same_game}
     other = found.get(away if row.get("selection") == home else home)
     return (
         other is not None

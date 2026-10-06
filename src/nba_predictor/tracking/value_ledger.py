@@ -173,6 +173,19 @@ def record_closing_line(
         return cur.rowcount > 0
 
 
+def to_decimal(american_odds: int) -> float:
+    """American odds -> decimal, the standard conversion.
+
+    A positive price is `1 + o/100`: +150 pays 150 for a 1 bet, so decimal 2.50.
+    It is **not** `1 + 100/o`, which is the inversion -- that maps +150 to 1.67
+    and, worse, makes the conversion *decrease* with the price, so a longer price
+    looks worth less. That inverts CLV for every underdog, both its sign and its
+    magnitude. An earlier version of this function had exactly that bug, and
+    every test for it used a negative price, so nothing caught it.
+    """
+    return 1 + american_odds / 100 if american_odds > 0 else 1 + 100 / abs(american_odds)
+
+
 def clv_pct(entry_american_odds: int | None, closing_american_odds: int | None):
     """Closing line value, as a fraction. Positive means the entry beat the close.
 
@@ -185,13 +198,8 @@ def clv_pct(entry_american_odds: int | None, closing_american_odds: int | None):
     if entry_american_odds is None or closing_american_odds is None:
         return None
 
-    def to_decimal(o: int) -> float:
-        return 1 + 100 / o if o > 0 else 1 + 100 / abs(o)
-
     entry = to_decimal(entry_american_odds)
     close = to_decimal(closing_american_odds)
-    if close <= 0:
-        return None
     return (close - entry) / close
 
 
@@ -279,9 +287,15 @@ def weekly_ledger_report(db_path) -> str:
         return f"{value * 100:.1f}%" if value is not None else "—"
 
     hit_rate = len(won) / len(graded) if graded else None
-    # Flat 1 unit staked per pick: the honest arithmetic when no stake is
-    # recorded, and stated as such rather than dressed as a return.
-    yield_units = len(won) - (len(graded) - len(won))
+    # Yield in units where one unit is staked per pick, at the price actually
+    # taken. Counting a win as +1 and a loss as -1 is wrong by the vig: at -110 a
+    # win returns 0.909 units, so a record of 11-11 at -110 is about -1 unit, not
+    # zero. `to_decimal(odds) - 1` is the real profit on a win, and a lost unit
+    # is -1. A push returns the stake, so it contributes 0.
+    yield_units = sum(
+        (to_decimal(r["american_odds"]) - 1.0) if r["outcome"] == "won" else -1.0
+        for r in graded
+    )
     clvs = [r["clv_pct"] for r in ledger if r["clv_pct"] is not None]
     mean_clv = sum(clvs) / len(clvs) if clvs else None
 
@@ -300,7 +314,7 @@ def weekly_ledger_report(db_path) -> str:
         f"| Lost | {len(graded) - len(won)} |",
         f"| Pushes (ungraded, per the hit-rate rule) | {len(pushes)} |",
         f"| Hit rate | {pct(hit_rate)} |",
-        f"| Yield (units, 1 per pick, no stake recorded) | {yield_units:+d} |",
+        f"| Yield (units; 1 staked per pick at the price taken) | {yield_units:+.3f} |",
         f"| Mean CLV | {pct(mean_clv)} |",
         "",
     ]

@@ -339,3 +339,40 @@ def test_the_reader_really_excludes_rows_older_than_since(tmp_path):
         f"the reader returned {games}; only the 2-minute-old rows should be in "
         "range of a 60-minute window"
     )
+
+
+def test_a_total_is_not_paired_with_another_games_total():
+    """`/value-picks` hands the gate every recent row at once, so a counterpart
+    has to be looked for inside the row's OWN game.
+
+    Without that scoping a total for g1 paired with an unmatched total from g2:
+    a valid row could be rejected, or -- worse -- an edge computed across two
+    games.
+    """
+    g1 = market_pair(game_id="g1", market="total", edge=0.09)
+    # g2 contributes a lone 'over' at the same point and book: it must not
+    # become g1's counterpart.
+    g2_lonely = [row(game_id="g2", market="total", selection="over",
+                     book="bovita", point=220.5, edge=0.01)]
+
+    picks = gated_picks(g1 + g2_lonely, now=NOW)
+    assert [p["game_id"] for p in picks] == ["g1"], (
+        "g1 has a complete same-book, same-point pair and must still be flagged; "
+        "g2's lone over must not borrow g1's under"
+    )
+
+    # And with each game's own pair present, both are judged on their own merits.
+    g2 = market_pair(game_id="g2", market="total", edge=0.07)
+    picks = gated_picks(g1 + g2, now=NOW)
+    assert sorted(p["game_id"] for p in picks) == ["g1", "g2"]
+
+
+def test_a_spread_pairs_only_with_its_own_game_and_book():
+    rows = [
+        row(game_id="g1", selection="home", book="bovita", point=2.5, edge=0.09),
+        # Different game, opposite side, matching book and point.
+        row(game_id="g2", selection="away", book="bovita", point=2.5, edge=0.01),
+    ]
+    assert gated_picks(rows, now=NOW) == [], (
+        "a spread was paired with the other side of a DIFFERENT game"
+    )

@@ -84,6 +84,39 @@ CREATE TABLE IF NOT EXISTS game_player_outcomes (
     actual_value REAL NOT NULL,
     recorded_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS value_picks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    game_id TEXT NOT NULL,
+    market TEXT NOT NULL,
+    selection TEXT NOT NULL,
+    bookmaker TEXT NOT NULL,
+    american_odds INTEGER NOT NULL,
+    point REAL,
+    model_probability REAL NOT NULL,
+    market_probability REAL NOT NULL,
+    edge REAL NOT NULL,
+    snapshot_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS value_pick_outcomes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    game_id TEXT NOT NULL,
+    market TEXT NOT NULL,
+    selection TEXT NOT NULL,
+    bookmaker TEXT NOT NULL,
+    outcome TEXT NOT NULL,
+    settled_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS value_closing_lines (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    game_id TEXT NOT NULL,
+    market TEXT NOT NULL,
+    selection TEXT NOT NULL,
+    bookmaker TEXT NOT NULL,
+    closing_american_odds INTEGER NOT NULL,
+    recorded_at TEXT NOT NULL
+);
 """
 
 # The one row key this schema ENFORCES, and the only one it can.
@@ -126,6 +159,21 @@ _UNIQUE_INDEXES = (
     CREATE UNIQUE INDEX IF NOT EXISTS uq_game_player_outcomes_key
     ON game_player_outcomes (game_id, player_id, stat)
     """),
+    ("uq_value_pick_outcome_key", """
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_value_pick_outcome_key
+    ON value_pick_outcomes (game_id, market, selection, bookmaker)
+    """),
+    ("uq_value_closing_line_key", """
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_value_closing_line_key
+    ON value_closing_lines (game_id, market, selection, bookmaker)
+    """),
+    # NOT indexed: value_picks. The odds refresher runs on a loop, so it
+    # re-snapshots the same pick as often as the cadence allows. That is this
+    # repo's standing decision for a prediction-shaped table -- keep the history,
+    # count the earliest -- and the ledger reader does exactly what
+    # `tracking.timing.earliest_recorded` does for the game-level tables. An
+    # index here would have made the refresh loop fail once the loop was doing
+    # its job.
 )
 
 

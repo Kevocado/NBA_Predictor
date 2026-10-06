@@ -84,6 +84,39 @@ CREATE TABLE IF NOT EXISTS game_player_outcomes (
     actual_value REAL NOT NULL,
     recorded_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS value_picks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    game_id TEXT NOT NULL,
+    market TEXT NOT NULL,
+    selection TEXT NOT NULL,
+    bookmaker TEXT NOT NULL,
+    american_odds INTEGER NOT NULL,
+    point REAL,
+    model_probability REAL NOT NULL,
+    market_probability REAL NOT NULL,
+    edge REAL NOT NULL,
+    snapshot_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS value_pick_outcomes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    game_id TEXT NOT NULL,
+    market TEXT NOT NULL,
+    selection TEXT NOT NULL,
+    bookmaker TEXT NOT NULL,
+    outcome TEXT NOT NULL,
+    settled_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS value_closing_lines (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    game_id TEXT NOT NULL,
+    market TEXT NOT NULL,
+    selection TEXT NOT NULL,
+    bookmaker TEXT NOT NULL,
+    closing_american_odds INTEGER NOT NULL,
+    recorded_at TEXT NOT NULL
+);
 """
 
 # The one row key this schema ENFORCES, and the only one it can.
@@ -126,6 +159,21 @@ _UNIQUE_INDEXES = (
     CREATE UNIQUE INDEX IF NOT EXISTS uq_game_player_outcomes_key
     ON game_player_outcomes (game_id, player_id, stat)
     """),
+    ("uq_value_pick_outcome_key", """
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_value_pick_outcome_key
+    ON value_pick_outcomes (game_id, market, selection, bookmaker)
+    """),
+    ("uq_value_closing_line_key", """
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_value_closing_line_key
+    ON value_closing_lines (game_id, market, selection, bookmaker)
+    """),
+    # NOT indexed: value_picks. The odds refresher runs on a loop, so it
+    # re-snapshots the same pick as often as the cadence allows. That is this
+    # repo's standing decision for a prediction-shaped table -- keep the history,
+    # count the earliest -- and the ledger reader does exactly what
+    # `tracking.timing.earliest_recorded` does for the game-level tables. An
+    # index here would have made the refresh loop fail once the loop was doing
+    # its job.
 )
 
 
@@ -604,3 +652,25 @@ def join_player_ids(
                 "rather than fuzzy-matched", name, team,
             )
     return resolved
+
+
+def get_recent_market_predictions(db_path: Path, since: str) -> list[sqlite3.Row]:
+    """Market rows stamped at or after `since`, newest first.
+
+    The freshness filter lives in the *reader* rather than only in the gate,
+    because the odds refresher appends a new row for every book on every pass
+    and the table has no uniqueness constraint: without this the gate would be
+    handed a season of lines and would have to discard nearly all of them.
+    `since` is an ISO-8601 timestamp string so this stays a plain SQL
+    comparison, the same form `get_market_predictions_for_game` already uses.
+    """
+    with get_connection(db_path) as conn:
+        cur = conn.execute(
+            """
+            SELECT * FROM game_market_predictions
+            WHERE created_at >= ?
+            ORDER BY created_at DESC, id DESC
+            """,
+            (since,),
+        )
+        return cur.fetchall()

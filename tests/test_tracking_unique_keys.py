@@ -34,6 +34,18 @@ from nba_predictor.tracking import store
 REPO = Path(__file__).resolve().parents[1]
 _PREDICTION_TABLES = ("predictions", "game_market_predictions", "player_prediction_snapshots")
 
+# Prediction-shaped too, for the same reason: the odds refresher runs on a loop
+# and re-snapshots each pick as often as the cadence allows, so a unique index
+# would make the loop fail the moment it did its job. `value_ledger.read_ledger`
+# dedupes to the earliest snapshot, exactly as `timing.earliest_recorded` does
+# for the game-level tables.
+_PREDICTION_TABLES += ("value_picks",)
+
+# Fact tables: one row per thing that happened, so a duplicate would move a
+# number. `game_player_outcomes` was the original; the value ledger's outcome
+# and closing-line tables joined it under the same reasoning.
+_FACT_TABLES = ("game_player_outcomes", "value_pick_outcomes", "value_closing_lines")
+
 
 def _unique_indexed_columns(db_path):
     """`{table: {index_name: columns}}` for every unique index in the file."""
@@ -112,9 +124,10 @@ def test_the_three_prediction_tables_carry_no_unique_index_and_that_is_chosen(tm
 
     indexed = _unique_indexed_columns(db)
 
-    assert set(indexed) == {"game_player_outcomes"}, (
-        f"unique index coverage changed to {indexed}; re-check the table-by-table "
-        "audit before landing"
+    assert set(indexed) == set(_FACT_TABLES), (
+        f"unique index coverage changed to {sorted(indexed)}; re-check the "
+        f"table-by-table audit before landing. Expected exactly the fact "
+        f"tables {sorted(_FACT_TABLES)}."
     )
     for table in _PREDICTION_TABLES:
         assert table not in indexed
@@ -155,7 +168,10 @@ def test_the_two_tables_nothing_reads_have_been_left_alone(tmp_path):
 
     db = tmp_path / "tracking.db"
     store.init_db(db)
-    assert set(_unique_indexed_columns(db)) == {"game_player_outcomes"}
+    # The only indexed tables are the fact tables. `value_picks` is deliberately
+    # absent: the odds refresher re-snapshots on a loop, so indexing it would
+    # break the loop rather than protect a number.
+    assert set(_unique_indexed_columns(db)) == set(_FACT_TABLES)
 
 
 def test_the_write_path_is_insert_only_so_the_new_constraint_is_the_whole_guard(tmp_path):

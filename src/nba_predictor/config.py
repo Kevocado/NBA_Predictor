@@ -9,7 +9,7 @@ _env_project_root = os.environ.get("PROJECT_ROOT")
 PROJECT_ROOT = Path(_env_project_root) if _env_project_root else Path(__file__).resolve().parents[2]
 DATA_DIR = PROJECT_ROOT / "data"
 CACHE_DIR = DATA_DIR / "cache"
-CACHE_SUBDIRS = ["nba_api", "balldontlie", "odds", "sportsbook", "injuries", "espn"]
+CACHE_SUBDIRS = ["odds", "sportsbook", "injuries", "espn"]
 
 TRACKING_DB_PATH = Path(os.environ.get("TRACKING_DB_PATH", str(DATA_DIR / "tracking.db")))
 _backup = os.environ.get("TRACKING_DB_BACKUP_PATH")

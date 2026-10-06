@@ -3,7 +3,7 @@ import logging
 import os
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -38,6 +38,7 @@ from nba_predictor.models.player_props import in_sample_mae_by_stat
 from nba_predictor.data.team_reference import TEAMS, get_team
 from nba_predictor.odds.value_bets import std_from_mae
 from nba_predictor.pipeline.ingest import run_ingest
+from nba_predictor.odds import edge_gate
 from nba_predictor.pipeline.refresh_odds import refresh_market_predictions
 from nba_predictor.pipeline.retrain import run_retrain_pipeline
 from nba_predictor.services.calibration_service import compute_model_calibration
@@ -57,6 +58,7 @@ from nba_predictor.services.schedule_repository import (
     load_schedule,
 )
 from nba_predictor.tracking import store
+from nba_predictor.tracking.store import get_recent_market_predictions
 from nba_predictor.tracking.player_props import (
     actuals_by_player_stat,
     picks_by_player_stat,
@@ -528,6 +530,45 @@ def hub_vs_market(
     the same window as /hub/track-record, the scope reconciliation, and the
     method sentences the page prints verbatim."""
     return compute_vs_market(db_path, schedule)
+
+
+@router.get("/value-picks")
+def value_picks(
+    db_path: Path = Depends(get_db_path),
+    max_age_minutes: int = 60,
+    threshold: float = edge_gate.EDGE_THRESHOLD,
+) -> dict:
+    """The gated picks: at most one single per game, 5% edge, fresh odds only.
+
+    A measurement surface, not a recommendation. `picks` is frequently empty and
+    that is a real answer -- a stale slate or a day with no edge both produce
+    zero, and the thresholds are returned alongside so a reader can see what was
+    applied instead of taking it on trust.
+
+    The disclaimer is PL's framing, deliberately: a positive yield on a graded
+    ledger is not evidence that the gate found an edge. Nothing here places a
+    bet.
+    """
+    # `.isoformat()`, not a datetime object. `created_at` is TEXT holding an
+    # ISO-8601 string, and SQLite compares it as text -- but sqlite3 renders a
+    # datetime argument with a SPACE separator ("2026-10-06 13:16:09+00:00")
+    # while these rows use "T". " " sorts before "T", so every row then looked
+    # newer than `since` and the freshness filter was silently a no-op: a
+    # two-hour-old line would sail through as fresh.
+    since = (datetime.now(timezone.utc) - timedelta(minutes=max_age_minutes)).isoformat()
+    rows = [dict(r) for r in get_recent_market_predictions(db_path, since=since)]
+    picks = edge_gate.gated_picks(rows, threshold=threshold)
+    return {
+        "picks": picks,
+        "edge_threshold": threshold,
+        "max_odds_age_minutes": max_age_minutes,
+        "n_odds_rows_considered": len(rows),
+        "disclaimer": (
+            "A selection threshold, not advice. Historical hit rate and yield on "
+            "this ledger are measurements of past games, not evidence of a "
+            "profitable strategy, and nothing here places a bet."
+        ),
+    }
 
 
 @router.get("/snapshot-meta")

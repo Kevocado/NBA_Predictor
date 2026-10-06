@@ -604,3 +604,25 @@ def join_player_ids(
                 "rather than fuzzy-matched", name, team,
             )
     return resolved
+
+
+def get_recent_market_predictions(db_path: Path, since: str) -> list[sqlite3.Row]:
+    """Market rows stamped at or after `since`, newest first.
+
+    The freshness filter lives in the *reader* rather than only in the gate,
+    because the odds refresher appends a new row for every book on every pass
+    and the table has no uniqueness constraint: without this the gate would be
+    handed a season of lines and would have to discard nearly all of them.
+    `since` is an ISO-8601 timestamp string so this stays a plain SQL
+    comparison, the same form `get_market_predictions_for_game` already uses.
+    """
+    with get_connection(db_path) as conn:
+        cur = conn.execute(
+            """
+            SELECT * FROM game_market_predictions
+            WHERE created_at >= ?
+            ORDER BY created_at DESC, id DESC
+            """,
+            (since,),
+        )
+        return cur.fetchall()

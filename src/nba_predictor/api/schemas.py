@@ -12,6 +12,13 @@ class PredictionOut(BaseModel):
     home_win_probability: float
     predicted_margin: float
     predicted_total: float
+    # Spread cover probability (None when no line available)
+    cover_prob_spread: float | None = None
+    # Total over probability (None when no line available)
+    cover_prob_total: float | None = None
+    # Residual sigma from the manifest, driving the above
+    margin_sigma: float | None = None
+    total_sigma: float | None = None
 
 
 class MarketPredictionOut(BaseModel):
@@ -56,6 +63,10 @@ class GameDetailOut(GameOut):
     head_to_head: list[HeadToHeadMeetingOut] = []
     home_recent_form: list[str] = []
     away_recent_form: list[str] = []
+    # The availability gate's own sentence, or the reason it could not be read.
+    # "Checked against ESPN availability — 2 Out, 0 Day-to-Day" or the gate's
+    # actual state (e.g. "Injury report not yet published for this game").
+    injury_summary: str | None = None
 
 
 class PlayerPropOut(BaseModel):

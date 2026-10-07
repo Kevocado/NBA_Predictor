@@ -329,15 +329,7 @@ export function ExplainerPanel({
               </ul>
             </div>
           )}
-          {record && (
-            <RecordStrip
-              label={record.label}
-              hits={record.hits}
-              settled={record.settled}
-              rebuilt={record.rebuilt ?? 0}
-              preTip={record.preTip ?? null}
-            />
-          )}
+          {record && <RecordStrip label={record.label} hits={record.hits} settled={record.settled} />}
         </div>
       )}
 

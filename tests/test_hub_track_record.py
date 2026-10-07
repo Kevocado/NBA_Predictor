@@ -187,3 +187,74 @@ def test_earliest_snapshot_wins_even_when_the_rerun_is_inserted_first(tmp_path):
         f"MAE {by_stat['points'].mae} -- the rerun (99.0) was graded instead of "
         "the earliest pick (22.0 vs actual 20.0 => 2.0)"
     )
+
+
+def test_stamps_share_one_format_so_string_order_is_instant_order(tmp_path):
+    """The guard on `_summarize_player_props` ordering in SQL.
+
+    That function ranks the earliest snapshot per key with `ORDER BY
+    created_at`, a STRING sort, where `tracking.timing` ranks by parsed
+    instant. The two agree only while one writer emits one format, so that is
+    asserted rather than assumed: a writer that starts stamping local time, or
+    `Z` suffixes, or differing widths would silently change which pick counts.
+
+    `datetime.now(timezone.utc).isoformat()` is the only writer, and it emits
+    `YYYY-MM-DDTHH:MM:SS.ffffff+00:00` -- fixed width, fixed offset, so
+    lexicographic order is chronological order.
+    """
+    db_path = _db(tmp_path)
+    for i in range(3):
+        store.insert_player_prediction(
+            db_path, player_id=f"p{i}", game_id="g1", stat="points",
+            predicted_value=20.0, created_at=f"2026-01-0{i + 1}T12:00:00.000000+00:00",
+            position="G",
+        )
+        store.insert_player_outcome(
+            db_path, player_id=f"p{i}", game_id="g1", stat="points",
+            actual_value=25.0, recorded_at=f"2026-01-0{i + 1}T13:00:00.000000+00:00",
+        )
+    # Written before the read, never inside it: `get_connection` takes the
+    # module's _DB_LOCK, so an insert in that block would wait on a lock the
+    # same thread already holds.
+    with store.get_connection(db_path) as conn:
+        for table, column in (
+            ("player_prediction_snapshots", "created_at"),
+            ("game_player_outcomes", "recorded_at"),
+        ):
+            formats = {
+                row[0] for row in conn.execute(
+                    f"SELECT DISTINCT LENGTH({column}) || '|' || SUBSTR({column}, -6) "
+                    f"FROM {table}"
+                ).fetchall()
+            }
+            assert formats == {"32|+00:00"}, (
+                f"{table} stamps are no longer one format: {formats}"
+            )
+
+
+def test_a_rerun_does_not_replace_the_counted_player_prop(tmp_path):
+    """The dedupe is load-bearing and must survive the move into SQL.
+
+    The daily refresh re-presents a rolling window, so a later re-score lands a
+    second row for the same (game, player, stat). `rn = 1` must keep the
+    earliest, or a rerun would restate the published MAE.
+    """
+    db_path = _db(tmp_path)
+    store.insert_player_prediction(
+        db_path, player_id="p1", game_id="g1", stat="points", predicted_value=20.0,
+        created_at="2026-01-01T00:00:00+00:00", position="G",
+    )
+    store.insert_player_prediction(
+        db_path, player_id="p1", game_id="g1", stat="points", predicted_value=99.0,
+        created_at="2026-06-01T00:00:00+00:00", position="G",
+    )
+    store.insert_player_outcome(
+        db_path, player_id="p1", game_id="g1", stat="points",
+        actual_value=25.0, recorded_at="2026-01-02T00:00:00+00:00",
+    )
+
+    rows = {r.market: r for r in hub_service.compute_track_record(db_path, [])}
+    prop = rows["player_props"]
+    assert prop.total_predictions == 1, "the rerun was counted a second time"
+    assert [s.stat for s in prop.per_stat] == ["points"]
+    assert prop.per_stat[0].mae == 5.0, prop.per_stat

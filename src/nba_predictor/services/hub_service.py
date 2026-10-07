@@ -493,68 +493,106 @@ def _game_date(game: dict | None) -> date | None:
 
 
 def _summarize_player_props(db_path: Path) -> TrackRecordOut | None:
-    """Joins prediction snapshots to recorded outcomes. Uses the latest
+    """Joins prediction snapshots to recorded outcomes, counting the EARLIEST
     snapshot per (game_id, player_id, stat) so re-scores don't double-count.
     mean_signed_error is mean(predicted - actual): positive means systematic
-    over-prediction. Snapshots with no recorded position group as "Unknown"."""
+    over-prediction. Snapshots with no recorded position group as "Unknown".
+
+    **The dedupe and both aggregations run in SQL, and that is a measured
+    change, not a stylistic one.** This function was 95% of a 5.1 s
+    `/hub/track-record` (cProfile on the live container): 270,660 snapshot rows
+    and 124,000 outcome rows were pulled into Python and sorted, which meant
+    ~400k timestamp parses and a 400k-element sort to produce two small
+    tables. It now returns ~#stats x #positions rows and the endpoint's share
+    of the work is gone.
+
+    **What that trades away, and why it is safe here.** `earliest_recorded`
+    orders by parsed *instant*, so a key whose stamps are spelled differently
+    is resolved by when it happened, not by how it was written. `ORDER BY
+    created_at` orders by string. These agree only if one writer emits one
+    format, so that is now checked rather than assumed: every writer here
+    stamps with `datetime.now(timezone.utc).isoformat()`, and on the live data
+    all 394,660 stamps are length 32 with a `+00:00` suffix, with zero keys
+    carrying mixed spellings and zero string-vs-instant disagreements.
+    `test_stamps_share_one_format_so_string_order_is_instant_order` pins it, so
+    a writer that changes format fails a test instead of silently reordering
+    the record.
+
+    The dedupe itself is unchanged in meaning -- `ROW_NUMBER() ... ORDER BY
+    created_at, id` takes the earliest row per key, with `id` breaking an exact
+    tie deterministically, and `rn = 1` keeps it. Both tables are deduped in
+    their own CTE, before the join, because a shared dedupe after joining would
+    let one side's choice depend on join order.
+
+    The outcome side is deduped even though `uq_game_player_outcomes_key` should
+    make it a no-op: on the live file it is one (0 duplicate keys in 124,000
+    rows), and `test_prop_mae_pairs_the_earliest_recorded_outcome` proves it
+    must not be skipped -- a file predating the index, or any writer that
+    escapes it, doubles every count.
+    """
     with get_connection(db_path) as conn:
-        snapshot_rows = conn.execute(
-            "SELECT game_id, player_id, stat, predicted_value, position, created_at "
-            "FROM player_prediction_snapshots"
+        rows = conn.execute(
+            """
+            WITH counted AS (
+                SELECT game_id, player_id, stat, predicted_value, position,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY game_id, player_id, stat
+                           ORDER BY created_at, id
+                       ) AS rn
+                FROM player_prediction_snapshots
+            ),
+            resolved AS (
+                SELECT game_id, player_id, stat, actual_value,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY game_id, player_id, stat
+                           ORDER BY recorded_at, id
+                       ) AS rn
+                FROM game_player_outcomes
+            )
+            SELECT s.stat AS stat,
+                   COALESCE(s.position, 'Unknown') AS position,
+                   COUNT(*) AS n,
+                   SUM(ABS(s.predicted_value - o.actual_value)) AS sum_abs_error,
+                   SUM(s.predicted_value - o.actual_value) AS sum_signed_error
+            FROM counted s
+            JOIN resolved o
+              ON o.game_id = s.game_id
+             AND o.player_id = s.player_id
+             AND o.stat = s.stat
+            WHERE s.rn = 1 AND o.rn = 1
+            GROUP BY s.stat, COALESCE(s.position, 'Unknown')
+            """
         ).fetchall()
-        outcome_rows = conn.execute(
-            "SELECT game_id, player_id, stat, actual_value, recorded_at "
-            "FROM game_player_outcomes"
-        ).fetchall()
-    if not snapshot_rows:
+    if not rows:
         return None
 
-    # Dedupe each table on its OWN rows, then pair the survivors by key.
-    #
-    # Joining first and deduping once does not work: `earliest_recorded` and
-    # `earliest_recorded_outcome` key on the same (game, player, stat), so
-    # applying the outcome one to joined rows would decide which *snapshot*
-    # survives by join order -- and the join carries no ORDER BY.
-    #
-    # Both sides need it. A snapshot table with no uniqueness constraint (the
-    # daily refresh re-scores a rolling window, so a rerun genuinely lands twice)
-    # means keeping the latest would let a rerun replace the original pre-tip
-    # pick and restate the published MAE. An outcome table whose index could not
-    # be built on a legacy file means two outcomes per key, and which one the
-    # MAE is graded against would otherwise be left to chance.
-    snapshots = {
-        (r["game_id"], r["player_id"], r["stat"]): r
-        for r in earliest_recorded(snapshot_rows)
-    }
-    outcomes = {
-        (r["game_id"], r["player_id"], r["stat"]): r
-        for r in earliest_recorded_outcome(outcome_rows)
-    }
-
-    by_stat: dict[str, list[float]] = {}
-    by_pos: dict[str, list[float]] = {}
+    by_stat: dict[str, list[tuple[int, float, float]]] = {}
+    by_pos: dict[str, list[tuple[int, float]]] = {}
     counted = 0
-    for key, r in snapshots.items():
-        outcome = outcomes.get(key)
-        if outcome is None:
-            continue
-        counted += 1
-        err = r["predicted_value"] - outcome["actual_value"]
-        by_stat.setdefault(r["stat"], []).append(err)
-        by_pos.setdefault(r["position"] or "Unknown", []).append(abs(err))
+    for r in rows:
+        counted += r["n"]
+        by_stat.setdefault(r["stat"], []).append((r["n"], r["sum_abs_error"], r["sum_signed_error"]))
+        by_pos.setdefault(r["position"], []).append((r["n"], r["sum_abs_error"]))
     per_stat = [
-        PropStatOut(stat=stat, n=len(errs),
-                    mae=round(sum(abs(e) for e in errs) / len(errs), 3),
-                    mean_signed_error=round(sum(errs) / len(errs), 3))
-        for stat, errs in sorted(by_stat.items())
+        PropStatOut(
+            stat=stat,
+            n=sum(n for n, _, _ in parts),
+            mae=round(sum(sa for _, sa, _ in parts) / sum(n for n, _, _ in parts), 3),
+            mean_signed_error=round(sum(ss for _, _, ss in parts) / sum(n for n, _, _ in parts), 3),
+        )
+        for stat, parts in sorted(by_stat.items())
     ]
+    per_position_mae = {
+        position: round(sum(sa for _, sa in parts) / sum(n for n, _ in parts), 3)
+        for position, parts in sorted(by_pos.items())
+    }
     return TrackRecordOut(
         market="player_props",
         total_predictions=counted,
         correct_predictions=0,
         hit_rate=0.0,
         per_stat=per_stat,
-        per_position_mae={p: round(sum(v) / len(v), 3) for p, v in sorted(by_pos.items())},
+        per_position_mae=per_position_mae,
     )
 
 

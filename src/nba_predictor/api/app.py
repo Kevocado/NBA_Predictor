@@ -12,6 +12,7 @@ from nba_predictor.api.explain import router as explain_router
 from nba_predictor.api.facts import router as facts_router
 from nba_predictor.api.signals import router as signals_router
 from nba_predictor.api.routes import router, start_mae_warmer, _market_stds_from_manifest
+from nba_predictor.services.hub_service import warm_player_props_cache
 from nba_predictor.pipeline.odds_refresher import start_odds_refresher
 from nba_predictor.tracking.store import init_db
 
@@ -46,6 +47,13 @@ async def lifespan(app: FastAPI):
     failures are logged inside warm_mae_cache, so a database that cannot be read
     yet at boot delays nothing and takes nothing down.
 
+    The track-record player-props aggregate gets the same treatment, once, here.
+    It is a 1.5s aggregate over 270,660 snapshots and 124,000 outcomes that
+    `GET /hub/track-record` needs on every request, and a cold first visitor
+    should not pay for it. No second thread: that aggregate's bound is a 300s
+    TTL rather than a database-state change, so past the TTL a request simply
+    recomputes it, which is the correct answer and needs no polling to get it.
+
     The odds refresher is the same shape and for the same reason.
     `POST /refresh-odds` is `Depends(require_admin)`, so before this it ran only
     when somebody called it by hand: the deployed container held
@@ -55,6 +63,10 @@ async def lifespan(app: FastAPI):
     cadence is the sportsbook cache TTL — a faster tick spends no requests,
     because the responses are already cached, and achieves nothing.
     """
+    try:
+        warm_player_props_cache(config.TRACKING_DB_PATH)
+    except Exception:  # noqa: BLE001 - a warm that cannot start must not stop the app
+        logging.getLogger(__name__).exception("player-props aggregate warm could not start")
     try:
         start_mae_warmer(config.TRACKING_DB_PATH, get_schedule_path())
     except Exception:  # noqa: BLE001 - a warm that cannot start must not stop the app

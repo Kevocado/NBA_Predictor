@@ -51,6 +51,7 @@ from nba_predictor.services.hub_service import (
     compute_vs_market,
     load_hub_cache,
     load_player_name_map,
+    warm_player_props_cache,
 )
 from nba_predictor.services.schedule_repository import (
     default_week_start,
@@ -376,7 +377,15 @@ def note_database_changed(db_path: Path, schedule: list[dict]) -> bool:
     """The write path's own re-warm. run_ingest is what writes predictions and
     outcomes, so it knows the MAE has changed; it says so here instead of waiting
     for the poller to notice. Reuses the existing (mtime, size) invalidation --
-    no second notion of "the database changed" is introduced."""
+    no second notion of "the database changed" is introduced.
+
+    The track-record player-props aggregate is re-warmed here too. Its own bound
+    is a TTL rather than a database-state key, so this is a courtesy, not the
+    invalidation mechanism: a write that lands between two TTL expiries would
+    otherwise leave a five-minute-old aggregate on the page for the rest of its
+    window. A warm that fails is reported and ignored here -- the TTL still
+    expires and the next request recomputes."""
+    warm_player_props_cache(db_path)
     return warm_mae_cache(db_path, schedule)
 
 

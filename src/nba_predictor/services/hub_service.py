@@ -1,5 +1,9 @@
 import json
+import logging
+import os
 import sqlite3
+import threading
+import time
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -27,6 +31,136 @@ from nba_predictor.tracking.timing import (
 
 
 _CONFIDENCE_BUCKETS = [("50-60%", 0.50, 0.60), ("60-70%", 0.60, 0.70), ("70%+", 0.70, 1.01)]
+
+logger = logging.getLogger(__name__)
+
+
+# --------------------------------------------------------------------------
+# The player-props aggregate cache.
+#
+# WHY THIS EXISTS. `_summarize_player_props` aggregates 270,660 snapshots and
+# 124,000 outcomes to produce eight rows. Measured on the live database, it is
+# 1.465s, and `GET /hub/track-record` was 3.3s where every other hub route is
+# 0.09-0.19s. Kevin accepted a few minutes of staleness on this route
+# (NBA_Predictor#48) to get there.
+#
+# WHAT IS CACHED, AND WHAT IS NOT. Only this aggregate. The per-pick tables,
+# the weekly breakdowns and the counted record are recomputed on every request,
+# because those answer "what did we say, and when" -- a question about picks
+# still being made -- and a five-minute-old answer to it is not a rounding
+# difference. The aggregate answers "how wrong have we been across the season",
+# which is a different kind of claim and is the expensive one.
+#
+# WHY THE TTL IS THE ONLY KEY. `api/routes.py::_MAE_CACHE` also keys on the
+# tracking file's (mtime, size), so a write invalidates it immediately. That is
+# strictly fresher, and it is deliberately NOT done here: the decision accepted
+# staleness bounded by time, so this is bounded by time. One entry per database,
+# which also means the dict cannot grow.
+#
+# THE FAILURE RULE, WHICH IS NOT THE MAE CACHE'S RULE. On a failed recompute
+# past the TTL this serves the last good value and says so in
+# `served_stale_seconds`, rather than dropping the entry and raising the way
+# `_mae_record` does. That is the decision for this route: an error page is
+# worse than a disclosed old number. It is still never silent -- the field
+# carries the age in seconds, so the site can print it. With nothing cached yet
+# (a cold failure) there is no last good value and the error propagates, because
+# inventing a figure is not on the menu.
+# --------------------------------------------------------------------------
+
+PLAYER_PROPS_CACHE_TTL_SECONDS = float(os.getenv("PLAYER_PROPS_CACHE_TTL_SECONDS", "300"))
+
+# db_path -> (stored_at, value, last_failed_at). `last_failed_at` is recorded so
+# the age of a value that could not be refreshed is reportable rather than lost.
+_PROPS_AGG_CACHE: dict[str, tuple[float, TrackRecordOut | None, float | None]] = {}
+
+# One aggregate in flight at a time, per the MAE cache's reasoning: two
+# concurrent cold requests would otherwise run the identical 1.5s aggregate and
+# serialise on the tracking store's global lock. Bounded, so a hung warm costs a
+# request its own compute rather than its availability.
+_PROPS_AGG_LOCK = threading.Lock()
+PROPS_AGG_COMPUTE_WAIT_SECONDS = float(os.getenv("PROPS_AGG_COMPUTE_WAIT_SECONDS", "30"))
+
+
+def clear_player_props_cache() -> None:
+    """Drop every cached aggregate. For tests, and for a write path that wants a
+    guaranteed cold read rather than whatever the TTL happens to allow."""
+    _PROPS_AGG_CACHE.clear()
+
+
+def cached_player_props(
+    db_path: Path, *, now=time.monotonic, compute=None
+) -> TrackRecordOut | None:
+    """The player-props aggregate, from cache inside the TTL and fresh past it.
+
+    `compute` is the aggregation, injected so a test can count calls and fail on
+    demand without touching 400k rows. `now` is a clock, injected so the bound is
+    testable without sleeping.
+
+    Returns None when there is nothing to report and nothing cached, which is the
+    same answer the uncached function gives.
+    """
+    key = str(db_path)
+    if compute is None:
+        def compute():
+            return _summarize_player_props(db_path)
+
+    entry = _PROPS_AGG_CACHE.get(key)
+    if entry is not None and now() - entry[0] < PLAYER_PROPS_CACHE_TTL_SECONDS:
+        return _with_freshness(entry[1], None)
+
+    waited = _PROPS_AGG_LOCK.acquire(timeout=PROPS_AGG_COMPUTE_WAIT_SECONDS)
+    try:
+        # Re-read under the lock: an in-flight compute may have just landed.
+        entry = _PROPS_AGG_CACHE.get(key)
+        if entry is not None and now() - entry[0] < PLAYER_PROPS_CACHE_TTL_SECONDS:
+            return _with_freshness(entry[1], None)
+        try:
+            value = compute()
+        except Exception as exc:  # noqa: BLE001 - reported, never swallowed: see below
+            if entry is None or entry[1] is None:
+                # Cold failure: there is no last good value to serve. Propagate --
+                # a request must not be handed a figure that was never computed.
+                logger.error(
+                    "player-props aggregate failed with nothing cached for %s: %s: %s",
+                    db_path, type(exc).__name__, exc,
+                )
+                raise
+            # Warm failure: serve the last good value, aged and disclosed.
+            logger.error(
+                "player-props aggregate refresh failed for %s, serving the last good "
+                "value (%.0fs old): %s: %s",
+                db_path, now() - entry[0], type(exc).__name__, exc,
+            )
+            _PROPS_AGG_CACHE[key] = (entry[0], entry[1], now())
+            return _with_freshness(entry[1], now() - entry[0])
+        _PROPS_AGG_CACHE[key] = (now(), value, None)
+        return _with_freshness(value, None)
+    finally:
+        if waited:
+            _PROPS_AGG_LOCK.release()
+
+
+def warm_player_props_cache(db_path: Path, *, now=time.monotonic) -> bool:
+    """Fill the cache off the request path. Never raises: a warm that fails must
+    not take the API down, and must not leave a previous value looking current."""
+    try:
+        cached_player_props(db_path, now=now)
+    except Exception as exc:  # noqa: BLE001 - reported, not raised: see docstring
+        logger.error("player-props cache warm failed for %s: %s: %s", db_path, type(exc).__name__, exc)
+        return False
+    return True
+
+
+def _with_freshness(value: TrackRecordOut | None, stale_seconds: float | None) -> TrackRecordOut | None:
+    """The value, tagged with how stale it is. None means fresh.
+
+    A copy, so the cached object is never mutated by a consumer's rendering --
+    and so a `served_stale_seconds` on one response cannot leak into the next
+    request served from the same cached value.
+    """
+    if value is None:
+        return None
+    return value.model_copy(update={"served_stale_seconds": stale_seconds})
 
 
 def _bucket_for(prob: float) -> str | None:
@@ -701,7 +835,7 @@ def compute_track_record(
         pre_tip_by_market["game_outcome"] = outcome_pre_tip
         rows.append(game_outcome)
 
-    player_props = _summarize_player_props(db_path)
+    player_props = cached_player_props(db_path)
     if player_props is not None:
         rows.append(player_props)
     # Every settled market gets the SAME window, so the weekly tables align

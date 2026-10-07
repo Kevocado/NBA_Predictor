@@ -148,6 +148,7 @@ describe("TrackRecordPanel", () => {
   it("never prints a rate for a market with no pre-tip figure to compare", async () => {
     // A settled market whose pre-tip subset graded nothing reads as a dash,
     // never 0% -- "never measured" is not "measured at zero".
+    // The "Made before tip-off" section is hidden when there are no pre-tip picks.
     vi.mocked(api.getTrackRecord).mockResolvedValue([
       row({
         market: "h2h", total_predictions: 300, correct_predictions: 150, hit_rate: 0.5,
@@ -157,11 +158,9 @@ describe("TrackRecordPanel", () => {
     ]);
     render(<TrackRecordPanel />);
 
+    // The "Made before tip-off" section should not be rendered when there are no pre-tip picks
     const PRE_TIP = "Accuracy on picks made before tip-off";
-    await screen.findByText(PRE_TIP);
-    const preTipRow = rowWith(PRE_TIP, "Moneyline");
-    expect(preTipRow).toHaveTextContent("—");
-    expect(preTipRow.textContent).not.toMatch(/%/);
+    expect(screen.queryByText(PRE_TIP)).not.toBeInTheDocument();
   });
 
   it("never prints a rate for a market the backend has not settled", async () => {

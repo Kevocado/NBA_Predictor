@@ -1,109 +1,110 @@
 # Multi-season backfill — evaluation
 
-**Date:** 2026-10-07 · **Branch:** `feat/multi-season-backfill`
+**Date:** 2026-10-07 · **Branch:** `feat/multi-season-backfill` · **Supersedes:** nothing; first version of this file
 
 The plan's gate for this work: *"score the new model only on the 758 Phase A
 out-of-fold games (same dates, same windows) … If the new model does not beat
 Phase A on the identical games, say so and do not ship it."*
 
-**That gate is not yet answerable, and the reason is below.** What *is* measured
-is a clean A/B on an identical frame, and multi-season history wins every
-metric on it.
+**The gate is closed.** Multi-season history beats Phase A on the identical 758
+games on all five metrics.
 
 ## What was fetched
 
 3 prior seasons plus the current one, through the ESPN endpoints already in
-use (`get_scoreboard`, `get_boxscore`), 4,248 cache files, ~40 min.
+use (`get_scoreboard`, `get_boxscore`). 4,248 cache files, ~40 min, plus a
+second pass for the playoffs (see *The correction* below).
 
-| season | games | with box score |
-|---|---|---|
-| 2023 (Oct 23 – Apr 24) | 1,332 | 1,328 |
-| 2024 (Oct 24 – Apr 25) | ~1,330 | ~1,327 |
-| 2025 (Oct 25 – Apr 26) | ~1,330 | ~1,327 |
-| 2026 (to 2026-10-07) | 17 | 12 |
-
-**3,983 training rows**, 2023-10-05 → 2026-10-06. Phase A trained on 1,368.
-
-Coverage is 99.6%, so ESPN really does hold the history — no new endpoint and
-no new client were needed. A failed season would be named in `failed_seasons`
-rather than abandoning the run; the first attempt did exactly that, dying on a
-DNS failure after a full season and losing the lot until that was fixed.
-
-## Table 1 — the valid comparison
-
-Same frame, same windows, **identical test games**. `n_test` per window is
-`[214, 214, 209, 169, 2]` in *both* runs, which is the mechanism's proof that
-history widens training and does not move the holdout. Pooled n=808.
-
-| metric | single-season | + 3 seasons | change |
+| season | range | games | with box score |
 |---|---|---|---|
-| win log-loss | 0.6716 | **0.6644** | −0.0072 |
-| win Brier | 0.2392 | **0.2359** | −0.0033 |
-| win AUC | 0.5966 | **0.6132** | +0.0166 |
-| margin MAE | 13.1290 | **12.9709** | −0.158 |
-| total MAE | 16.2296 | **15.9203** | −0.309 |
+| 2023 | 2023-09-25 … 2024-06-30 | 1,385 | 1,383 |
+| 2024 | 2024-09-25 … 2025-06-30 | 1,396 | 1,385 |
+| 2025 | 2025-09-25 … 2026-06-30 | 1,391 | 1,387 |
+| 2026 | to 2026-10-07 | 17 | 12 |
 
-Training grew from 501/715/929/1138/1307 to 3126/3340/3554/3763/3932.
+**4,167 training rows**, 2023-10-05 → 2026-10-06, including **135 playoff
+games**. Phase A trained on 1,368. Coverage is 99.6%, so ESPN really does hold
+five seasons — no new endpoint and no new client were needed.
 
-**History wins all five**, including the two where Phase A already beat naive.
-That is a real result and it is the reason to keep going — but it is not yet
-the gate.
+## The reproduction check, first
 
-## Table 2 — against Phase A's published numbers (NOT a valid comparison)
+Before comparing anything, the baseline is re-run with no history. If it does
+not reproduce Phase A, the comparison is meaningless and no amount of
+improvement downstream would be evidence of anything.
 
-Shown because it is the number that would decide a ship, and because hiding it
-would be the dishonest choice.
-
-| metric | Phase A (published) | + 3 seasons | direction |
+| metric | Phase A (published) | reproduced here | Δ |
 |---|---|---|---|
-| win log-loss | 0.6636 | 0.6644 | worse by 0.0008 |
-| win Brier | 0.2351 | 0.2359 | worse by 0.0008 |
-| win AUC | 0.6285 | 0.6132 | worse by 0.0153 |
-| margin MAE | 13.232 | 12.9709 | better by 0.26 |
-| total MAE | 16.512 | 15.9203 | better by 0.59 |
+| pooled n | 758 | **758** | 0 |
+| win log-loss | 0.6636 | **0.6636** | 0.0000 |
+| win Brier | 0.2351 | **0.2351** | 0.0000 |
+| win AUC | 0.6285 | 0.6288 | +0.0003 |
+| margin MAE | 13.232 | 13.2319 | 0.0001 |
+| total MAE | 16.512 | 16.5115 | 0.0005 |
+| margin naive (train mean) | 14.018 | 14.0181 | 0.0001 |
 
-**These two columns are not comparable and must not be read as a result.** The
-frames differ:
+Same 1,368-game frame, same 758 pooled out-of-fold games. **This is the exact
+comparison the plan asks for**, and it is only exact because the reproduction
+came first.
 
-| | Phase A | this run |
-|---|---|---|
-| games in the Phase A window | 1,368 | **1,331** |
-| pooled out-of-fold n | 758 | **808** |
+One column does not match: Phase A's total `naive_fixed` was 16.375, and
+against this frame's own mean total (230.174) it is 16.2256. Their fixed
+constant is not recorded in the doc, so I cannot say what it was. It is a
+baseline, not a deciding metric, and it does not affect any verdict below.
 
-Phase A's cache was built by a fetch on 2026-10-05 and is not in the repo; this
-backfill rebuilt the window from ESPN on 2026-10-07, and ESPN now answers
-differently for 37 of those dates (a game whose box score was unavailable on the
-5th has one now, and the window's date cuts land elsewhere). Different games, so
-different windows, so a different 808.
+## The comparison
 
-## What is needed to close the gate
+Identical test games: `n_test` per window is `[250, 249, 204, 51, 4]` in *both*
+runs — the mechanism's own proof that history widened training and did not move
+the holdout. Pooled n=758.
 
-One of:
+| metric | Phase A | + 3 seasons | change |
+|---|---|---|---|
+| win log-loss | 0.6636 | **0.6542** | −0.0094 |
+| win Brier | 0.2351 | **0.2309** | −0.0042 |
+| win AUC | 0.6285 | **0.6448** | +0.0163 |
+| margin MAE | 13.232 | **13.0638** | −0.168 |
+| total MAE | 16.512 | **16.1749** | −0.337 |
 
-1. **Phase A's original `data/cache/training/games.json`**, if it still exists
-   anywhere — restore it, score the multi-season model on its 758, and the
-   comparison is exact. This is the cheap path.
-2. Otherwise re-run Phase A's pipeline on *its* frame to regenerate the 758,
-   which means pinning the fetch to 2026-10-05's answer for every date rather
-   than today's.
+Training grew from 610/860/1109/1313/1364 to 3360/3610/3859/4063/4114.
 
-Until one of those happens, the honest statement is: **multi-season history
-helps a multi-season model on identical held-out games, and it has not been
-shown to beat the 758-game Phase A baseline.**
+**All five improve.** The AUC move (+0.0163) is the one worth watching: Phase A
+reported the win model as barely better than a coin flip at 0.6285, and 0.6448
+is still modest, but it is a real improvement on a model whose log-loss already
+beat the naive base rate.
 
-## Known gaps, not glossed
+## The correction, because the first version of this file said the opposite
+
+The first run of this backfill fetched with `SEASON_END = 25 April`, and the
+playoffs end in June. So the frame held **zero** playoff games, and on that frame:
+
+- `phase_a_only` scored 0.6716, not 0.6636;
+- pooled n was **808**, not 758;
+- and against Phase A's published numbers, win log-loss, Brier and AUC all came
+  out *worse*, so the conclusion was "history does not ship".
+
+Every one of those numbers was wrong, and the reason shows up as soon as you
+run the reproduction check instead of trusting the comparison. A baseline that
+does not reproduce is not a baseline. The missing 135 playoff games were worth
+0.008 of log-loss on their own — enough to account for the whole apparent
+regression, and enough to flip the result once they were fetched.
+
+CodeRabbit's *"extend the end bound if the cache must include the whole
+playoffs"* is therefore not a style note. It was worth more than the entire
+result it appeared alongside, and the only reason I caught it was that the
+reproduction disagreed with the published doc.
+
+## Still open
 
 - **Season carry-over is not implemented.** `add_rolling_four_factors` does
   `shift(1).rolling(10)` per team across the whole frame, so week 1 of a season
   currently averages the *previous* season's last 10 games across a six-month
-  gap. That is a real weakness in the very features the extra data feeds, and it
-  is the next thing to build — deliberately after this measurement, because
-  carry-over is a refinement and it should not be built before knowing whether
-  the extra data pays at all. On this evidence it does.
-- `SEASON_START` was 20 October and was wrong — NBA seasons open in the first
-  week of October, so it dropped ~3 weeks per season and the entire current
-  season. Fixed to 25 September, which is why the frame above reaches
-  2023-10-05 and 2026-10-06.
+  gap. That is a real weakness in the very features the extra data feeds. It is
+  deliberately built after this measurement, not before: carry-over is a
+  refinement, and it should not be built until the base data is known to pay.
+  On this evidence it does, so carry-over is the next thing to build, and it
+  must be scored on the same 758 games before it ships too.
+- Nothing ships *from this PR* — it is the fetch tool, the comparison harness
+  and this document. The model change lands separately.
 
 ## Reproducing
 

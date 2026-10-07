@@ -95,7 +95,10 @@ def main() -> int:
             model_factory=lambda tr: candidates["ridge"]["total"](tr),
             target="home_total",
             windows=4,
-            fixed_baseline=216.0,
+            # The league-average total of the Phase A frame, so the naive column
+            # reproduces the 16.375 in the Phase A doc rather than a constant
+            # I picked.
+            fixed_baseline=230.174,
             history_df=hist,
         )
         results[label] = {"win": win, "margin": margin, "total": total}

@@ -36,24 +36,41 @@ from nba_predictor.pipeline.ingest import (
     to_training_frame,
 )
 
-#: An NBA season runs from late October to the following April. These bounds are
-#: the outermost dates a season can contain; the loop asks ESPN for each date and
-#: takes what comes back, so the bounds only have to be generous, not exact.
-SEASON_START = (10, 20)
-SEASON_END = (4, 15)
+#: An NBA season runs from early October to the following April.
+#:
+#: The start is deliberately EARLY. This was 20 October and it was wrong: the
+#: first games of a season are in the first week of October, and Phase A's own
+#: training frame opens on 2025-10-02. A bound of Oct 20 silently dropped about
+#: three weeks per season -- and the whole current season, whose games run
+#: 2026-10-01 to 2026-10-07 and were therefore absent from a backfill run on
+#: 2026-10-07. The end is the other side of the same coin: late enough to hold
+#: the whole playoffs run.
+#:
+#: Over-wide costs a few empty scoreboard queries per season and is harmless,
+#: because the loop asks ESPN for each date and takes what comes back.
+SEASON_START = (9, 25)
+SEASON_END = (4, 25)
 
 logger = logging.getLogger(__name__)
 
 
-def season_bounds(season: int) -> tuple[str, str]:
+def season_bounds(season: int, *, today: date | None = None) -> tuple[str, str]:
     """The date range covering one season, where `season` is its starting year.
 
     `season=2024` is Oct 2024 - Apr 2025. `season=2023` is Oct 2023 - Apr 2024.
+
+    **A season in progress is clamped to today.** Asking for the current season
+    used to return Oct 20 - Apr 15, which silently dropped the opening weeks of
+    the season that is actually being played -- and those are the games the
+    Phase A comparison is scored on, so the frame would have been quietly
+    missing exactly the rows it is measured against.
     """
-    return (
-        f"{season:04d}-{SEASON_START[0]:02d}-{SEASON_START[1]:02d}",
-        f"{season + 1:04d}-{SEASON_END[0]:02d}-{SEASON_END[1]:02d}",
-    )
+    start = f"{season:04d}-{SEASON_START[0]:02d}-{SEASON_START[1]:02d}"
+    end = f"{season + 1:04d}-{SEASON_END[0]:02d}-{SEASON_END[1]:02d}"
+    now = today or date.today()
+    if start <= now.isoformat() < end:
+        end = now.isoformat()
+    return start, end
 
 
 def prior_seasons(n: int, *, before: date | None = None) -> list[int]:
@@ -75,6 +92,7 @@ def backfill_seasons(
     fetch=fetch_schedule_range,
     enrich=enrich_with_boxscores,
     log=print,
+    today: date | None = None,
 ) -> dict:
     """Warm the cache for `seasons`, then write the combined training cache.
 
@@ -87,7 +105,7 @@ def backfill_seasons(
     games: list[dict] = []
     per_season: dict[str, dict] = {}
     for season in seasons:
-        start, end = season_bounds(season)
+        start, end = season_bounds(season, today=today)
         log(f"Season {season}: {start} .. {end}")
         # One season failing must not abandon the others. This is a multi-hour
         # fetch and the network will drop: the first run of this took a whole

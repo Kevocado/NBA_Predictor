@@ -43,8 +43,22 @@ def _game(game_id: str, game_date: str, *, completed=True, with_box=True) -> dic
 
 def test_season_bounds_cover_one_season_from_october_to_april():
     start, end = backfill.season_bounds(2023)
-    assert start == "2023-10-20"
-    assert end == "2024-04-15"
+    # Early enough to hold the season's first games: Phase A's own training
+    # frame opens 2025-10-02, so a later start would drop ~3 weeks per season.
+    assert start == "2023-09-25"
+    assert start < "2023-10-07", "the bound starts after the season has"
+    assert end == "2024-04-25"
+
+
+def test_the_season_start_precedes_the_first_games_of_a_real_season():
+    """Pinned against a fact, not a guess: the 2025-26 season opened 2025-10-02
+    (the first row of Phase A's frame), and the 2026-27 season's first games are
+    in the first week of October too."""
+    for season in (2023, 2024, 2025, 2026):
+        start, _ = backfill.season_bounds(season)
+        assert start < f"{season}-10-07", (
+            f"season {season} starts after its own opening games"
+        )
 
 
 def test_prior_seasons_walks_backwards_and_stops_before_the_current_one():
@@ -69,7 +83,7 @@ def test_backfill_writes_a_training_cache_and_asks_for_each_season(tmp_path):
         fetch=fetch, enrich=enrich, log=lambda _m: None,
     )
 
-    assert asked == [("2023-10-20", "2024-04-15"), ("2024-10-20", "2025-04-15")]
+    assert asked == [("2023-09-25", "2024-04-25"), ("2024-09-25", "2025-04-25")]
     assert out["n_training_rows"] == 4
     written = json.loads((tmp_path / "games.json").read_text())
     assert len(written) == 4
@@ -249,3 +263,41 @@ def test_a_complete_run_reports_no_failed_seasons(tmp_path):
         fetch=lambda s, e: [_game("g1", s)], enrich=lambda g: g, log=lambda _m: None,
     )
     assert out["failed_seasons"] == []
+
+
+def test_a_season_in_progress_is_clamped_to_today():
+    """Asking for the current season must not drop its opening weeks.
+
+    The frame is compared against Phase A's, whose rows are the current season's
+    games -- so a bound of Oct 20 - Apr 15 for a season that started on Oct 1
+    would quietly omit exactly the rows the comparison is measured on.
+    """
+    # Mid-season: the start is in the past, so it stands, and the end is today.
+    start, end = backfill.season_bounds(2026, today=date(2026, 11, 3))
+    assert start == "2026-09-25"
+    assert end == "2026-11-03", "the in-progress season ran past today"
+
+    # A finished season is untouched.
+    assert backfill.season_bounds(2023, today=date(2026, 11, 3)) == (
+        "2023-09-25", "2024-04-25",
+    )
+
+    # Before a season has started, its end stays in the future.
+    assert backfill.season_bounds(2027, today=date(2026, 11, 3)) == (
+        "2027-09-25", "2028-04-25",
+    )
+
+
+def test_the_backfill_passes_its_today_through_to_the_bounds(tmp_path):
+    asked: list[tuple[str, str]] = []
+
+    def fetch(start, end):
+        asked.append((start, end))
+        return [_game("g1", start)]
+
+    backfill.backfill_seasons(
+        [2026], training_path=tmp_path / "games.json", fetch=fetch,
+        enrich=lambda g: g, log=lambda _m: None, today=date(2026, 11, 3),
+    )
+
+    assert asked == [("2026-09-25", "2026-11-03")]

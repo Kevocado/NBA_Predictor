@@ -354,9 +354,42 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
   // reads that as the dash. Neither path can print a 0/0.
   const winnerRecord = useMemo(() => {
     const row = trackRecord?.find((r) => r.market === "game_outcome");
-    return row
-      ? { label: "Winner pick made before tip-off", hits: row.correct_predictions, settled: row.total_predictions }
-      : null;
+    if (!row) return null;
+    const preTip = row.pre_tip;
+    const preTipTotal = preTip?.total_predictions ?? 0;
+    const preTipCorrect = preTip?.correct_predictions ?? 0;
+    const rebuilt = row.n_rebuilt ?? 0;
+    // The headline counts every recorded pick. The pre-tip subset is the honest
+    // read of what the model said on the night. Show both with accurate labels.
+    if (rebuilt > 0 && preTipTotal > 0) {
+      return {
+        label: "Every pick",
+        hits: row.correct_predictions,
+        settled: row.total_predictions,
+        rebuilt,
+        preTip: { hits: preTipCorrect, settled: preTipTotal },
+      };
+    }
+    if (rebuilt > 0) {
+      return {
+        label: "Every pick",
+        hits: row.correct_predictions,
+        settled: row.total_predictions,
+        rebuilt,
+        preTip: null,
+      };
+    }
+    if (preTipTotal > 0) {
+      return {
+        label: "Every pick",
+        hits: row.correct_predictions,
+        settled: row.total_predictions,
+        rebuilt: 0,
+        preTip: { hits: preTipCorrect, settled: preTipTotal },
+      };
+    }
+    // No graded picks yet
+    return { label: "Every pick", hits: 0, settled: 0, rebuilt: 0, preTip: null };
   }, [trackRecord]);
   // The flow's state, derived ONCE and used for both the bundle and the prop,
   // because the bare-heading rule is a rule about the PAIR: the bundle withholds

@@ -87,7 +87,13 @@ export function InstantBlock({ sport, bundle, extras }: InstantBlockProps) {
         <ProbabilityBar segments={segments} legend={extras?.legend} minSegmentPx={2} pick={pick ? { label: pick } : null} />
       )}
       {extras?.record && (
-        <RecordStrip label={extras.record.label} hits={extras.record.hits} settled={extras.record.settled} />
+        <RecordStrip
+          label={extras.record.label}
+          hits={extras.record.hits}
+          settled={extras.record.settled}
+          rebuilt={extras.record.rebuilt ?? 0}
+          preTip={extras.record.preTip ?? null}
+        />
       )}
     </div>
   );

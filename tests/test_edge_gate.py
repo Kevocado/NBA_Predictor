@@ -442,3 +442,13 @@ def test_ceiling_defaults_to_constant_when_not_passed():
     # Without explicit ceiling, should use EDGE_CEILING default
     picks = gated_picks(rows, now=NOW)
     assert picks == [], "edge 0.16 should be excluded by default ceiling"
+
+
+def test_an_edge_just_above_the_ceiling_is_excluded_and_just_below_is_kept():
+    assert gated_picks(market_pair(edge=0.149), now=NOW) != []
+    assert gated_picks(market_pair(edge=0.151), now=NOW) == []
+
+
+def test_the_floor_is_unchanged_by_the_ceiling():
+    assert gated_picks(market_pair(edge=0.049), now=NOW) == []
+    assert gated_picks(market_pair(edge=0.05), now=NOW) != []

@@ -44,17 +44,22 @@ def run_retrain_pipeline(games: pd.DataFrame, models_dir: Path, model_version: s
     holdout_df, _ = build_training_frame(pd.concat([train_games, holdout_games], ignore_index=True))
     holdout_df = holdout_df[holdout_df["game_id"].isin(holdout_games["game_id"])]
 
-    # Run candidate race to pick the best model per target
     logger = logging.getLogger(__name__)
-    try:
-        race_result = run_candidate_race(train_df, feature_cols=feature_cols, windows=4)
-        win_candidate = race_result["winner"]["win"]
-        margin_candidate = race_result["winner"]["margin"]
-        total_candidate = race_result["winner"]["total"]
-        logger.info(f"Candidate race winners: win={win_candidate}, margin={margin_candidate}, total={total_candidate}")
-    except Exception:
-        logger.exception("candidate race failed, falling back to xgboost")
-        win_candidate = margin_candidate = total_candidate = "xgboost"
+
+    # Candidate race on the training frame to pick the winners per target
+    # No fallback: if the race fails or any target has no winner, we stop.
+    # Publishing a manifest from a failed race or a target with no winner would
+    # serve models that did not win a valid race.
+    race = run_candidate_race(train_df, feature_cols=feature_cols, windows=4)
+    win_candidate = race["winner"].get("win")
+    margin_candidate = race["winner"].get("margin")
+    total_candidate = race["winner"].get("total")
+    if win_candidate is None or margin_candidate is None or total_candidate is None:
+        raise RuntimeError(
+            f"candidate race produced no winner for one or more targets: "
+            f"win={win_candidate}, margin={margin_candidate}, total={total_candidate}; "
+            "retrain aborted, no manifest published"
+        )
 
     win_model = train_win_probability_model(train_df[feature_cols], train_df["home_win"], candidate=win_candidate)
     margin_model = train_margin_model(train_df[feature_cols], train_df["home_pts"] - train_df["away_pts"], candidate=margin_candidate)

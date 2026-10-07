@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import pytest
 
 
 def _synthetic_games(n=60, seed=2):
@@ -125,3 +126,47 @@ def test_a_race_with_no_winner_for_a_target_aborts_the_retrain(tmp_path, monkeyp
     with pytest.raises(RuntimeError, match="no winner"):
         retrain.run_retrain_pipeline(_synthetic_games(n=100), models_dir, "v-nowin", "2026-11-01T00:00:00")
     assert not (models_dir / "manifest.json").exists()
+
+
+def test_manifest_win_metrics_describe_the_served_probability(tmp_path):
+    """The manifest's `win_probability` numbers must be the served
+    Phi(margin/sigma) score, not the logistic classifier's.
+
+    The defect this pins: the manifest published the classifier's log-loss /
+    Brier / AUC under `win_probability` while `pipeline/ingest.py` served
+    win-from-margin, so the published figures described a model nothing serves.
+    The classifier's own scores now live under `win_classifier`, so the
+    comparison is visible rather than deleted.
+    """
+    from nba_predictor.pipeline.retrain import run_retrain_pipeline
+
+    # Real margins must vary in sign. `_synthetic_games` scores every game
+    # 110-105, so its held-out margins are all +5 and the outcomes are one
+    # class -- AUC and log_loss are undefined there, which is the guard
+    # working, not a score to assert on.
+    rng = np.random.default_rng(11)
+    games = _synthetic_games(n=100)
+    margins = rng.integers(-20, 21, size=len(games))
+    games["home_pts"] = 110 + margins // 2
+    games["away_pts"] = 110 - (margins - margins // 2)
+    games["home_win"] = (margins > 0).astype(int)
+    assert games["home_win"].nunique() == 2
+
+    manifest = run_retrain_pipeline(
+        games, tmp_path / "models",
+        model_version="v-test", trained_at="2026-11-01T00:00:00",
+    )
+
+    served = manifest["metrics"]["win_probability"]
+    assert served["log_loss"] is not None, "served win metrics were not measured"
+    assert served["brier"] is not None
+    assert served["auc"] is not None
+    assert served["sigma"] == pytest.approx(
+        manifest["metrics"]["margin"]["residual_sigma"]
+    ), "the served score was graded on a different sigma than the one served"
+
+    # The classifier's scores are kept, but under their own name.
+    assert "log_loss" in manifest["metrics"]["win_classifier"]
+    assert manifest["metrics"]["win_classifier"]["log_loss"] != served["log_loss"], (
+        "win_probability still carries the classifier's numbers"
+    )

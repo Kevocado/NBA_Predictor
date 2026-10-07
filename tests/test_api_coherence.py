@@ -67,25 +67,34 @@ def test_no_contradiction_in_api_payload():
         assert is_tossup == expected_tossup, f"{away} at {home}: margin={margin}, wp={wp:.3f}, tossup={is_tossup} (expected {expected_tossup})"
 
 
-def test_score_upcoming_games_uses_win_from_margin():
+def test_score_upcoming_games_uses_win_from_margin(tmp_path):
     """Integration test: score_upcoming_games now uses win_prob(margin, sigma)
     and fails loudly if manifest lacks margin_sigma."""
     import json
     from pathlib import Path
-    from datetime import datetime, timezone
     from unittest.mock import patch, MagicMock
     import pandas as pd
 
     from nba_predictor.pipeline.ingest import score_upcoming_games
-    from nba_predictor.tracking import store
+
+    # A REAL manifest in the scorer's own models_dir. The first version of this
+    # test patched `nba_predictor.pipeline.ingest.Path` and `json.loads` and
+    # passed a literal Path("models") -- which does not change the path the
+    # scorer derives from its argument, so it read the repository's committed
+    # models/manifest.json and passed on a real sigma it did not supply. It
+    # also meant this test's result depended on a committed artefact.
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    (models_dir / "manifest.json").write_text(json.dumps({
+        "metrics": {"margin": {"residual_sigma": 15.87}}
+    }))
 
     with patch("nba_predictor.pipeline.ingest.joblib.load") as mock_load:
-        # Mock models
         mock_margin = MagicMock()
         mock_margin.predict.return_value = np.array([6.5, -3.2, 0.0])
         mock_total = MagicMock()
         mock_total.predict.return_value = np.array([220.0, 215.0, 225.0])
-        mock_win = MagicMock()  # Old classifier - should NOT be used
+        mock_win = MagicMock()  # Old classifier - must NOT be used
 
         def load_side_effect(path):
             if "win_probability_model" in str(path):
@@ -98,22 +107,9 @@ def test_score_upcoming_games_uses_win_from_margin():
 
         mock_load.side_effect = load_side_effect
 
-        with patch("nba_predictor.pipeline.ingest.Path") as mock_path_class, \
-             patch("nba_predictor.pipeline.ingest.json.loads") as mock_json_loads, \
-             patch("nba_predictor.pipeline.ingest.build_feature_frame") as mock_build, \
-             patch("nba_predictor.pipeline.ingest.store.insert_prediction") as mock_insert, \
-             patch("nba_predictor.pipeline.ingest.datetime") as mock_dt:
+        with patch("nba_predictor.pipeline.ingest.build_feature_frame") as mock_build, \
+             patch("nba_predictor.pipeline.ingest.store.insert_prediction") as mock_insert:
 
-            # Mock manifest with margin_sigma
-            mock_json_loads.return_value = {
-                "metrics": {"margin": {"residual_sigma": 15.87}}
-            }
-            mock_path_class.return_value.__truediv__.return_value.exists.return_value = True
-            mock_path_class.return_value.__truediv__.return_value.read_text.return_value = json.dumps({
-                "metrics": {"margin": {"residual_sigma": 15.87}}
-            })
-
-            # Mock build_feature_frame - needs full feature frame with teams and feature cols
             mock_df = pd.DataFrame({
                 "game_id": ["g1", "g2", "g3"],
                 "home_win": [np.nan, np.nan, np.nan],
@@ -124,50 +120,47 @@ def test_score_upcoming_games_uses_win_from_margin():
             })
             mock_build.return_value = (mock_df, ["f1", "f2"])
 
-            # Mock datetime
-            mock_dt.now.return_value.isoformat.return_value = "2026-10-07T12:00:00+00:00"
-
             games = [
                 {"game_id": "g1", "game_date": "2026-10-08", "home_team": "BOS", "away_team": "MIA"},
                 {"game_id": "g2", "game_date": "2026-10-09", "home_team": "LAL", "away_team": "GSW"},
                 {"game_id": "g3", "game_date": "2026-10-10", "home_team": "NYK", "away_team": "BOS"},
             ]
 
-            # Call the function
-            count = score_upcoming_games(games, Path("models"), Path("tracking.db"), "v20261007")
+            count = score_upcoming_games(games, models_dir, tmp_path / "tracking.db", "v20261007")
 
-            # Verify it was called
             assert count == 3
             assert mock_insert.call_count == 3
 
-            # Check the win probs passed to insert_prediction
             calls = mock_insert.call_args_list
             wp_g1 = calls[0].kwargs["home_win_prob"]
             wp_g2 = calls[1].kwargs["home_win_prob"]
             wp_g3 = calls[2].kwargs["home_win_prob"]
 
-            # Verify they match win_from_margin
-            expected_g1 = win_prob(6.5, 15.87)
-            expected_g2 = win_prob(-3.2, 15.87)
-            expected_g3 = win_prob(0.0, 15.87)
-
-            assert wp_g1 == pytest.approx(expected_g1)
-            assert wp_g2 == pytest.approx(expected_g2)
-            assert wp_g3 == pytest.approx(expected_g3, abs=1e-12)
+            assert wp_g1 == pytest.approx(win_prob(6.5, 15.87))
+            assert wp_g2 == pytest.approx(win_prob(-3.2, 15.87))
+            assert wp_g3 == pytest.approx(win_prob(0.0, 15.87), abs=1e-12)
             assert wp_g3 == pytest.approx(0.5, abs=1e-12)
 
-            # Old classifier should NOT have been called
+            # Old classifier must NOT have been called: this is the whole point.
             mock_win.predict_proba.assert_not_called()
 
 
-def test_score_upcoming_games_fails_loud_without_margin_sigma():
+def test_score_upcoming_games_fails_loud_without_margin_sigma(tmp_path):
     """If manifest lacks margin_sigma, score_upcoming_games raises ValueError."""
     import json
-    from pathlib import Path
     from unittest.mock import patch, MagicMock
     import pandas as pd
 
     from nba_predictor.pipeline.ingest import score_upcoming_games
+
+    # A real manifest, in the scorer's own models_dir, that genuinely lacks
+    # residual_sigma. Same reason as the test above: patching Path would not
+    # change the path the scorer derives from its argument.
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    (models_dir / "manifest.json").write_text(json.dumps({
+        "metrics": {"margin": {"mae": 14.0}}  # no residual_sigma
+    }))
 
     with patch("nba_predictor.pipeline.ingest.joblib.load") as mock_load:
         mock_margin = MagicMock()
@@ -187,21 +180,10 @@ def test_score_upcoming_games_fails_loud_without_margin_sigma():
 
         mock_load.side_effect = load_side_effect
 
-        with patch("nba_predictor.pipeline.ingest.Path") as mock_path_class, \
-             patch("nba_predictor.pipeline.ingest.json.loads") as mock_json_loads, \
-             patch("nba_predictor.pipeline.ingest.build_feature_frame") as mock_build:
-
-            # Manifest WITHOUT margin_sigma
-            mock_json_loads.return_value = {
-                "metrics": {"margin": {"mae": 14.0}}  # no residual_sigma
-            }
-            mock_path_class.return_value.__truediv__.return_value.exists.return_value = True
-            mock_path_class.return_value.__truediv__.return_value.read_text.return_value = json.dumps({
-                "metrics": {"margin": {"mae": 14.0}}
-            })
+        with patch("nba_predictor.pipeline.ingest.build_feature_frame") as mock_build:
 
             mock_df = pd.DataFrame({
-                "game_id": ["g1"], 
+                "game_id": ["g1"],
                 "home_win": [np.nan],
                 "home_team": ["BOS"],
                 "away_team": ["MIA"]
@@ -211,4 +193,4 @@ def test_score_upcoming_games_fails_loud_without_margin_sigma():
             games = [{"game_id": "g1", "game_date": "2026-10-08", "home_team": "BOS", "away_team": "MIA"}]
 
             with pytest.raises(ValueError, match="margin_sigma"):
-                score_upcoming_games(games, Path("models"), Path("tracking.db"), "v20261007")
+                score_upcoming_games(games, models_dir, tmp_path / "tracking.db", "v20261007")

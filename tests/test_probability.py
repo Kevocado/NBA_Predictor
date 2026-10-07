@@ -255,20 +255,24 @@ def test_win_from_margin_walk_forward_computes_on_synthetic():
     cols = [c for c in __import__("nba_predictor.features.build", fromlist=["FEATURE_COLUMNS"]).FEATURE_COLUMNS if c in frame.columns]
 
     # Out-of-fold margin predictions and residuals (same as walk_forward_regression)
-    margin_errors, preds = [], []
+    margin_errors, preds, outcomes = [], [], []
     ridge = default_candidates(cols)["ridge"]
     for train_idx, test_idx in expanding_windows(frame["game_date"], n_windows=4):
         train_df, test_df = frame.iloc[train_idx], frame.iloc[test_idx]
         m = ridge["margin"](train_df)
         test_preds = m(test_df)
         preds.extend(test_preds)
+        # The ACTUAL result of each held-out game. Grading the prediction against
+        # its own sign (`preds > 0`) would make every score perfect by
+        # construction and is what the first version of this test did.
+        outcomes.extend(test_df["home_win"].astype(int).tolist())
         margin_errors.extend((test_df["home_margin"].to_numpy() - np.asarray(test_preds)).tolist())
 
     # Fit sigma from out-of-fold margin residuals
     sigma = fit_residual_sigma(margin_errors)
 
-    # Win-from-margin on held-out games
-    y_true = (np.asarray(preds) > 0).astype(int)  # home wins when margin > 0
+    # Win-from-margin, scored against the held-out results
+    y_true = np.asarray(outcomes, dtype=int)
     y_prob = np.array([win_prob(float(m), sigma) for m in preds])
 
     from sklearn.metrics import log_loss, brier_score_loss, roc_auc_score

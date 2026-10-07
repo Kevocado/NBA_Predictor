@@ -252,6 +252,13 @@ def walk_forward_regression(
         "naive_mean": float(naive_all.mean()) if len(naive_all) else 0.0,
         "n": int(len(y_all)),
         "residuals": residuals,  # for fitting proper sigma
+        # The out-of-fold predictions themselves, aligned with `residuals`
+        # and with `y`. The served win probability is a function of the
+        # predicted margin (norm.cdf(margin / sigma)), so evaluating what is
+        # actually served needs the margins and the real outcomes, not only
+        # their error summary.
+        "preds": yh_all.tolist(),
+        "y": y_all.tolist(),
     }
     if fixed_baseline is not None:
         pooled["naive_mae_fixed"] = float(

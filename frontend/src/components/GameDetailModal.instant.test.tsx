@@ -28,18 +28,25 @@ vi.mock("../api/client", () => ({
 /** The winner-pick row, as `GET /hub/track-record` sends it.
  *
  *  `game_outcome` is the market that settles the model's own win/loss call, and
- *  `hub_service._settle_game_outcome` builds it from `pre_tip_picks` only — the
- *  picks rebuilt after tip-off are counted in `n_rebuilt` and left out of the
- *  counts. So this row is already a pre-tip-only record, which is why it is the
- *  one the block may quote. (`h2h` is a different claim — the same probability
- *  measured against the bookmaker's price — and quoting it here would put a
- *  different figure under the verdict's name.) */
-const winnerPick = (total: number, correct: number): TrackRecord => ({
+ *  `hub_service._settle_game_outcome` builds it from ALL counted picks. The
+ *  headline includes picks made before AND after tip-off; the pre-tip subset
+ *  is in the `pre_tip` sub-record. The live data shows 1373 total, 1365 rebuilt
+ *  (made after tip-off), and only 8 pre-tip (3 correct).
+ */
+const winnerPick = (total: number, correct: number, nRebuilt: number, preTipTotal: number, preTipCorrect: number): TrackRecord => ({
   market: "game_outcome",
   total_predictions: total,
   correct_predictions: correct,
   hit_rate: total ? Number((correct / total).toFixed(3)) : null,
-  n_rebuilt: 3,
+  n_rebuilt: nRebuilt,
+  n_pre_tip: preTipTotal,
+  pre_tip: {
+    total_predictions: preTipTotal,
+    correct_predictions: preTipCorrect,
+    hit_rate: preTipTotal ? Number((preTipCorrect / preTipTotal).toFixed(3)) : null,
+    n_push: 0,
+    weekly: [],
+  },
 });
 
 /** The bookmaker-price row, present to prove it is not the one being quoted. */
@@ -80,7 +87,8 @@ beforeEach(() => {
   vi.mocked(api.getHubPlayers).mockResolvedValue([]);
   vi.mocked(api.getGamePlayers).mockResolvedValue([]);
   vi.mocked(api.getGameOutPlayers).mockResolvedValue([]);
-  vi.mocked(api.getTrackRecord).mockResolvedValue([winnerPick(40, 22)]);
+  // Live data: 1373 total, 1174 correct, 1365 rebuilt, 8 pre-tip (3 correct)
+  vi.mocked(api.getTrackRecord).mockResolvedValue([winnerPick(1373, 1174, 1365, 8, 3)]);
 });
 
 /** Render with the network hard-blocked: every `fetch` rejects. The block's
@@ -98,7 +106,7 @@ async function renderOffline(detail: unknown) {
 /** The record strip, found by its label — the label is the strip's own, and it
  *  is what tells two records apart if this page ever grows a second one. */
 function recordStrip() {
-  return screen.getByText("Winner pick made before tip-off").parentElement as HTMLElement;
+  return screen.getByText("Every pick").parentElement as HTMLElement;
 }
 
 /** A summary, shaped the way the service sends one. The prose is the only thing
@@ -137,6 +145,7 @@ function segmentFills() {
 
 describe("GameDetailModal instant block", () => {
   it("renders the block from the bundle with the network blocked", async () => {
+    vi.mocked(api.getTrackRecord).mockResolvedValue([winnerPick(40, 22, 3, 0, 0)]);
     const fetchSpy = await renderOffline(preTip);
 
     // The tiles NBA already had, unchanged.
@@ -228,13 +237,20 @@ describe("GameDetailModal instant block", () => {
     vi.unstubAllGlobals();
   });
 
-  it("carries the winner-pick record", async () => {
+  it("carries the winner-pick record with true label and pre-tip beside it", async () => {
     await renderOffline(preTip);
 
     const strip = recordStrip();
-    expect(strip).toHaveTextContent("Winner pick made before tip-off");
-    expect(strip).toHaveTextContent("22/40");
-    // The record is about picks, so it is not a percentage of anything else.
+    // The label must be accurate: the headline includes picks made after tip-off
+    expect(strip).toHaveTextContent("Every pick");
+    expect(strip).toHaveTextContent("1174/1373");
+    expect(strip).toHaveTextContent("1365 of them made after tip-off");
+    // The pre-tip record beside it
+    expect(strip).toHaveTextContent("Before tip-off");
+    expect(strip).toHaveTextContent("3 of 8");
+    // No misleading "made before tip-off" label on the headline figures
+    expect(strip).not.toHaveTextContent("Winner pick made before tip-off");
+    // The record is about picks, not percentages
     expect(strip).not.toHaveTextContent("55%");
     vi.unstubAllGlobals();
   });
@@ -262,7 +278,8 @@ describe("GameDetailModal instant block", () => {
   });
 
   it("shows a dash, not 0/0, when the winner-pick row has settled nothing", async () => {
-    vi.mocked(api.getTrackRecord).mockResolvedValue([winnerPick(0, 0)]);
+    // 0 total, 0 correct, 0 rebuilt, 0 pre-tip, 0 pre-tip correct
+    vi.mocked(api.getTrackRecord).mockResolvedValue([winnerPick(0, 0, 0, 0, 0)]);
     await renderOffline(preTip);
 
     // A row that exists and has graded nothing is a real row with no numbers
@@ -271,8 +288,12 @@ describe("GameDetailModal instant block", () => {
     expect(screen.queryByTestId("record-fill")).toBeNull();
     expect(screen.queryByText("0/0")).toBeNull();
     const strip = recordStrip();
-    expect(strip).toHaveTextContent("Winner pick made before tip-off");
+    expect(strip).toHaveTextContent("Every pick");
     expect(strip).toHaveTextContent("—");
+    // No rebuilt text when there are no rebuilt picks
+    expect(strip).not.toHaveTextContent("made after tip-off");
+    // No pre-tip section when there are no pre-tip picks
+    expect(strip).not.toHaveTextContent("Before tip-off");
     vi.unstubAllGlobals();
   });
 
@@ -338,6 +359,7 @@ describe("GameDetailModal instant block", () => {
   });
 
   it("REQUIRED: each figure appears exactly once after the button is pressed", async () => {
+    vi.mocked(api.getTrackRecord).mockResolvedValue([winnerPick(40, 22, 3, 0, 0)]);
     await renderOffline(preTip);
     vi.mocked(api.explainGame).mockResolvedValue(summaryAnswer as never);
     const summary = await pressAiSummary();
@@ -418,6 +440,7 @@ describe("GameDetailModal instant block", () => {
     // A record is a fact about the season, not about this fixture's pick, so it
     // stands on its own. An earlier guard that required a verdict dropped it
     // silently whenever the bundle had no pick.
+    vi.mocked(api.getTrackRecord).mockResolvedValue([winnerPick(40, 22, 3, 0, 0)]);
     await renderOffline({ ...preTip, prediction: null });
 
     expect(screen.getByText(/No pick was made for this fixture\./)).toBeInTheDocument();

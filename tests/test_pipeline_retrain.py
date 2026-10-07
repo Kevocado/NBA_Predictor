@@ -65,3 +65,63 @@ def test_retrain_manifest_has_training_counts(tmp_path):
     assert training["n_current_season_games"] <= training["n_train_games"]
     on_disk = json.loads((models_dir / "manifest.json").read_text())
     assert on_disk["training"] == training
+
+
+def test_retrain_uses_candidate_race_winner(tmp_path):
+    """Retrain pipeline should run candidate race and use winner per target.
+    
+    The manifest should record which candidate was used for each model.
+    This test will fail until we wire the candidate race into retrain.
+    """
+    import json
+    from nba_predictor.pipeline.retrain import run_retrain_pipeline
+    
+    games = _synthetic_games(n=100)  # Need more games for race
+    models_dir = tmp_path / "models"
+    manifest = run_retrain_pipeline(games, models_dir, "v-test", "2026-11-01T00:00:00")
+    
+    # The manifest should record the candidate used for each model
+    training = manifest["training"]
+    assert "win_candidate" in training, "manifest should record win_candidate"
+    assert "margin_candidate" in training, "manifest should record margin_candidate"
+    assert "total_candidate" in training, "manifest should record total_candidate"
+    
+    # The candidates should be valid choices
+    valid_candidates = {"xgboost", "logistic", "ridge"}
+    assert training["win_candidate"] in valid_candidates
+    assert training["margin_candidate"] in valid_candidates
+    assert training["total_candidate"] in valid_candidates
+
+
+def test_a_failed_candidate_race_aborts_the_retrain_and_publishes_no_manifest(tmp_path, monkeypatch):
+    """A race that raises must not fall back to xgboost: the retrain stops and writes nothing.
+
+    xgboost is the model Phase A measured as worse than naive. Shipping it silently when the race
+    breaks is the failure this test exists to forbid.
+    """
+    import pytest
+    from nba_predictor.pipeline import retrain
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("race exploded")
+
+    monkeypatch.setattr(retrain, "run_candidate_race", boom)
+    models_dir = tmp_path / "models"
+    with pytest.raises(RuntimeError):
+        retrain.run_retrain_pipeline(_synthetic_games(n=100), models_dir, "v-fail", "2026-11-01T00:00:00")
+    assert not (models_dir / "manifest.json").exists(), "no manifest may be published"
+    assert not (models_dir / "win_probability_model.pkl").exists()
+
+
+def test_a_race_with_no_winner_for_a_target_aborts_the_retrain(tmp_path, monkeypatch):
+    import pytest
+    from nba_predictor.pipeline import retrain
+
+    monkeypatch.setattr(
+        retrain, "run_candidate_race",
+        lambda *a, **k: {"winner": {"win": "logistic", "margin": None, "total": "ridge"}},
+    )
+    models_dir = tmp_path / "models"
+    with pytest.raises(RuntimeError, match="no winner"):
+        retrain.run_retrain_pipeline(_synthetic_games(n=100), models_dir, "v-nowin", "2026-11-01T00:00:00")
+    assert not (models_dir / "manifest.json").exists()

@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -40,6 +41,8 @@ from nba_predictor.pipeline.ingest import (
 #: takes what comes back, so the bounds only have to be generous, not exact.
 SEASON_START = (10, 20)
 SEASON_END = (4, 15)
+
+logger = logging.getLogger(__name__)
 
 
 def season_bounds(season: int) -> tuple[str, str]:
@@ -86,8 +89,22 @@ def backfill_seasons(
     for season in seasons:
         start, end = season_bounds(season)
         log(f"Season {season}: {start} .. {end}")
-        found = fetch(start, end)
-        enriched = enrich(found)
+        # One season failing must not abandon the others. This is a multi-hour
+        # fetch and the network will drop: the first run of this took a whole
+        # season and then died on a DNS failure inside the second, throwing away
+        # everything it had fetched because it had not written its file yet.
+        # Failing per season keeps that fetch, names the season that failed, and
+        # the re-run resumes from the cache.
+        try:
+            found = fetch(start, end)
+            enriched = enrich(found)
+        except Exception as exc:  # noqa: BLE001 - one season's failure is reported, not fatal
+            logger.error("Season %s failed, continuing: %s: %s", season, type(exc).__name__, exc)
+            per_season[str(season)] = {
+                "start": start, "end": end, "failed": f"{type(exc).__name__}: {exc}",
+            }
+            log(f"  FAILED: {type(exc).__name__}: {exc}")
+            continue
         completed = [g for g in enriched if g.get("completed") and "home_fgm" in g]
         per_season[str(season)] = {
             "start": start,
@@ -113,6 +130,9 @@ def backfill_seasons(
         "training_path": str(training_path),
         "earliest_game": str(training_df["game_date"].min()) if len(training_df) else None,
         "latest_game": str(training_df["game_date"].max()) if len(training_df) else None,
+        # A season that failed is named here so a partial run cannot be mistaken
+        # for a complete one. Absent means every season fetched.
+        "failed_seasons": [s for s, stats in per_season.items() if "failed" in stats],
     }
 
 

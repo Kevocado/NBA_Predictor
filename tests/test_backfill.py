@@ -216,3 +216,36 @@ def test_the_backfill_module_makes_no_network_call_of_its_own():
     assert "espn" not in imported, "the backfill reaches for ESPN directly"
     # Its only route to the network is the two injected pipeline stages.
     assert {"fetch_schedule_range", "enrich_with_boxscores"} <= imported
+
+def test_one_season_failing_does_not_abandon_the_others(tmp_path):
+    """A multi-hour fetch will lose the network. It has to keep what it got.
+
+    This is not hypothetical: the first real run fetched a whole season
+    (1,238 of 1,240 games) and then died on a DNS failure inside the second,
+    throwing away every game it had because it had not written its file yet.
+    """
+    def fetch(start, end):
+        if start.startswith("2024"):
+            raise ConnectionError("DNS went away")
+        return [_game("g1", start)]
+
+    out = backfill.backfill_seasons(
+        [2023, 2024, 2025], training_path=tmp_path / "games.json",
+        fetch=fetch, enrich=lambda g: g, log=lambda _m: None,
+    )
+
+    # The two good seasons still landed.
+    assert out["n_training_rows"] == 2
+    assert out["failed_seasons"] == ["2024"]
+    assert "games_with_box" not in out["seasons"]["2024"]
+    assert "failed" in out["seasons"]["2024"]
+    # A partial run must be visible as partial, not mistaken for a complete one.
+    assert out["failed_seasons"] == ["2024"]
+
+
+def test_a_complete_run_reports_no_failed_seasons(tmp_path):
+    out = backfill.backfill_seasons(
+        [2023], training_path=tmp_path / "games.json",
+        fetch=lambda s, e: [_game("g1", s)], enrich=lambda g: g, log=lambda _m: None,
+    )
+    assert out["failed_seasons"] == []

@@ -592,15 +592,6 @@ export default function TrackRecordPanel() {
           );
         })()}
       </Section>
-
-      {/* Projected final standings panel. */}
-      <Section
-        id="tr-projected"
-        title="Projected final standings"
-        blurb="Each team's current win percentage and games back, projected to 82 games. The model's win probability on every remaining game is summed to produce a projected win total."
-      >
-        <NotRecorded why="Projected standings endpoint not yet implemented." />
-      </Section>
     </div>
   );
 }

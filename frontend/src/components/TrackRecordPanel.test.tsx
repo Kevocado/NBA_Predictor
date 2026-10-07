@@ -81,6 +81,23 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("TrackRecordPanel", () => {
+  it("shows no section for data the site does not have", async () => {
+    // The "Projected final standings" section shipped as a heading and a blurb
+    // promising projected win totals, above a body reading "endpoint not yet
+    // implemented" -- a promise of a number the page then withheld. It is gone.
+    vi.mocked(api.getTrackRecord).mockResolvedValue([
+      row({ market: "h2h", total_predictions: 100, correct_predictions: 58, hit_rate: 0.58 }),
+    ]);
+    vi.mocked(api.getVsMarket).mockResolvedValue(vsMarket());
+
+    render(<TrackRecordPanel />);
+    await screen.findByText("Moneyline vs the market accuracy");
+
+    expect(screen.queryByText("Projected final standings")).toBeNull();
+    expect(document.body.textContent).not.toMatch(/not yet implemented/i);
+    expect(document.body.textContent).not.toMatch(/projected to 82 games/i);
+  });
+
   it("shows a settled market's rate, with the record behind it", async () => {
     vi.mocked(api.getTrackRecord).mockResolvedValue([
       row({ market: "h2h", total_predictions: 100, correct_predictions: 58, hit_rate: 0.58 }),

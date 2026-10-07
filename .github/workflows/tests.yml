@@ -76,10 +76,14 @@ jobs:
         # `main` with a green PR: no Python test imports a component, so the
         # suite passed and the build broke. `tsc -b` is the same trick as the
         # py_compile step above — it checks files no test exercises.
-        #
-        # `npm test` is deliberately NOT run here. Six frontend tests fail on
-        # `main` (5 predate the parity work, 1 came in with a merge), so adding
-        # it now would only paint this job red and hide the type errors. It
-        # belongs in the same commit that fixes those six.
         working-directory: frontend
         run: npm run build
+
+      - name: Frontend tests
+        # Added once the six failures that blocked this are fixed: the suite is
+        # green on `main` (240 tests, 28 files), so the gate can run without
+        # hiding the type errors above. `tsc -b` checks types, not behaviour --
+        # the two GameDetailModal heading tests that regressed were green under
+        # `tsc -b` and caught only here.
+        working-directory: frontend
+        run: npm test

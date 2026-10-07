@@ -23,6 +23,20 @@ from nba_predictor.models.manifest import append_manifest_history, build_manifes
 from nba_predictor.models.probability import MAE_TO_SIGMA, win_prob
 
 
+def _publish_sigma(block: dict, pooled_mae: float) -> None:
+    """Write `residual_sigma` only when it is a usable number.
+
+    A zero or non-finite MAE means the fit found no spread to measure, so
+    sigma = mae * MAE_TO_SIGMA would publish 0.0 and every served probability
+    would divide by it. Omitting the key is the honest state: the scorer
+    refuses to serve, and says the sigma is missing, rather than reporting a
+    confident 50% from a broken fit.
+    """
+    sigma = float(pooled_mae) * MAE_TO_SIGMA
+    if np.isfinite(sigma) and sigma > 0.0:
+        block["residual_sigma"] = sigma
+
+
 def score_served_win_from_margin(pooled: dict) -> dict:
     """log-loss / Brier / AUC of the probability we actually serve.
 
@@ -192,10 +206,15 @@ def run_retrain_pipeline(games: pd.DataFrame, models_dir: Path, model_version: s
         # (models/probability.py). `pooled["mae"]` is already the mean absolute
         # residual, so this is exactly `fit_residual_sigma(residuals)` — one
         # path, not a try/except whose fallback recomputed the same number.
-        metrics["margin"]["residual_sigma"] = wf_margin["pooled"]["mae"] * MAE_TO_SIGMA
+        #
+        # Published only when usable. `score_upcoming_games` refuses to serve
+        # without a positive finite sigma, so writing a 0.0 here would ship a
+        # manifest that advertises a model the scorer will reject. Absent means
+        # "not fitted", which the scorer reports by name.
+        _publish_sigma(metrics["margin"], wf_margin["pooled"]["mae"])
     if wf_total:
         metrics.setdefault("total", {})["wf_mae"] = wf_total["pooled"]["mae"]
-        metrics["total"]["residual_sigma"] = wf_total["pooled"]["mae"] * MAE_TO_SIGMA
+        _publish_sigma(metrics["total"], wf_total["pooled"]["mae"])
 
     manifest = build_manifest(
         model_names=["win_probability", "margin", "total"],

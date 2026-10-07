@@ -170,3 +170,25 @@ def test_manifest_win_metrics_describe_the_served_probability(tmp_path):
     assert manifest["metrics"]["win_classifier"]["log_loss"] != served["log_loss"], (
         "win_probability still carries the classifier's numbers"
     )
+
+
+def test_a_zero_spread_fit_publishes_no_sigma():
+    """A fit with no residual spread must not publish residual_sigma: 0.0.
+
+    `score_upcoming_games` refuses to serve without a positive finite sigma, so
+    publishing 0.0 would ship a manifest advertising a model the scorer then
+    rejects. Absent is the honest state, and it is what the scorer names.
+    """
+    from nba_predictor.pipeline.retrain import _publish_sigma
+
+    block = {}
+    _publish_sigma(block, 0.0)
+    assert "residual_sigma" not in block, "published an unusable sigma"
+
+    block = {}
+    _publish_sigma(block, float("nan"))
+    assert "residual_sigma" not in block
+
+    block = {}
+    _publish_sigma(block, 12.0)
+    assert block["residual_sigma"] > 0

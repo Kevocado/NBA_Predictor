@@ -349,7 +349,9 @@ export default function TrackRecordPanel() {
   const unplaced = rows.reduce((n, r) => n + (r.n_unplaced ?? 0), 0);
   // Only rows that actually carry a pre-tip figure: an unsettled market has no
   // rule to apply one with, and a row with none is not a zero.
-  const preTipRows = settled.filter((row) => row.pre_tip);
+  // Must check total_predictions > 0 because the API returns a pre_tip object
+  // with total_predictions = 0 when there are no pre-tip picks.
+  const preTipRows = settled.filter((row) => row.pre_tip && row.pre_tip.total_predictions > 0);
   const weeklyRows = buildWeeklyRows(settled);
   // The bar column: the model's own winner call, else the first settled
   // market. One bar per row -- four would be a wall, not a comparison.

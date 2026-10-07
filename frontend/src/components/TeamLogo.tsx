@@ -5,9 +5,12 @@ interface TeamLogoProps {
   team: string;
   size?: number;
   className?: string;
+  /** When true, the logo is decorative (team name is rendered alongside) and
+   *  should be hidden from screen readers. */
+  ariaHidden?: boolean;
 }
 
-export default function TeamLogo({ team, size = 20, className = "" }: TeamLogoProps) {
+export default function TeamLogo({ team, size = 20, className = "", ariaHidden = false }: TeamLogoProps) {
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
   const url = teamLogoUrl(team);
   const initial = (team.trim().charAt(0) || "?").toUpperCase();
@@ -24,7 +27,8 @@ export default function TeamLogo({ team, size = 20, className = "" }: TeamLogoPr
     return (
       <span
         role="img"
-        aria-label={`${team} logo`}
+        aria-label={ariaHidden ? undefined : `${team} logo`}
+        aria-hidden={ariaHidden}
         className={`inline-flex shrink-0 items-center justify-center rounded-full bg-[var(--color-net)] font-bold text-[var(--color-court-900)] ${className}`}
         style={{ width: size, height: size, fontSize: Math.round(size * 0.55) }}
       >
@@ -36,7 +40,8 @@ export default function TeamLogo({ team, size = 20, className = "" }: TeamLogoPr
   return (
     <img
       src={url}
-      alt={`${team} logo`}
+      alt={ariaHidden ? "" : `${team} logo`}
+      aria-hidden={ariaHidden}
       width={size}
       height={size}
       loading="lazy"

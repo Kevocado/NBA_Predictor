@@ -447,10 +447,10 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
             <h2 id={titleId} className="flex items-center gap-1.5 text-xl font-bold uppercase tracking-wide">
               {detail ? (
                 <>
-                  <TeamLogo team={detail.away_team} size={22} />
+                  <TeamLogo team={detail.away_team} size={22} ariaHidden />
                   <span>{teamName(detail.away_team)}</span>
                   <span className="font-normal normal-case"> at </span>
-                  <TeamLogo team={detail.home_team} size={22} />
+                  <TeamLogo team={detail.home_team} size={22} ariaHidden />
                   <span>{teamName(detail.home_team)}</span>
                 </>
               ) : (

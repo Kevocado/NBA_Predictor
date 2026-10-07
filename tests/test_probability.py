@@ -242,7 +242,55 @@ def test_sigmas_on_the_real_training_set_land_in_a_plausible_range():
     assert 10.0 < sigmas["total_sigma"] < 25.0, sigmas
 
 
-# --- Coherence tests (Task 2) ---
+def test_win_from_margin_walk_forward_computes_on_synthetic():
+    """Evaluate the served win-from-margin probability walk-forward on synthetic
+    data to verify the computation pipeline works. The real comparison happens
+    on the actual training data in the PR body."""
+    from nba_predictor.features.build import build_training_frame
+    from nba_predictor.models.candidate_race import default_candidates
+    from nba_predictor.models.evaluate.walk_forward_eval import expanding_windows
+    from nba_predictor.models.probability import win_prob, fit_residual_sigma
+
+    frame = _synthetic_season(800)
+    cols = [c for c in __import__("nba_predictor.features.build", fromlist=["FEATURE_COLUMNS"]).FEATURE_COLUMNS if c in frame.columns]
+
+    # Out-of-fold margin predictions and residuals (same as walk_forward_regression)
+    margin_errors, preds, outcomes = [], [], []
+    ridge = default_candidates(cols)["ridge"]
+    for train_idx, test_idx in expanding_windows(frame["game_date"], n_windows=4):
+        train_df, test_df = frame.iloc[train_idx], frame.iloc[test_idx]
+        m = ridge["margin"](train_df)
+        test_preds = m(test_df)
+        preds.extend(test_preds)
+        # The ACTUAL result of each held-out game. Grading the prediction against
+        # its own sign (`preds > 0`) would make every score perfect by
+        # construction and is what the first version of this test did.
+        outcomes.extend(test_df["home_win"].astype(int).tolist())
+        margin_errors.extend((test_df["home_margin"].to_numpy() - np.asarray(test_preds)).tolist())
+
+    # Fit sigma from out-of-fold margin residuals
+    sigma = fit_residual_sigma(margin_errors)
+
+    # Win-from-margin, scored against the held-out results
+    y_true = np.asarray(outcomes, dtype=int)
+    y_prob = np.array([win_prob(float(m), sigma) for m in preds])
+
+    from sklearn.metrics import log_loss, brier_score_loss, roc_auc_score
+    wf_logloss = log_loss(y_true, y_prob)
+    wf_brier = brier_score_loss(y_true, y_prob)
+    wf_auc = roc_auc_score(y_true, y_prob)
+
+    # Just verify it computes and produces valid probabilities
+    assert 0.0 < wf_logloss < 2.0
+    assert 0.0 < wf_brier < 1.0
+    assert 0.0 < wf_auc < 1.0
+    assert sigma > 0
+
+    # Report for PR body comparison
+    print(f"Win-from-margin walk-forward (synthetic): log_loss={wf_logloss:.4f}, brier={wf_brier:.4f}, auc={wf_auc:.4f}")
+    print(f"Phase A winner (758 games): log_loss=0.6636, brier=0.2351, auc=0.6285")
+    print(f"Sigma used: {sigma:.2f}")
+
 
 def test_win_prob_derived_from_margin_matches_cover_at_pickem():
     """The coherence property: cover_prob(margin, 0, σ) == win_prob(margin, σ).

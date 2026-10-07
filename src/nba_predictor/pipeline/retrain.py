@@ -20,7 +20,55 @@ from nba_predictor.models.game_outcome import (
     train_win_probability_model,
 )
 from nba_predictor.models.manifest import append_manifest_history, build_manifest, write_manifest
-from nba_predictor.models.probability import MAE_TO_SIGMA, fit_residual_sigma
+from nba_predictor.models.probability import MAE_TO_SIGMA, win_prob
+
+
+def _publish_sigma(block: dict, pooled_mae: float) -> None:
+    """Write `residual_sigma` only when it is a usable number.
+
+    A zero or non-finite MAE means the fit found no spread to measure, so
+    sigma = mae * MAE_TO_SIGMA would publish 0.0 and every served probability
+    would divide by it. Omitting the key is the honest state: the scorer
+    refuses to serve, and says the sigma is missing, rather than reporting a
+    confident 50% from a broken fit.
+    """
+    sigma = float(pooled_mae) * MAE_TO_SIGMA
+    if np.isfinite(sigma) and sigma > 0.0:
+        block["residual_sigma"] = sigma
+
+
+def score_served_win_from_margin(pooled: dict) -> dict:
+    """log-loss / Brier / AUC of the probability we actually serve.
+
+    `pipeline/ingest.py` writes `home_win_prob = win_prob(predicted_margin,
+    margin_sigma)`, so this is the number the manifest's `win_probability` key
+    has to carry. Scoring the logistic classifier instead described a model
+    nothing serves, which is how 0.6904 / 0.2481 / 0.5587 came to describe a
+    served Phi(margin/sigma) it had nothing to do with.
+
+    Graded on the same out-of-fold games as the margin walk-forward that
+    produced `pooled`, against each game's real result: a positive held-out
+    margin IS a home win, so `y > 0` is the outcome, not a second label column
+    that could disagree with it.
+    """
+    from sklearn.metrics import brier_score_loss, log_loss, roc_auc_score
+
+    preds = np.asarray(pooled["preds"], dtype=float)
+    outcomes = (np.asarray(pooled["y"], dtype=float) > 0).astype(int)
+    sigma = float(pooled["mae"]) * MAE_TO_SIGMA
+    if preds.size == 0 or sigma <= 0 or len(set(outcomes.tolist())) < 2:
+        # One class in the holdout makes AUC undefined, and log_loss with a
+        # single label is a division by zero. None means "not measured",
+        # which the frontend already renders as a dash.
+        return {"log_loss": None, "brier": None, "auc": None}
+    probabilities = np.array([win_prob(float(m), sigma) for m in preds])
+    return {
+        "log_loss": float(log_loss(outcomes, probabilities)),
+        "brier": float(brier_score_loss(outcomes, probabilities)),
+        "auc": float(roc_auc_score(outcomes, probabilities)),
+        "sigma": sigma,
+        "n": int(preds.size),
+    }
 
 
 def _nba_season_start_year(game_date: str) -> int:
@@ -130,35 +178,43 @@ def run_retrain_pipeline(games: pd.DataFrame, models_dir: Path, model_version: s
 
     # Place probability metrics under metrics.win_probability (frontend reads per-model metrics)
     # win_probability: unprefixed so labels light up (G10); keep accuracy as-is
+    #
+    # These must describe the SERVED probability. `pipeline/ingest.py` serves
+    # win = norm.cdf(predicted_margin / margin_sigma), so publishing the
+    # logistic's own scores here described a model nothing serves, and a reader
+    # had no way to tell which number they were looking at. The logistic's
+    # scores move under `win_classifier` so the comparison stays visible rather
+    # than deleted.
     if wf_win:
-        metrics.setdefault("win_probability", {})["log_loss"] = wf_win["pooled"].get("log_loss")
-        metrics.setdefault("win_probability", {})["brier"] = wf_win["pooled"].get("brier")
-        metrics.setdefault("win_probability", {})["auc"] = wf_win["pooled"].get("auc")
+        pooled_win = wf_win["pooled"]
+        metrics.setdefault("win_classifier", {})["log_loss"] = pooled_win.get("log_loss")
+        metrics.setdefault("win_classifier", {})["brier"] = pooled_win.get("brier")
+        metrics.setdefault("win_classifier", {})["auc"] = pooled_win.get("auc")
+
+    # The served win probability, scored on the SAME out-of-fold games the
+    # margin walk-forward was scored on, graded against each game's real
+    # result (`y` is the held-out margin; a positive margin IS a home win).
+    if wf_margin and wf_margin["pooled"].get("preds"):
+        metrics.setdefault("win_probability", {}).update(
+            score_served_win_from_margin(wf_margin["pooled"])
+        )
     if wf_margin:
         metrics.setdefault("margin", {})["wf_mae"] = wf_margin["pooled"]["mae"]
         if "naive_mae_fixed" in wf_margin["pooled"]:
             metrics.setdefault("margin", {})["wf_naive_mae_fixed"] = wf_margin["pooled"]["naive_mae_fixed"]
         # The residual sigma that drives every served probability
-        # (models/probability.py). Derived from the out-of-fold residuals via
-        # the Normal relationship rather than plumbing raw residuals through:
-        # same number, one line. Its own key, so the holdout `mae` above is untouched.
-        if "residuals" in wf_margin["pooled"]:
-            try:
-                metrics["margin"]["residual_sigma"] = fit_residual_sigma(wf_margin["pooled"]["residuals"])
-            except ValueError:
-                # Zero-spread residuals (e.g., synthetic test data) fall back to MAE approximation
-                metrics["margin"]["residual_sigma"] = wf_margin["pooled"]["mae"] * MAE_TO_SIGMA
-        else:
-            metrics["margin"]["residual_sigma"] = wf_margin["pooled"]["mae"] * MAE_TO_SIGMA
+        # (models/probability.py). `pooled["mae"]` is already the mean absolute
+        # residual, so this is exactly `fit_residual_sigma(residuals)` — one
+        # path, not a try/except whose fallback recomputed the same number.
+        #
+        # Published only when usable. `score_upcoming_games` refuses to serve
+        # without a positive finite sigma, so writing a 0.0 here would ship a
+        # manifest that advertises a model the scorer will reject. Absent means
+        # "not fitted", which the scorer reports by name.
+        _publish_sigma(metrics["margin"], wf_margin["pooled"]["mae"])
     if wf_total:
         metrics.setdefault("total", {})["wf_mae"] = wf_total["pooled"]["mae"]
-        if "residuals" in wf_total["pooled"]:
-            try:
-                metrics["total"]["residual_sigma"] = fit_residual_sigma(wf_total["pooled"]["residuals"])
-            except ValueError:
-                metrics["total"]["residual_sigma"] = wf_total["pooled"]["mae"] * MAE_TO_SIGMA
-        else:
-            metrics["total"]["residual_sigma"] = wf_total["pooled"]["mae"] * MAE_TO_SIGMA
+        _publish_sigma(metrics["total"], wf_total["pooled"]["mae"])
 
     manifest = build_manifest(
         model_names=["win_probability", "margin", "total"],

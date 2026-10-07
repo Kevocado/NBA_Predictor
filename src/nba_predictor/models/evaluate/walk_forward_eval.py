@@ -109,6 +109,18 @@ def classification_metrics(
     }
 
 
+def _history(history_df: pd.DataFrame | None, date_col: str) -> pd.DataFrame | None:
+    """The extra-history frame, sorted, or None when there is nothing to add.
+
+    Sorted for the same reason `df` is: the causality check reads the maximum
+    training date as a string and compares it to the minimum test date, and that
+    only means anything if both are in the same order.
+    """
+    if history_df is None or not len(history_df):
+        return None
+    return history_df.sort_values(date_col).reset_index(drop=True)
+
+
 def walk_forward_metrics(
     df: pd.DataFrame,
     model_factory: Callable[[pd.DataFrame], object],
@@ -116,6 +128,7 @@ def walk_forward_metrics(
     *,
     date_col: str = "game_date",
     target_col: str = "home_win",
+    history_df: pd.DataFrame | None = None,
 ) -> dict:
     """Expanding-window walk-forward for the win model.
 
@@ -126,12 +139,27 @@ def walk_forward_metrics(
 
     Returns per-window metrics plus `pooled`: every out-of-fold prediction
     concatenated, the only figure computed entirely on games no window trained on.
+
+    **`history_df` widens training without moving the tests.** Pass older games
+    here and they join every window's TRAINING set; the test slices come from
+    `df` alone and are therefore byte-identical to a run without history. That
+    is the whole point: a multi-season model and a single-season model have to be
+    scored on the same games, or the two numbers are not comparable and the
+    comparison means nothing. History dated on or after a window's first test
+    game is dropped, so the causality assertion below still holds.
     """
     df = df.sort_values(date_col).reset_index(drop=True)
+    history = _history(history_df, date_col)
     per_window, ys, ps, naive_ps = [], [], [], []
 
     for i, (train_idx, test_idx) in enumerate(expanding_windows(df[date_col], windows)):
         train_df, test_df = df.iloc[train_idx], df.iloc[test_idx]
+        if history is not None:
+            cutoff = str(test_df[date_col].min())
+            extra = history[history[date_col].astype(str) < cutoff]
+            if len(extra):
+                train_df = pd.concat([extra, train_df], ignore_index=True)
+        train_df = train_df.sort_values(date_col).reset_index(drop=True)
         y_test = test_df[target_col]
 
         train_max, test_min = str(train_df[date_col].max()), str(test_df[date_col].min())
@@ -162,13 +190,21 @@ def walk_forward_metrics(
         naive_ps.append(np.full(len(y_true), np.clip(train_rate, 1e-12, 1 - 1e-12)))
 
     y_all = np.concatenate(ys)
+    p_all = np.concatenate(ps)
+    pooled = classification_metrics(
+        y_all, p_all, naive_base_rate=np.concatenate(naive_ps)
+    )
+    # The out-of-fold predictions themselves, aligned with `y`. A summary of the
+    # error is not enough to compare two models on the SAME games: a paired
+    # bootstrap and a reliability table both need per-game values. Mirrors what
+    # `walk_forward_regression` already returns for margin and total.
+    pooled["preds"] = p_all.tolist()
+    pooled["y"] = y_all.tolist()
     return {
         "windows": per_window,
         # Pooled naive uses each window's own training base rate, so the
         # comparator is honest about what was knowable at each point in time.
-        "pooled": classification_metrics(
-            y_all, np.concatenate(ps), naive_base_rate=np.concatenate(naive_ps)
-        ),
+        "pooled": pooled,
     }
 
 
@@ -180,6 +216,7 @@ def walk_forward_regression(
     *,
     date_col: str = "game_date",
     fixed_baseline: float | None = None,
+    history_df: pd.DataFrame | None = None,
 ) -> dict:
     """Expanding-window walk-forward for a regression target.
 
@@ -194,13 +231,23 @@ def walk_forward_regression(
         average total) that does not adapt, and is only emitted when the caller
         supplies one. Reporting the training mean under both names would be one
         number wearing two labels.
+
+    `history_df` widens training without moving the tests, exactly as
+    `walk_forward_metrics` documents it.
     """
     df = df.sort_values(date_col).reset_index(drop=True)
+    history = _history(history_df, date_col)
     windows_list = expanding_windows(df[date_col], windows)
     per_window, ys, yhs = [], [], []
 
     for i, (train_idx, test_idx) in enumerate(windows_list):
         train_df, test_df = df.iloc[train_idx], df.iloc[test_idx]
+        if history is not None:
+            cutoff = str(test_df[date_col].min())
+            extra = history[history[date_col].astype(str) < cutoff]
+            if len(extra):
+                train_df = pd.concat([extra, train_df], ignore_index=True)
+        train_df = train_df.sort_values(date_col).reset_index(drop=True)
         y_test = test_df[target].to_numpy()
 
         train_max, test_min = str(train_df[date_col].max()), str(test_df[date_col].min())

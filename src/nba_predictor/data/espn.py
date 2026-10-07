@@ -8,6 +8,7 @@ blocked from some network environments.
 import json
 import os
 import re
+import threading
 import time
 from pathlib import Path
 
@@ -80,9 +81,44 @@ def _save_cache(endpoint: str, id_value: str, data: dict) -> None:
 
 @retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=1, max=32), reraise=True)
 def _fetch_json(url: str, params: dict | None = None) -> dict:
+    _throttle()
     response = requests.get(url, params=params, timeout=30)
     response.raise_for_status()
     return response.json()
+
+
+# Minimum seconds between two ESPN requests, and the time of the last one.
+#
+# The daily ingest makes a few dozen calls and is not affected either way. A
+# multi-season backfill makes thousands: five seasons is ~410 scoreboard and
+# ~6,000 box-score requests, and firing those at full speed is how a fetch gets
+# throttled into 429s, which `retry` then turns into five slow failures per game.
+# One floor for every caller is simpler than a per-call-site budget and cannot be
+# bypassed by a new call site.
+#
+# Set ESPN_MIN_REQUEST_INTERVAL_SECONDS=0 to turn it off for a local fixture run
+# that must not sleep. `sleep` is injected so the throttle is testable without
+# real waiting, and the clock with it, so a test can assert the pacing rather
+# than merely that a function was called.
+ESPN_MIN_REQUEST_INTERVAL_SECONDS = float(os.getenv("ESPN_MIN_REQUEST_INTERVAL_SECONDS", "0.2"))
+_last_request_at: float | None = None
+_throttle_lock = threading.Lock()
+
+
+def _throttle(sleep=time.sleep, clock=time.monotonic) -> None:
+    """Block until at least `ESPN_MIN_REQUEST_INTERVAL_SECONDS` has passed since
+    the previous request. A no-op when the interval is zero or negative."""
+    global _last_request_at
+    if ESPN_MIN_REQUEST_INTERVAL_SECONDS <= 0:
+        return
+    with _throttle_lock:
+        now = clock()
+        if _last_request_at is not None:
+            wait = ESPN_MIN_REQUEST_INTERVAL_SECONDS - (now - _last_request_at)
+            if wait > 0:
+                sleep(wait)
+                now = clock()
+        _last_request_at = now
 
 
 def get_scoreboard(date: str) -> list[dict]:

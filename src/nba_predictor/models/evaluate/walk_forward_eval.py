@@ -190,13 +190,21 @@ def walk_forward_metrics(
         naive_ps.append(np.full(len(y_true), np.clip(train_rate, 1e-12, 1 - 1e-12)))
 
     y_all = np.concatenate(ys)
+    p_all = np.concatenate(ps)
+    pooled = classification_metrics(
+        y_all, p_all, naive_base_rate=np.concatenate(naive_ps)
+    )
+    # The out-of-fold predictions themselves, aligned with `y`. A summary of the
+    # error is not enough to compare two models on the SAME games: a paired
+    # bootstrap and a reliability table both need per-game values. Mirrors what
+    # `walk_forward_regression` already returns for margin and total.
+    pooled["preds"] = p_all.tolist()
+    pooled["y"] = y_all.tolist()
     return {
         "windows": per_window,
         # Pooled naive uses each window's own training base rate, so the
         # comparator is honest about what was knowable at each point in time.
-        "pooled": classification_metrics(
-            y_all, np.concatenate(ps), naive_base_rate=np.concatenate(naive_ps)
-        ),
+        "pooled": pooled,
     }
 
 

@@ -12,12 +12,15 @@ import json
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from nba_predictor.features.build import FEATURE_COLUMNS, build_training_frame  # noqa: E402
 from nba_predictor.models.candidate_race import default_candidates  # noqa: E402
+from nba_predictor.models.artifact_gate import bucket_calibration, calibration_gap  # noqa: E402
+from nba_predictor.models.evaluate.paired_bootstrap import paired_bootstrap  # noqa: E402
 from nba_predictor.models.evaluate.walk_forward_eval import (  # noqa: E402
     walk_forward_metrics,
     walk_forward_regression,
@@ -27,6 +30,13 @@ from nba_predictor.models.evaluate.walk_forward_eval import (  # noqa: E402
 # "1,368 games from data/cache/training/games.json (2025-10-02 -> 2026-10-04)".
 PHASE_A_START = "2025-10-02"
 PHASE_A_END = "2026-10-04"
+
+#: Reliability buckets, bootstrap resamples and seed. All three are stated here
+#: rather than left implicit so a reader can reproduce the exact intervals, and
+#: so a re-run with different numbers is visibly a change of method.
+N_BUCKETS = 5
+N_RESAMPLES = 2000
+SEED = 20261007
 
 # Phase A's published figures, to reproduce first and then beat.
 PHASE_A = {
@@ -131,6 +141,92 @@ def main() -> int:
             verdict = "history WINS" if with_history > reproduced else ("tie" if with_history == reproduced else "history LOSES")
         print(f"{name:<14}{published:>12.4f}{reproduced:>13.4f}{with_history:>12.4f}   {verdict}")
 
+    # --- (a) reliability, 5 quantile buckets, on the identical 758 ---------
+    print("\n=== reliability: observed vs predicted, 5 equal-count buckets")
+    print("(identical 758 out-of-fold games; equal-COUNT buckets because NBA")
+    print(" win probabilities cluster near 0.56 and equal-width would fill one)")
+    for label, res in (("baseline", base), ("multi-season", hist)):
+        table = bucket_calibration(
+            np.asarray(res["win"]["pooled"]["y"]),
+            np.asarray(res["win"]["pooled"]["preds"]),
+            n_buckets=N_BUCKETS,
+        )
+        print(f"\n  {label}:")
+        print(f"    {'bucket':<8}{'predicted':>11}{'observed':>11}{'gap':>9}{'n':>6}")
+        for row in table:
+            print(f"    {row['bucket']:<8}{row['predicted']:>11.4f}{row['observed']:>11.4f}"
+                  f"{row['gap']:>+9.4f}{row['n']:>6}")
+        worst = max(table, key=lambda r: abs(r["gap"]))
+        gap = calibration_gap(
+            np.asarray(res["win"]["pooled"]["y"]),
+            np.asarray(res["win"]["pooled"]["preds"]),
+            n_buckets=N_BUCKETS,
+        )
+        results[f"{label}_calibration"] = {"table": table, "max_gap": gap}
+        print(f"    max |gap| = {gap:.4f}  (bucket {worst['bucket']})")
+    base_gap = results["baseline_calibration"]["max_gap"]
+    hist_gap = results["multi-season_calibration"]["max_gap"]
+    verdict = ("NOT WIDENED" if hist_gap <= base_gap
+               else f"WIDENED by {hist_gap - base_gap:+.4f}")
+    print(f"\n  calibration gap: baseline {base_gap:.4f} -> multi-season {hist_gap:.4f}  {verdict}")
+
+    # --- (b) paired bootstrap on the identical 758 -------------------------
+    print(f"\n=== paired bootstrap, {N_RESAMPLES} resamples, seed {SEED}")
+    print("one draw of game indices applied to BOTH models; 95% percentile interval")
+    print("on the DIFFERENCE. A metric counts as improved only if the interval")
+    print("excludes zero in the direction that is better.")
+    win_y = np.asarray(base["win"]["pooled"]["y"])
+    margin_y = np.asarray(base["margin"]["pooled"]["y"])
+    total_y = np.asarray(base["total"]["pooled"]["y"])
+
+    boot = {
+        "win log_loss": paired_bootstrap(
+            win_y, np.asarray(base["win"]["pooled"]["preds"]),
+            np.asarray(hist["win"]["pooled"]["preds"]), "log_loss",
+            n_resamples=N_RESAMPLES, seed=SEED),
+        "win brier": paired_bootstrap(
+            win_y, np.asarray(base["win"]["pooled"]["preds"]),
+            np.asarray(hist["win"]["pooled"]["preds"]), "brier",
+            n_resamples=N_RESAMPLES, seed=SEED),
+        "win auc": paired_bootstrap(
+            win_y, np.asarray(base["win"]["pooled"]["preds"]),
+            np.asarray(hist["win"]["pooled"]["preds"]), "auc",
+            n_resamples=N_RESAMPLES, seed=SEED),
+        "margin mae": paired_bootstrap(
+            margin_y, np.asarray(base["margin"]["pooled"]["preds"]),
+            np.asarray(hist["margin"]["pooled"]["preds"]), "mae",
+            n_resamples=N_RESAMPLES, seed=SEED),
+        "total mae": paired_bootstrap(
+            total_y, np.asarray(base["total"]["pooled"]["preds"]),
+            np.asarray(hist["total"]["pooled"]["preds"]), "mae",
+            n_resamples=N_RESAMPLES, seed=SEED),
+    }
+    print(f"\n  {'metric':<14}{'baseline':>10}{'+history':>10}{'diff':>10}"
+          f"{'95% interval':>22}   verdict")
+    n_improved = 0
+    for name, out in boot.items():
+        ci = f"[{out['ci_low']:+.4f}, {out['ci_high']:+.4f}]"
+        if out["improved"]:
+            verdict = "IMPROVED (CI excludes 0)"
+            n_improved += 1
+        else:
+            verdict = "NOT distinguishable from 0"
+        print(f"  {name:<14}{out['baseline']:>10.4f}{out['candidate']:>10.4f}"
+              f"{out['difference']:>+10.4f}{ci:>22}   {verdict}")
+    print(f"\n  {n_improved}/5 metrics have intervals excluding zero")
+
+    # --- (c) the verdict, stated as a gate --------------------------------
+    print("\n=== verdict")
+    not_widened = hist_gap <= base_gap
+    print(f"  metrics improved with a 95% interval excluding zero: {n_improved}/5")
+    if not [n for n in boot if not boot[n]["improved"]]:
+        print("  calibration gap: not widened")
+        print("  VERDICT: all five metrics clear the bar and calibration holds.")
+    else:
+        short = [n for n in boot if not boot[n]["improved"]]
+        print(f"  calibration gap: baseline {base_gap:.4f} -> {hist_gap:.4f} "
+              f"({'not widened' if not_widened else 'WIDENED'})")
+        print(f"  VERDICT: NOT cleared. {len(short)} metric(s) do not: {', '.join(short)}.")
     return 0
 
 

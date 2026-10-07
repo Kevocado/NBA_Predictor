@@ -392,8 +392,27 @@ def score_upcoming_games(games: list[dict], models_dir: Path, db_path: Path, mod
         logger.warning("game model missing, skipping game scoring: %s", exc.filename)
         return 0
 
-    win_probs = predict_win_probability(win_model, upcoming_frame[feature_cols])
+    # Load manifest to get margin_sigma for coherent win probability
+    manifest_path = models_dir / "manifest.json"
+    margin_sigma = None
+    if manifest_path.exists():
+        import json
+        manifest = json.loads(manifest_path.read_text())
+        margin_sigma = manifest.get("metrics", {}).get("margin", {}).get("residual_sigma")
+
     margins = margin_model.predict(upcoming_frame[feature_cols])
+    totals = total_model.predict(upcoming_frame[feature_cols])
+
+    # Derive win probability from margin using sigma for coherence:
+    # win = norm.cdf(predicted_margin / sigma_margin)
+    # This ensures win probability and margin tell the same story.
+    from nba_predictor.models.probability import win_prob
+    if margin_sigma is not None and margin_sigma > 0:
+        win_probs = np.array([win_prob(float(m), margin_sigma) for m in margins])
+    else:
+        # Fallback to classifier if sigma not available
+        win_probs = predict_win_probability(win_model, upcoming_frame[feature_cols])
+
     totals = total_model.predict(upcoming_frame[feature_cols])
 
     created_at = datetime.now(timezone.utc).isoformat()

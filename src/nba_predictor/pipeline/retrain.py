@@ -20,7 +20,7 @@ from nba_predictor.models.game_outcome import (
     train_win_probability_model,
 )
 from nba_predictor.models.manifest import append_manifest_history, build_manifest, write_manifest
-from nba_predictor.models.probability import MAE_TO_SIGMA
+from nba_predictor.models.probability import MAE_TO_SIGMA, fit_residual_sigma
 
 
 def _nba_season_start_year(game_date: str) -> int:
@@ -139,13 +139,26 @@ def run_retrain_pipeline(games: pd.DataFrame, models_dir: Path, model_version: s
         if "naive_mae_fixed" in wf_margin["pooled"]:
             metrics.setdefault("margin", {})["wf_naive_mae_fixed"] = wf_margin["pooled"]["naive_mae_fixed"]
         # The residual sigma that drives every served probability
-        # (models/probability.py). Derived from the out-of-fold MAE via the
-        # Normal relationship rather than plumbing raw residuals through: same
-        # number, one line. Its own key, so the holdout `mae` above is untouched.
-        metrics["margin"]["residual_sigma"] = wf_margin["pooled"]["mae"] * MAE_TO_SIGMA
+        # (models/probability.py). Derived from the out-of-fold residuals via
+        # the Normal relationship rather than plumbing raw residuals through:
+        # same number, one line. Its own key, so the holdout `mae` above is untouched.
+        if "residuals" in wf_margin["pooled"]:
+            try:
+                metrics["margin"]["residual_sigma"] = fit_residual_sigma(wf_margin["pooled"]["residuals"])
+            except ValueError:
+                # Zero-spread residuals (e.g., synthetic test data) fall back to MAE approximation
+                metrics["margin"]["residual_sigma"] = wf_margin["pooled"]["mae"] * MAE_TO_SIGMA
+        else:
+            metrics["margin"]["residual_sigma"] = wf_margin["pooled"]["mae"] * MAE_TO_SIGMA
     if wf_total:
         metrics.setdefault("total", {})["wf_mae"] = wf_total["pooled"]["mae"]
-        metrics["total"]["residual_sigma"] = wf_total["pooled"]["mae"] * MAE_TO_SIGMA
+        if "residuals" in wf_total["pooled"]:
+            try:
+                metrics["total"]["residual_sigma"] = fit_residual_sigma(wf_total["pooled"]["residuals"])
+            except ValueError:
+                metrics["total"]["residual_sigma"] = wf_total["pooled"]["mae"] * MAE_TO_SIGMA
+        else:
+            metrics["total"]["residual_sigma"] = wf_total["pooled"]["mae"] * MAE_TO_SIGMA
 
     manifest = build_manifest(
         model_names=["win_probability", "margin", "total"],

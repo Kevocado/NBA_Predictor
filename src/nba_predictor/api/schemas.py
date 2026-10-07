@@ -277,6 +277,12 @@ class TrackRecordOut(BaseModel):
     # None when nothing was graded: 0.0 would claim every graded pick missed,
     # which is a different statement from "never measured".
     hit_rate: float | None = None
+    # How stale this row is, in seconds, when a cached value is being served
+    # because a refresh failed. None means the row was computed for this
+    # request. Set only on the cached player-props aggregate, and only when the
+    # last refresh attempt failed -- an ordinary in-TTL cache hit is fresh, not
+    # stale, and saying otherwise would train readers to ignore the field.
+    served_stale_seconds: float | None = None
     # The number of graded counted picks made at or after their own tip-off:
     # the reconciliation between the headline and the pre-tip subset.
     n_rebuilt: int = 0

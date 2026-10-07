@@ -182,6 +182,17 @@ export interface TrackRecord {
   /** null when nothing was graded — a dash, never a 0% claim. */
   hit_rate: number | null;
   /**
+   * How stale this row is, in seconds, when a cached value is served because the
+   * refresh failed. `null` means it was computed for this request — an ordinary
+   * in-TTL cache hit is fresh, not stale, and saying otherwise would train a
+   * reader to ignore the field.
+   *
+   * Set only on the cached `player_props` aggregate, and only on failure. No
+   * surface renders player-props detail on this page yet, so the notice has no
+   * visible home; it is here so the disclosure is not silently dropped.
+   */
+  served_stale_seconds?: number | null;
+  /**
    * RENAMED IN MEANING, name kept: it used to count finals LEFT OUT of the
    * record. It is now the number of graded counted picks made at or after their
    * own tip-off, so `total_predictions === pre_tip.total_predictions +

@@ -19,6 +19,7 @@ from nba_predictor.features.context import current_streak
 from nba_predictor.features.ratings import compute_possessions
 from nba_predictor.models.game_outcome import predict_win_probability
 from nba_predictor.models.manifest import build_manifest, write_manifest
+from nba_predictor.models.probability import win_prob
 from nba_predictor.models.player_props import predict_player_stat, train_player_stat_model
 from nba_predictor.pipeline.retrain import run_retrain_pipeline
 from nba_predictor.tracking import store
@@ -374,7 +375,12 @@ def score_upcoming_games(games: list[dict], models_dir: Path, db_path: Path, mod
     result in the same predictions table score_and_store_predictions
     writes to. Only rows for games that are not completed are scored —
     a completed game already gets its backtest prediction from
-    score_and_store_predictions."""
+    score_and_store_predictions.
+
+    Win probability is now derived from margin/sigma (Phi(margin/sigma)) for
+    coherence with spread/total cover probabilities. The old classifier is
+    not used; if the manifest lacks margin_sigma, we fail loudly rather than
+    silently falling back."""
     scoring_df = to_scoring_frame(games)
     frame, feature_cols = build_feature_frame(scoring_df)
     upcoming_frame = frame[frame["home_win"].isna()].reset_index(drop=True)
@@ -392,18 +398,27 @@ def score_upcoming_games(games: list[dict], models_dir: Path, db_path: Path, mod
         logger.warning("game model missing, skipping game scoring: %s", exc.filename)
         return 0
 
-    win_probs = predict_win_probability(win_model, upcoming_frame[feature_cols])
+    # Load margin_sigma from manifest (populated by retrain from walk-forward residuals)
+    manifest_path = models_dir / "manifest.json"
+    if not manifest_path.exists():
+        raise FileNotFoundError(f"manifest.json not found at {manifest_path}; run /retrain first")
+    manifest = json.loads(manifest_path.read_text())
+    margin_sigma = manifest.get("metrics", {}).get("margin", {}).get("residual_sigma")
+    if margin_sigma is None or not np.isfinite(margin_sigma) or margin_sigma <= 0:
+        raise ValueError(f"manifest missing positive finite margin_sigma; cannot serve win-from-margin. Got: {margin_sigma!r}")
+
     margins = margin_model.predict(upcoming_frame[feature_cols])
     totals = total_model.predict(upcoming_frame[feature_cols])
 
     created_at = datetime.now(timezone.utc).isoformat()
     for i, row in upcoming_frame.iterrows():
+        wp = win_prob(float(margins[i]), margin_sigma)
         store.insert_prediction(
             db_path,
             game_id=row["game_id"],
             created_at=created_at,
             model_version=model_version,
-            home_win_prob=float(win_probs[i]),
+            home_win_prob=wp,
             predicted_margin=float(margins[i]),
             predicted_total=float(totals[i]),
         )
@@ -813,6 +828,9 @@ def score_and_store_predictions(games_df: pd.DataFrame, models_dir: Path, db_pat
     pre-game rolling features are leak-free since build_training_frame only
     ever looks at *prior* games via shift(1)) - this is how a backtest lets
     us show real model output for real historical games in the UI.
+
+    Win probability is derived from margin/sigma (Phi(margin/sigma)) for
+    coherence. If the manifest lacks margin_sigma, we fail loudly.
     """
     # Trusted artifacts: these .pkl files are written by run_retrain_pipeline
     # (via joblib.dump) in this same pipeline run — not from an external or
@@ -825,22 +843,31 @@ def score_and_store_predictions(games_df: pd.DataFrame, models_dir: Path, db_pat
         logger.warning("game model missing, skipping game scoring: %s", exc.filename)
         return 0
 
+    # Load margin_sigma from manifest (populated by retrain from walk-forward residuals)
+    manifest_path = models_dir / "manifest.json"
+    if not manifest_path.exists():
+        raise FileNotFoundError(f"manifest.json not found at {manifest_path}; run /retrain first")
+    manifest = json.loads(manifest_path.read_text())
+    margin_sigma = manifest.get("metrics", {}).get("margin", {}).get("residual_sigma")
+    if margin_sigma is None or not np.isfinite(margin_sigma) or margin_sigma <= 0:
+        raise ValueError(f"manifest missing positive finite margin_sigma; cannot serve win-from-margin. Got: {margin_sigma!r}")
+
     frame, feature_cols = build_training_frame(games_df)
     if len(frame) == 0:
         return 0
 
-    win_probs = predict_win_probability(win_model, frame[feature_cols])
     margins = margin_model.predict(frame[feature_cols])
     totals = total_model.predict(frame[feature_cols])
 
     created_at = datetime.now(timezone.utc).isoformat()
     for i, row in frame.iterrows():
+        wp = win_prob(float(margins[i]), margin_sigma)
         store.insert_prediction(
             db_path,
             game_id=row["game_id"],
             created_at=created_at,
             model_version=model_version,
-            home_win_prob=float(win_probs[i]),
+            home_win_prob=wp,
             predicted_margin=float(margins[i]),
             predicted_total=float(totals[i]),
         )

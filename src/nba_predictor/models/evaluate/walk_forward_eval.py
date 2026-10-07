@@ -238,6 +238,7 @@ def walk_forward_regression(
 
     y_all = np.concatenate(ys)
     yh_all = np.concatenate(yhs)
+    residuals = y_all - yh_all
     # Pooled naive: per-window training means (leak-free), mirroring classification
     naive_preds = []
     for i, (train_idx, test_idx) in enumerate(windows_list):
@@ -250,6 +251,7 @@ def walk_forward_regression(
         "naive_mae": float(mean_absolute_error(y_all, naive_all)),
         "naive_mean": float(naive_all.mean()) if len(naive_all) else 0.0,
         "n": int(len(y_all)),
+        "residuals": residuals,  # for fitting proper sigma
     }
     if fixed_baseline is not None:
         pooled["naive_mae_fixed"] = float(

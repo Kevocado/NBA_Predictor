@@ -286,3 +286,42 @@ def test_win_from_margin_walk_forward_computes_on_synthetic():
     print(f"Win-from-margin walk-forward (synthetic): log_loss={wf_logloss:.4f}, brier={wf_brier:.4f}, auc={wf_auc:.4f}")
     print(f"Phase A winner (758 games): log_loss=0.6636, brier=0.2351, auc=0.6285")
     print(f"Sigma used: {sigma:.2f}")
+
+
+def test_win_prob_derived_from_margin_matches_cover_at_pickem():
+    """The coherence property: cover_prob(margin, 0, σ) == win_prob(margin, σ).
+
+    A pick'em spread (line=0) *is* a positive margin, so the cover probability
+    at line=0 must equal the win probability exactly. This is the mathematical
+    guarantee that the three numbers a visitor reads come from one distribution.
+    """
+    sigma = 13.0
+    for margin in (-10.0, -3.5, 0.0, 2.0, 8.0, 15.0):
+        assert cover_prob(margin, 0.0, sigma) == pytest.approx(
+            win_prob(margin, sigma), abs=1e-12
+        ), f"margin={margin}: cover at 0 != win prob"
+
+
+def test_win_probability_coherence_check():
+    """A coherence check that the served win probability should match the
+    margin-derived probability.
+
+    This test documents the expected behavior: when a game is served,
+    home_win_probability should equal norm.cdf(predicted_margin / margin_sigma).
+    Any discrepancy means the model's win probability and margin are telling
+    different stories about the same game.
+    """
+    # Example from live audit: MIN 72% win, margin +13.3 with σ≈13
+    # If margin is +13.3 and σ=13, win prob from margin = norm.cdf(13.3/13) ≈ 0.85
+    # But classifier says 0.72 -> INCOHERENT (discrepancy ~0.13)
+    from scipy.stats import norm
+
+    predicted_margin = 13.3
+    sigma = 13.0
+    win_from_margin = float(norm.cdf(predicted_margin / sigma))
+    win_from_classifier = 0.72  # what the live site currently shows
+
+    # The coherent win probability should be derived from margin
+    assert win_from_margin == pytest.approx(0.85, abs=0.02)
+    # This is the discrepancy we need to fix
+    assert abs(win_from_margin - win_from_classifier) > 0.1

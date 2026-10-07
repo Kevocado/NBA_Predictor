@@ -398,7 +398,7 @@ def score_upcoming_games(games: list[dict], models_dir: Path, db_path: Path, mod
         logger.warning("game model missing, skipping game scoring: %s", exc.filename)
         return 0
 
-    # Load margin_sigma from manifest (populated by retrain from walk-forward residuals)
+# Load margin_sigma from manifest (populated by retrain from walk-forward residuals)
     manifest_path = models_dir / "manifest.json"
     if not manifest_path.exists():
         raise FileNotFoundError(f"manifest.json not found at {manifest_path}; run /retrain first")

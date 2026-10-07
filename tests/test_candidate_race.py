@@ -171,10 +171,37 @@ def test_race_is_deterministic():
     assert a["winner"] == b["winner"]
     for name in a["results"]:
         for target in a["results"][name]:
-            assert (
-                a["results"][name][target]["pooled"]
-                == b["results"][name][target]["pooled"]
-            ), f"{name}/{target} differed between identical runs"
+            assert _dicts_equal(a["results"][name][target]["pooled"], b["results"][name][target]["pooled"]), (
+                f"{name}/{target} differed between identical runs"
+            )
+
+
+def _dicts_equal(a: dict, b: dict) -> bool:
+    """Compare two dicts that may contain numpy arrays."""
+    if a.keys() != b.keys():
+        return False
+    for k in a:
+        av, bv = a[k], b[k]
+        if isinstance(av, np.ndarray) and isinstance(bv, np.ndarray):
+            if av.shape != bv.shape:
+                return False
+            if not np.array_equal(av, bv):
+                return False
+        elif isinstance(av, dict) and isinstance(bv, dict):
+            if not _dicts_equal(av, bv):
+                return False
+        elif isinstance(av, list) and isinstance(bv, list):
+            if len(av) != len(bv):
+                return False
+            for av_i, bv_i in zip(av, bv):
+                if isinstance(av_i, (np.ndarray, dict)) or isinstance(bv_i, (np.ndarray, dict)):
+                    if not _dicts_equal(av_i, bv_i) if isinstance(av_i, dict) else np.array_equal(av_i, bv_i):
+                        return False
+                elif av_i != bv_i:
+                    return False
+        elif av != bv:
+            return False
+    return True
 
 
 def test_naive_baselines_are_reported_for_all_three_targets():

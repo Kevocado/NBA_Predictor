@@ -100,11 +100,27 @@ def test_a_constant_missing_value_column_never_becomes_a_split():
     # not have influenced any prediction: XGBoost omits a feature from its
     # gain score entirely when it never split on it. XGBoost cannot split on a
     # constant -- there is no threshold that separates it.
+    # For LogisticRegression, a constant feature gets a coefficient of 0.
     for name in ("win_probability_model", "margin_model", "total_model"):
-        booster = joblib.load(f"models/{name}.pkl").get_booster()
-        scored = booster.get_score(importance_type="gain")
-        assert "home_missing_value" not in scored, f"{name} split on home_missing_value"
-        assert "away_missing_value" not in scored, f"{name} split on away_missing_value"
+        model = joblib.load(f"models/{name}.pkl")
+        if hasattr(model, "get_booster"):
+            # XGBoost model
+            booster = model.get_booster()
+            scored = booster.get_score(importance_type="gain")
+            assert "home_missing_value" not in scored, f"{name} split on home_missing_value"
+            assert "away_missing_value" not in scored, f"{name} split on away_missing_value"
+        elif hasattr(model, "coef_"):
+            # LogisticRegression model - check coefficients
+            feature_names = getattr(model, "feature_names_in_", None)
+            if feature_names is not None:
+                coef_dict = dict(zip(feature_names, model.coef_.flatten()))
+                # A constant feature should have coefficient 0 (or very close)
+                home_coef = coef_dict.get("home_missing_value", 0)
+                away_coef = coef_dict.get("away_missing_value", 0)
+                assert abs(home_coef) < 1e-10, f"{name} has non-zero coefficient for home_missing_value: {home_coef}"
+                assert abs(away_coef) < 1e-10, f"{name} has non-zero coefficient for away_missing_value: {away_coef}"
+        else:
+            pytest.skip(f"Unknown model type for {name}: {type(model)}")
 
 
 def test_the_split_absence_is_because_the_column_is_constant_not_by_chance():

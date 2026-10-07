@@ -47,14 +47,19 @@ def run_retrain_pipeline(games: pd.DataFrame, models_dir: Path, model_version: s
     logger = logging.getLogger(__name__)
 
     # Candidate race on the training frame to pick the winners per target
-    try:
-        race = run_candidate_race(train_df, feature_cols=feature_cols, windows=4)
-        win_candidate = race["winner"]["win"] or "xgboost"
-        margin_candidate = race["winner"]["margin"] or "xgboost"
-        total_candidate = race["winner"]["total"] or "xgboost"
-    except Exception:
-        logger.exception("candidate race failed, falling back to xgboost")
-        win_candidate = margin_candidate = total_candidate = "xgboost"
+    # No fallback: if the race fails or any target has no winner, we stop.
+    # Publishing a manifest from a failed race or a target with no winner would
+    # serve models that did not win a valid race.
+    race = run_candidate_race(train_df, feature_cols=feature_cols, windows=4)
+    win_candidate = race["winner"].get("win")
+    margin_candidate = race["winner"].get("margin")
+    total_candidate = race["winner"].get("total")
+    if win_candidate is None or margin_candidate is None or total_candidate is None:
+        raise RuntimeError(
+            f"candidate race produced no winner for one or more targets: "
+            f"win={win_candidate}, margin={margin_candidate}, total={total_candidate}; "
+            "retrain aborted, no manifest published"
+        )
 
     win_model = train_win_probability_model(train_df[feature_cols], train_df["home_win"], candidate=win_candidate)
     margin_model = train_margin_model(train_df[feature_cols], train_df["home_pts"] - train_df["away_pts"], candidate=margin_candidate)

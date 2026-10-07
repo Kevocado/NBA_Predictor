@@ -151,7 +151,7 @@ def gated_picks(
             continue  # no line, no cover probability, no edge
 
         edge = row.get("edge")
-        if edge is None or edge < threshold or edge > ceiling:
+        if edge is None or edge < threshold or abs(edge) > ceiling:
             continue
 
         if not _is_fresh(row, now):

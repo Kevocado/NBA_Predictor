@@ -65,3 +65,29 @@ def test_retrain_manifest_has_training_counts(tmp_path):
     assert training["n_current_season_games"] <= training["n_train_games"]
     on_disk = json.loads((models_dir / "manifest.json").read_text())
     assert on_disk["training"] == training
+
+
+def test_retrain_uses_candidate_race_winner(tmp_path):
+    """Retrain pipeline should run candidate race and use winner per target.
+    
+    The manifest should record which candidate was used for each model.
+    This test will fail until we wire the candidate race into retrain.
+    """
+    import json
+    from nba_predictor.pipeline.retrain import run_retrain_pipeline
+    
+    games = _synthetic_games(n=100)  # Need more games for race
+    models_dir = tmp_path / "models"
+    manifest = run_retrain_pipeline(games, models_dir, "v-test", "2026-11-01T00:00:00")
+    
+    # The manifest should record the candidate used for each model
+    training = manifest["training"]
+    assert "win_candidate" in training, "manifest should record win_candidate"
+    assert "margin_candidate" in training, "manifest should record margin_candidate"
+    assert "total_candidate" in training, "manifest should record total_candidate"
+    
+    # The candidates should be valid choices
+    valid_candidates = {"xgboost", "logistic", "ridge"}
+    assert training["win_candidate"] in valid_candidates
+    assert training["margin_candidate"] in valid_candidates
+    assert training["total_candidate"] in valid_candidates

@@ -34,6 +34,11 @@ from datetime import datetime, timedelta, timezone
 #: Minimum absolute edge, per the sibling contract.
 EDGE_THRESHOLD = 0.05
 
+#: Maximum absolute edge -- above this the pick is flagged "suspect" and excluded.
+#: Large edges are almost always model error (miscalibration, bad market prob), not
+#: real opportunity. Phase A showed XGBoost was 18% overconfident on its top bucket.
+EDGE_CEILING = 0.15
+
 #: A line older than this is not a bettable price.
 MAX_ODDS_AGE = timedelta(hours=1)
 
@@ -124,6 +129,7 @@ def gated_picks(
     rows: list[dict],
     now: datetime | None = None,
     threshold: float = EDGE_THRESHOLD,
+    ceiling: float = EDGE_CEILING,
 ) -> list[dict]:
     """The rows worth flagging: at most one single per game, highest edge first.
 
@@ -145,7 +151,7 @@ def gated_picks(
             continue  # no line, no cover probability, no edge
 
         edge = row.get("edge")
-        if edge is None or edge < threshold:
+        if edge is None or edge < threshold or edge > ceiling:
             continue
 
         if not _is_fresh(row, now):

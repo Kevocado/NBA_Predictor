@@ -575,6 +575,7 @@ def value_picks(
     db_path: Path = Depends(get_db_path),
     max_age_minutes: int = 60,
     threshold: float = edge_gate.EDGE_THRESHOLD,
+    ceiling: float = edge_gate.EDGE_CEILING,
 ) -> dict:
     """The gated picks: at most one single per game, 5% edge, fresh odds only.
 
@@ -595,10 +596,17 @@ def value_picks(
     # two-hour-old line would sail through as fresh.
     since = (datetime.now(timezone.utc) - timedelta(minutes=max_age_minutes)).isoformat()
     rows = [dict(r) for r in get_recent_market_predictions(db_path, since=since)]
-    picks = edge_gate.gated_picks(rows, threshold=threshold)
+    picks = edge_gate.gated_picks(rows, threshold=threshold, ceiling=ceiling)
+    # Count suspect picks (excluded by ceiling but above threshold)
+    suspect = [
+        r for r in rows
+        if r.get("edge") is not None and threshold <= r["edge"] and r["edge"] > ceiling
+    ]
     return {
         "picks": picks,
         "edge_threshold": threshold,
+        "edge_ceiling": ceiling,
+        "n_suspect": len(suspect),
         "max_odds_age_minutes": max_age_minutes,
         "n_odds_rows_considered": len(rows),
         "disclaimer": (

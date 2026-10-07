@@ -31,6 +31,7 @@ import pytest
 
 from nba_predictor.odds.edge_gate import (
     EDGE_THRESHOLD,
+    EDGE_CEILING,
     MAX_ODDS_AGE,
     gated_picks,
     pair_total_sides,
@@ -305,6 +306,36 @@ def test_value_picks_is_empty_not_absent_when_nothing_qualifies(tmp_path):
     assert payload["edge_threshold"] == EDGE_THRESHOLD
 
 
+def test_value_picks_returns_suspect_count_for_above_ceiling(tmp_path):
+    """Edges above ceiling are excluded from picks but counted in n_suspect."""
+    from fastapi.testclient import TestClient
+
+    from nba_predictor.api import deps
+    from nba_predictor.api.app import app
+    from nba_predictor.tracking import store
+
+    db_path = tmp_path / "tracking.db"
+    store.init_db(db_path)
+    real_now = datetime.now(timezone.utc)
+    # Seed one pick at 0.06 (kept), one at 0.16 (suspect), one at 0.20 (suspect)
+    for edge, minutes_old in [(0.06, 5), (0.16, 5), (0.20, 5)]:
+        for r in market_pair(edge=edge, minutes_old=minutes_old):
+            store.insert_market_prediction(
+                db_path, game_id=r["game_id"], market=r["market"], selection=r["selection"],
+                model_probability=r["model_probability"], market_probability=r["market_probability"],
+                edge=r["edge"], bookmaker=r["bookmaker"], american_odds=r["american_odds"],
+                point=r["point"], created_at=(real_now - timedelta(minutes=minutes_old)).isoformat(),
+            )
+
+    app.dependency_overrides[deps.get_db_path] = lambda: db_path
+
+    payload = TestClient(app).get("/value-picks").json()
+    assert len(payload["picks"]) == 1, "only 0.06 edge should be kept"
+    assert payload["picks"][0]["edge"] == 0.06
+    assert payload["edge_ceiling"] == EDGE_CEILING
+    assert payload["n_suspect"] == 2, "two picks (0.16, 0.20) should be suspect"
+
+
 def test_the_reader_really_excludes_rows_older_than_since(tmp_path):
     """The freshness filter, pinned where it actually happens.
 
@@ -376,3 +407,48 @@ def test_a_spread_pairs_only_with_its_own_game_and_book():
     assert gated_picks(rows, now=NOW) == [], (
         "a spread was paired with the other side of a DIFFERENT game"
     )
+
+
+# --- Edge ceiling tests (Task 0) ---
+
+def test_an_edge_above_ceiling_is_excluded_and_counted_as_suspect():
+    """Edge > 0.15 is suspect: excluded from picks, counted in n_suspect."""
+    # This test will fail until we add ceiling support to gated_picks
+    rows = market_pair(edge=0.16)  # above ceiling
+    picks = gated_picks(rows, now=NOW, ceiling=0.15)
+    assert picks == [], "edge 0.16 should be excluded as suspect"
+
+    # The ceiling constant should exist
+    assert EDGE_CEILING == 0.15
+
+
+def test_an_edge_at_ceiling_boundary_is_inclusive():
+    """Edge == 0.15 is kept (inclusive at ceiling)."""
+    rows = market_pair(edge=0.15)
+    picks = gated_picks(rows, now=NOW, ceiling=0.15)
+    assert len(picks) == 1, "edge 0.15 should be kept"
+
+
+def test_an_edge_below_ceiling_is_kept():
+    """Edge 0.14 is kept (below ceiling)."""
+    rows = market_pair(edge=0.14)
+    picks = gated_picks(rows, now=NOW, ceiling=0.15)
+    assert len(picks) == 1, "edge 0.14 should be kept"
+
+
+def test_ceiling_defaults_to_constant_when_not_passed():
+    """When ceiling is not passed, it defaults to EDGE_CEILING."""
+    rows = market_pair(edge=0.16)
+    # Without explicit ceiling, should use EDGE_CEILING default
+    picks = gated_picks(rows, now=NOW)
+    assert picks == [], "edge 0.16 should be excluded by default ceiling"
+
+
+def test_an_edge_just_above_the_ceiling_is_excluded_and_just_below_is_kept():
+    assert gated_picks(market_pair(edge=0.149), now=NOW) != []
+    assert gated_picks(market_pair(edge=0.151), now=NOW) == []
+
+
+def test_the_floor_is_unchanged_by_the_ceiling():
+    assert gated_picks(market_pair(edge=0.049), now=NOW) == []
+    assert gated_picks(market_pair(edge=0.05), now=NOW) != []

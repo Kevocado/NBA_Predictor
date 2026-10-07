@@ -42,6 +42,7 @@ from nba_predictor.data.team_reference import TEAMS, get_team
 from nba_predictor.odds.value_bets import std_from_mae
 from nba_predictor.pipeline.ingest import run_ingest
 from nba_predictor.odds import edge_gate
+from nba_predictor.odds.edge_gate import _is_fresh
 from nba_predictor.pipeline.refresh_odds import refresh_market_predictions
 from nba_predictor.pipeline.retrain import run_retrain_pipeline
 from nba_predictor.services.calibration_service import compute_model_calibration
@@ -575,6 +576,7 @@ def value_picks(
     db_path: Path = Depends(get_db_path),
     max_age_minutes: int = 60,
     threshold: float = edge_gate.EDGE_THRESHOLD,
+    ceiling: float = edge_gate.EDGE_CEILING,
 ) -> dict:
     """The gated picks: at most one single per game, 5% edge, fresh odds only.
 
@@ -595,10 +597,32 @@ def value_picks(
     # two-hour-old line would sail through as fresh.
     since = (datetime.now(timezone.utc) - timedelta(minutes=max_age_minutes)).isoformat()
     rows = [dict(r) for r in get_recent_market_predictions(db_path, since=since)]
-    picks = edge_gate.gated_picks(rows, threshold=threshold)
+
+    # Count suspect rows: those that are otherwise eligible (fresh, have line, not parlay)
+    # but have edge > ceiling
+    suspect_rows = []
+    for row in rows:
+        if row.get("market") == "parlay":
+            continue
+        point = row.get("point")
+        if row.get("market") in ("spread", "total") and point is None:
+            continue
+        edge = row.get("edge")
+        if edge is None:
+            continue
+        if not _is_fresh(row, datetime.now(timezone.utc)):
+            continue
+        if not edge_gate._has_counterpart(row, rows):
+            continue
+        if edge > ceiling:
+            suspect_rows.append(row)
+
+    picks = edge_gate.gated_picks(rows, threshold=threshold, ceiling=ceiling)
     return {
         "picks": picks,
         "edge_threshold": threshold,
+        "edge_ceiling": ceiling,
+        "n_suspect": len(suspect_rows),
         "max_odds_age_minutes": max_age_minutes,
         "n_odds_rows_considered": len(rows),
         "disclaimer": (

@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 
 from nba_predictor.features.build import build_training_frame
+from nba_predictor.models.candidate_race import run_candidate_race
 from nba_predictor.models.evaluate.walk_forward import chronological_split
 from nba_predictor.models.evaluate.walk_forward_eval import (
     walk_forward_metrics,
@@ -43,22 +44,38 @@ def run_retrain_pipeline(games: pd.DataFrame, models_dir: Path, model_version: s
     holdout_df, _ = build_training_frame(pd.concat([train_games, holdout_games], ignore_index=True))
     holdout_df = holdout_df[holdout_df["game_id"].isin(holdout_games["game_id"])]
 
-    win_model = train_win_probability_model(train_df[feature_cols], train_df["home_win"])
-    margin_model = train_margin_model(train_df[feature_cols], train_df["home_pts"] - train_df["away_pts"])
-    total_model = train_total_model(train_df[feature_cols], train_df["home_pts"] + train_df["away_pts"])
+    logger = logging.getLogger(__name__)
+
+    # Candidate race on the training frame to pick the winners per target
+    # No fallback: if the race fails or any target has no winner, we stop.
+    # Publishing a manifest from a failed race or a target with no winner would
+    # serve models that did not win a valid race.
+    race = run_candidate_race(train_df, feature_cols=feature_cols, windows=4)
+    win_candidate = race["winner"].get("win")
+    margin_candidate = race["winner"].get("margin")
+    total_candidate = race["winner"].get("total")
+    if win_candidate is None or margin_candidate is None or total_candidate is None:
+        raise RuntimeError(
+            f"candidate race produced no winner for one or more targets: "
+            f"win={win_candidate}, margin={margin_candidate}, total={total_candidate}; "
+            "retrain aborted, no manifest published"
+        )
+
+    win_model = train_win_probability_model(train_df[feature_cols], train_df["home_win"], candidate=win_candidate)
+    margin_model = train_margin_model(train_df[feature_cols], train_df["home_pts"] - train_df["away_pts"], candidate=margin_candidate)
+    total_model = train_total_model(train_df[feature_cols], train_df["home_pts"] + train_df["away_pts"], candidate=total_candidate)
 
     metrics = {}
     # Compute walk-forward metrics as required
     wf_win = None
     wf_margin = None
     wf_total = None
-    logger = logging.getLogger(__name__)
     try:
         wf_win = walk_forward_metrics(
             train_df,
             model_factory=lambda tr: (
                 lambda X: predict_win_probability(
-                    train_win_probability_model(tr[feature_cols], tr["home_win"]), X[feature_cols]
+                    train_win_probability_model(tr[feature_cols], tr["home_win"], candidate=win_candidate), X[feature_cols]
                 )
             ),
             windows=4,
@@ -70,7 +87,7 @@ def run_retrain_pipeline(games: pd.DataFrame, models_dir: Path, model_version: s
         wf_margin = walk_forward_regression(
             train_df.assign(home_margin=train_df["home_pts"] - train_df["away_pts"]),
             model_factory=lambda tr: (
-                lambda X: train_margin_model(tr[feature_cols], tr["home_margin"]).predict(X[feature_cols])
+                lambda X: train_margin_model(tr[feature_cols], tr["home_margin"], candidate=margin_candidate).predict(X[feature_cols])
             ),
             target="home_margin",
             windows=4,
@@ -83,7 +100,7 @@ def run_retrain_pipeline(games: pd.DataFrame, models_dir: Path, model_version: s
         wf_total = walk_forward_regression(
             train_df.assign(home_total=total_target),
             model_factory=lambda tr: (
-                lambda X: train_total_model(tr[feature_cols], tr["home_total"]).predict(X[feature_cols])
+                lambda X: train_total_model(tr[feature_cols], tr["home_total"], candidate=total_candidate).predict(X[feature_cols])
             ),
             target="home_total",
             windows=4,
@@ -139,6 +156,9 @@ def run_retrain_pipeline(games: pd.DataFrame, models_dir: Path, model_version: s
             "n_train_games": int(len(train_games)),
             "n_holdout_games": int(len(holdout_games)),
             "n_current_season_games": n_current_season_games,
+            "win_candidate": win_candidate,
+            "margin_candidate": margin_candidate,
+            "total_candidate": total_candidate,
         },
     )
     write_manifest(manifest, models_dir / "manifest.json")

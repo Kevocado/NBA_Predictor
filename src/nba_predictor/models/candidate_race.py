@@ -55,14 +55,25 @@ def _seed() -> None:
 def make_logistic_classifier_factory(feature_cols: list[str]) -> Callable:
     """Linear win model. `LogisticRegression` rather than `RidgeClassifier`
     because the latter has no `predict_proba` and cannot be scored on
-    log-loss at all -- a race it cannot enter is not a win."""
+    log-loss at all -- a race it cannot enter is not a win.
+
+    Handles single-class training data by returning a constant predictor.
+    """
 
     def factory(train_df: pd.DataFrame):
         from sklearn.linear_model import LogisticRegression
 
         _seed()
+        y = train_df["home_win"]
+        classes = y.unique()
+        if len(classes) == 1:
+            # Single class: return constant probability equal to the class prior
+            const_prob = float(classes[0])
+            return lambda X: np.full(len(X), const_prob)
+
+        _seed()
         model = LogisticRegression(max_iter=1000, random_state=RANDOM_STATE)
-        model.fit(train_df[feature_cols], train_df["home_win"])
+        model.fit(train_df[feature_cols], y)
         return lambda X: model.predict_proba(X[feature_cols])[:, 1]
 
     return factory

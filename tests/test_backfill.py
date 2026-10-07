@@ -47,7 +47,7 @@ def test_season_bounds_cover_one_season_from_october_to_april():
     # frame opens 2025-10-02, so a later start would drop ~3 weeks per season.
     assert start == "2023-09-25"
     assert start < "2023-10-07", "the bound starts after the season has"
-    assert end == "2024-04-25"
+    assert end == "2024-06-30", "the bound stops before the playoffs end"
 
 
 def test_the_season_start_precedes_the_first_games_of_a_real_season():
@@ -73,7 +73,8 @@ def test_backfill_writes_a_training_cache_and_asks_for_each_season(tmp_path):
 
     def fetch(start, end):
         asked.append((start, end))
-        return [_game("g1", start), _game("g2", start)]
+        tag = start[:4]
+        return [_game(f"{tag}-g1", start), _game(f"{tag}-g2", start)]
 
     def enrich(games):
         return games
@@ -83,11 +84,11 @@ def test_backfill_writes_a_training_cache_and_asks_for_each_season(tmp_path):
         fetch=fetch, enrich=enrich, log=lambda _m: None,
     )
 
-    assert asked == [("2023-09-25", "2024-04-25"), ("2024-09-25", "2025-04-25")]
+    assert asked == [("2023-09-25", "2024-06-30"), ("2024-09-25", "2025-06-30")]
     assert out["n_training_rows"] == 4
     written = json.loads((tmp_path / "games.json").read_text())
     assert len(written) == 4
-    assert written[0]["game_id"] == "g1"
+    assert written[0]["game_id"] == "2023-g1"
 
 
 def _imported_and_called_names(module) -> tuple[set[str], set[str]]:
@@ -241,7 +242,7 @@ def test_one_season_failing_does_not_abandon_the_others(tmp_path):
     def fetch(start, end):
         if start.startswith("2024"):
             raise ConnectionError("DNS went away")
-        return [_game("g1", start)]
+        return [_game(f"{start[:4]}-g1", start)]
 
     out = backfill.backfill_seasons(
         [2023, 2024, 2025], training_path=tmp_path / "games.json",
@@ -279,12 +280,12 @@ def test_a_season_in_progress_is_clamped_to_today():
 
     # A finished season is untouched.
     assert backfill.season_bounds(2023, today=date(2026, 11, 3)) == (
-        "2023-09-25", "2024-04-25",
+        "2023-09-25", "2024-06-30",
     )
 
     # Before a season has started, its end stays in the future.
     assert backfill.season_bounds(2027, today=date(2026, 11, 3)) == (
-        "2027-09-25", "2028-04-25",
+        "2027-09-25", "2028-06-30",
     )
 
 
@@ -301,3 +302,109 @@ def test_the_backfill_passes_its_today_through_to_the_bounds(tmp_path):
     )
 
     assert asked == [("2026-09-25", "2026-11-03")]
+
+
+def test_a_failed_season_does_not_delete_its_previously_fetched_rows(tmp_path):
+    """The resilience fix must not trade "abort" for "silently lose a season".
+
+    The training file is written wholesale, so a season that failed this run and
+    is simply absent would have every row it contributed on an earlier run
+    deleted. That is the same data loss as aborting, quieter.
+    """
+    path = tmp_path / "games.json"
+
+    # An earlier run fetched 2023 and 2024 successfully.
+    backfill.backfill_seasons(
+        [2023, 2024], training_path=path,
+        fetch=lambda s, e: [_game(f"{s[:4]}-g1", s), _game(f"{s[:4]}-g2", s)],
+        enrich=lambda g: g, log=lambda _m: None,
+    )
+    assert len(json.loads(path.read_text())) == 4
+
+    # This run fetches 2023 but loses 2024 to the network.
+    def flaky(start, end):
+        if start.startswith("2024"):
+            raise ConnectionError("DNS went away")
+        return [_game(f"{start[:4]}-g1", start), _game(f"{start[:4]}-g2", start)]
+
+    out = backfill.backfill_seasons(
+        [2023, 2024], training_path=path, fetch=flaky,
+        enrich=lambda g: g, log=lambda _m: None,
+    )
+
+    rows = json.loads(path.read_text())
+    assert out["failed_seasons"] == ["2024"]
+    assert len(rows) == 4, "the failed season's earlier rows were deleted"
+    assert {r["game_date"][:4] for r in rows} == {"2023", "2024"}
+
+
+def test_the_cache_is_merged_not_overwritten_across_runs(tmp_path):
+    path = tmp_path / "games.json"
+    backfill.backfill_seasons(
+        [2023], training_path=path, fetch=lambda s, e: [_game("g1", s)],
+        enrich=lambda g: g, log=lambda _m: None,
+    )
+    out = backfill.backfill_seasons(
+        [2024], training_path=path, fetch=lambda s, e: [_game("g9", s)],
+        enrich=lambda g: g, log=lambda _m: None,
+    )
+    rows = json.loads(path.read_text())
+    assert len(rows) == 2, "the second run replaced the first"
+    assert out["n_carried_over"] == 1
+    assert out["n_new_rows"] == 1
+
+
+def test_a_refetched_game_is_not_duplicated(tmp_path):
+    path = tmp_path / "games.json"
+    for _ in range(2):
+        backfill.backfill_seasons(
+            [2023], training_path=path, fetch=lambda s, e: [_game("g1", s)],
+            enrich=lambda g: g, log=lambda _m: None,
+        )
+    assert len(json.loads(path.read_text())) == 1
+
+
+def test_an_empty_run_cannot_empty_an_existing_cache(tmp_path):
+    """`--seasons 0` fetches nothing. Overwriting a good cache with that is
+    silent, permanent data loss, so the merge has to leave it alone."""
+    path = tmp_path / "games.json"
+    backfill.backfill_seasons(
+        [2023], training_path=path, fetch=lambda s, e: [_game("g1", s)],
+        enrich=lambda g: g, log=lambda _m: None,
+    )
+    before = path.read_text()
+
+    backfill.backfill_seasons([], training_path=path, log=lambda _m: None)
+
+    assert path.read_text() == before, "the cache was emptied"
+
+
+def test_an_empty_run_with_no_existing_cache_is_refused(tmp_path):
+    """Nothing fetched and nothing to carry over: refuse rather than write a
+    file that reads as a successful, empty backfill."""
+    with pytest.raises(ValueError, match="no training rows"):
+        backfill.backfill_seasons([], training_path=tmp_path / "games.json",
+                                  log=lambda _m: None)
+
+
+def test_the_cli_exits_non_zero_when_a_season_failed(tmp_path, monkeypatch, capsys):
+    """A partial backfill is not a successful one."""
+    def flaky(start, end):
+        if start.startswith("2024"):
+            raise ConnectionError("DNS went away")
+        return [_game("g1", start)]
+
+    monkeypatch.setattr(backfill, "fetch_schedule_range", flaky)
+    # Both network stages: patching only fetch would let the real
+    # enrich_with_boxscores run and call ESPN with a fake event id.
+    monkeypatch.setattr(backfill, "enrich_with_boxscores", lambda games: games)
+    code = backfill.main(["--seasons", "2", "--training-path", str(tmp_path / "g.json")])
+
+    assert code == 1
+    assert "INCOMPLETE" in capsys.readouterr().err
+
+
+def test_the_cli_refuses_a_nonpositive_season_count(tmp_path):
+    for bad in ("0", "-1"):
+        with pytest.raises(SystemExit):
+            backfill.main(["--seasons", bad, "--training-path", str(tmp_path / "g.json")])

@@ -1,6 +1,6 @@
 {
-  "model_version": "v20261006173428",
-  "trained_at": "2026-10-06T17:34:28.247881+00:00",
+  "model_version": "v20261007025732",
+  "trained_at": "2026-10-07T02:57:32.451342+00:00",
   "models": [
     "win_probability",
     "margin",
@@ -8,25 +8,28 @@
   ],
   "metrics": {
     "win_probability": {
-      "accuracy": 0.6344086021505376,
-      "log_loss": 0.7708449324072021,
-      "brier": 0.27518448533944406,
-      "auc": 0.5495058400718777
+      "accuracy": 0.6559139784946236,
+      "log_loss": 0.6904109877077076,
+      "brier": 0.24809244850707105,
+      "auc": 0.5587314550156526
     },
     "margin": {
-      "mae": 14.39227588669694,
-      "wf_mae": 13.460853303930621,
-      "residual_sigma": 16.870677746146306
+      "mae": 14.2594731392265,
+      "wf_mae": 12.662421139236065,
+      "residual_sigma": 15.8699914264472
     },
     "total": {
-      "mae": 18.54359397751456,
-      "wf_mae": 16.921897554536603,
-      "residual_sigma": 21.208453435305312
+      "mae": 16.763631161851634,
+      "wf_mae": 16.523872316514574,
+      "residual_sigma": 20.709602777483937
     }
   },
   "training": {
-    "n_train_games": 1116,
+    "n_train_games": 1118,
     "n_holdout_games": 279,
-    "n_current_season_games": 0
+    "n_current_season_games": 0,
+    "win_candidate": "logistic",
+    "margin_candidate": "ridge",
+    "total_candidate": "ridge"
   }
 }

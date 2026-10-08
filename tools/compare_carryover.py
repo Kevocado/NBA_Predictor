@@ -160,14 +160,52 @@ def main() -> int:
     print(f"  chosen weights: {[r['weight'] for r in out1['windows']]}")
 
     # ---- reliability ---------------------------------------------------
-    base_gap = calibration_gap(np.asarray(base_win["pooled"]["y"]),
-                              np.asarray(base_win["pooled"]["preds"]), n_buckets=N_BUCKETS)
-    print(f"\n=== reliability: 5 equal-count buckets, identical {base_win['pooled']['n']} games")
+    # The Phase A baseline has 758 games. The multi-season arms have 783.
+    # For a fair comparison, restrict both arms to the SAME 758 games
+    # that the Phase A baseline uses. Those are the first 758 games in order.
+    n_phase_a = base_win["pooled"]["n"]
+    def restrict_pooled(pooled, n):
+        """Restrict a pooled dict to first n games.
+        
+        Handles two structures:
+        - Classification: {"log_loss": ..., "brier": ..., "y": [...], "preds": [...], ...}
+        - Carry-over: {"win": {"y": [...], "preds": [...]}, "margin": {...}, "total": {...}}
+        """
+        if "win" in pooled:
+            # Carry-over structure: {"win": {...}, "margin": {...}, "total": {...}}
+            return {k: {sk: (sv[:n] if isinstance(sv, list) and len(sv) > n else sv) 
+                        for sk, sv in v.items()} 
+                    for k, v in pooled.items()}
+        else:
+            # Classification structure: {"y": [...], "preds": [...], "log_loss": ..., ...}
+            return {k: (v[:n] if isinstance(v, list) and len(v) > n else v) 
+                    for k, v in pooled.items()}
+
+    base_pooled = restrict_pooled(base_win["pooled"], n_phase_a)
+    arm0_pooled = restrict_pooled(results["multi-season (no carry-over)"]["pooled"], n_phase_a)
+    arm1_pooled = restrict_pooled(results["multi-season + carry-over"]["pooled"], n_phase_a)
+
+    # Debug
+    print(f"DEBUG base_pooled keys: {list(base_pooled.keys())}")
+    if "win" in base_pooled:
+        print(f"  base_pooled['win'] keys: {list(base_pooled['win'].keys())}")
+    else:
+        print(f"  base_pooled has no 'win' key")
+
+    # base_pooled is the classification pooled output (no "win" key)
+    base_gap = calibration_gap(np.asarray(base_pooled["y"]),
+                              np.asarray(base_pooled["preds"]), n_buckets=N_BUCKETS)
+    print(f"\n=== reliability: 5 equal-count buckets, identical {n_phase_a} games")
     print(f"  baseline (Phase A): max |gap| = {base_gap:.4f}")
     gaps = {}
-    for label, res in results.items():
-        pooled = res["pooled"]["win"]
-        y, p = np.asarray(pooled["y"]), np.asarray(pooled["preds"])
+    for label, pooled in (("baseline (Phase A)", base_pooled),
+                           ("multi-season (no carry-over)", arm0_pooled),
+                           ("multi-season + carry-over", arm1_pooled)):
+        # base_pooled is classification structure, arms are carry-over structure
+        if "win" in pooled:
+            y, p = np.asarray(pooled["win"]["y"]), np.asarray(pooled["win"]["preds"])
+        else:
+            y, p = np.asarray(pooled["y"]), np.asarray(pooled["preds"])
         table = bucket_calibration(y, p, n_buckets=N_BUCKETS)
         gap = calibration_gap(y, p, n_buckets=N_BUCKETS)
         gaps[label] = gap
@@ -178,7 +216,7 @@ def main() -> int:
                   f"{row['gap']:>+9.4f}{row['n']:>6}")
         print(f"    max |gap| = {gap:.4f}  {'<= bar' if gap <= MAX_GAP_BAR else f'> bar {MAX_GAP_BAR}'}")
 
-    # ---- bootstrap: the two arms against EACH OTHER -----------------
+    # ---- bootstrap: the two arms against EACH OTHER -----------------    # ---- bootstrap: the two arms against EACH OTHER -----------------
     # They share the exact same held-out games (n=783), so the comparison is fair.
     # The Phase A baseline (n=758) is the reproduction check, not the A/B comparator.
     arm0 = results["multi-season (no carry-over)"]["pooled"]

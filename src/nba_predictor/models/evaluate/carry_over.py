@@ -223,8 +223,8 @@ def walk_forward_carry_over(
 
         # CRITICAL: the feature frame must include history so carry-over has prior
         # season data to regress toward. Build it over the FULL combined frame
-        # (history + ordered), then split by game_ids so history rows are never
-        # test rows.
+        # (history + ordered), so that rolling features have their full context.
+        # Then split by game_ids so that ONLY test games are in test_df.
         full = pd.concat([hist, ordered], ignore_index=True) if hist is not None and len(hist) else ordered
         frame, feature_cols = feature_builder(full, weight)
         frame = frame.assign(

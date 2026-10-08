@@ -4,7 +4,7 @@
 
 Ship rule: **5/5 paired-bootstrap intervals exclude zero AND max calibration gap ≤ 0.0591**.
 
-**Result: does not ship.** One metric (total MAE) improves with an interval excluding zero, the calibration gap narrows from 0.0786 → 0.0724 (but still above the 0.0591 bar), and four metrics are not distinguishable from zero.
+**Result: does not ship.** Zero of five metrics clear the bar, and the calibration gap (0.0732) exceeds the 0.0591 bar.
 
 ## What was built
 
@@ -20,22 +20,22 @@ The weight is **not a constant**. For each outer walk-forward window it is fitte
 
 | window | cutoff | n_train | weight |
 |---|---|---|---|
-| 0 | 2026-01-07 | 3,883 | 0.6 |
-| 1 | 2026-02-10 | 3,878 | 0.6 |
-| 2 | 2026-03-22 | 3,931 | 0.6 |
-| 3 | 2026-04-28 | 4,088 | 0.6 |
+| 0 | 2026-01-07 | 3,883 | 0.75 |
+| 1 | 2026-02-10 | 3,878 | 0.75 |
+| 2 | 2026-03-22 | 3,931 | 0.75 |
+| 3 | 2026-04-28 | 4,088 | 0.75 |
 | 4 | 2026-10-03 | 4,137 | 0.75 |
 
 **Inner MAE by weight (window 0 example):**
 
 | weight | inner MAE |
 |---|---|
-| 0.0 | 12.725 |
-| 0.15 | 12.717 |
-| 0.3 | 12.712 |
+| 0.0 | 12.718 |
+| 0.15 | 12.715 |
+| 0.3 | 12.711 |
 | 0.45 | 12.707 |
-| **0.6** | **12.705** ← chosen |
-| 0.75 | 12.706 |
+| 0.6 | 12.704 |
+| **0.75** | **12.701** ← chosen |
 
 The inner score is MAE on the held-back tail of the training slice (last 30% by distinct date). The outer test games are never seen.
 
@@ -45,53 +45,46 @@ The inner score is MAE on the held-back tail of the training slice (last 30% by 
 
 | bucket | n | baseline (Phase A) | multi-season (no carry-over) | **+carry-over** |
 |---|---|---|---|---|
-| 0 | 157 | +0.0786 | +0.0786 | +0.0724 |
-| 1 | 156 | +0.0654 | +0.0654 | +0.0719 |
-| 2 | 157 | +0.0433 | -0.0030 | -0.0094 |
-| 3 | 156 | +0.0110 | -0.0316 | -0.0251 |
-| 4 | 157 | -0.0489 | -0.0489 | -0.0489 |
-| **max \|gap\|** | | **0.0590** | **0.0786** | **0.0724** |
+| 0 | 152 | -0.0394 | +0.0717 | +0.0721 |
+| 1 | 151 | -0.0156 | +0.0730 | +0.0732 |
+| 2 | 152 | +0.0590 | +0.0292 | +0.0294 |
+| 3 | 151 | +0.0291 | -0.0527 | -0.0525 |
+| 4 | 152 | -0.0153 | -0.0445 | -0.0442 |
+| **max \|gap\|** | | **0.0590** | **0.0730** | **0.0732** |
 
-The calibration gap narrows (0.0786 → 0.0724) but remains above the 0.0591 bar.
+The calibration gap **widens slightly** (0.0730 → 0.0732) and remains above the 0.0591 bar.
 
 ## Paired bootstrap
 
-2,000 resamples, seed 20261007, one draw of game indices applied to both arms on the identical 783 games.
+2,000 resamples, seed 20261007, one draw of game indices applied to both arms on the identical 758 games.
 
 **+carry-over vs no-carry-over**
 
 | metric | no-carry | +carry | diff | 95% interval | verdict |
 |---|---|---|---|---|---|
-| win log-loss | 0.6880 | 0.6880 | +0.0000 | [-0.0000, +0.0001] | NOT distinguishable |
-| win Brier | 0.2474 | 0.2474 | +0.0000 | [-0.0000, +0.0000] | NOT distinguishable |
-| win AUC | 0.4624 | 0.4623 | -0.0001 | [-0.0010, +0.0008] | NOT distinguishable |
-| margin MAE | 13.8208 | 13.8204 | -0.0004 | [-0.0015, +0.0007] | NOT distinguishable |
-| **total MAE** | **16.1129** | **16.1115** | **-0.0014** | **[-0.0033, -0.0001]** | **IMPROVED** |
+| win log-loss | 0.6880 | 0.6881 | +0.0001 | [-0.0000, +0.0002] | NOT distinguishable |
+| win Brier | 0.2474 | 0.2475 | +0.0000 | [-0.0000, +0.0001] | NOT distinguishable |
+| win AUC | 0.4607 | 0.4605 | -0.0002 | [-0.0014, +0.0010] | NOT distinguishable |
+| margin MAE | 13.8233 | 13.8250 | +0.0017 | [-0.0002, +0.0047] | NOT distinguishable |
+| total MAE | 16.1111 | 16.1092 | -0.0019 | [-0.0055, +0.0000] | NOT distinguishable |
 
-**1/5 intervals exclude zero. The calibration gap (0.0724) exceeds 0.0591.**
+**0/5 intervals exclude zero. The calibration gap (0.0732) exceeds 0.0591.**
 
 ## Ship rule
 
 | requirement | result |
 |---|---|
-| 5/5 intervals exclude zero | **no** (1/5) |
-| max calibration gap ≤ 0.0591 | **no** (0.0724) |
+| 5/5 intervals exclude zero | **no** (0/5) |
+| max calibration gap ≤ 0.0591 | **no** (0.0732) |
 
-**Does not ship.**
-
-## What changed from the multi-season baseline
-
-The multi-season baseline (without carry-over) had 0/5 intervals exclude zero and max gap 0.0786.
-
-Carry-over **narrows the calibration gap** (0.0786 → 0.0724) and **improves total MAE** by 0.0014 with a tight interval. Four other metrics are indistinguishable. The gap is still above the 0.0591 bar.
-
-The weight settled at 0.6 for four of five windows, decaying to zero by the 10th game of each season. That is the honest finding: the data says a moderate carry-over helps the total model and calibration, but not enough to clear the bar.
+**Does not ship.** The data says a strong carry-over (weight 0.75) is optimal on the inner splits, but on the identical 758 holdout games it does not improve any metric and the calibration gap is unchanged (actually marginally worse).
 
 ## Leakage guarantees
 
 - The carry-over weight is fitted **inside** the outer walk-forward. For window *k*, the search sees only out-of-fold predictions from windows strictly before *k*.
 - The inner split is time-ordered and derived from the training slice alone. The outer cutoff date is used only to drop anything at or after it — a belt-and-braces filter.
 - The regression target (league mean) is computed from games strictly **before** the season being predicted. A test asserts this: `test_the_league_mean_excludes_the_season_being_predicted`.
+- The fallback for seasons without a prior-season mean does NOT use the current game's box score. The previous version fell back to `games.groupby(factor)[factor].transform("mean")`, which included the current row in the mean — a leak. Now those rows are left uncorrected.
 - Two tests red-check the leakage rule:
   - `test_the_inner_split_never_contains_an_outer_test_game` (fails when the inner split is deliberately made to leak)
   - `test_a_frame_containing_the_test_games_is_still_filtered_before_the_search` (passes the whole frame including test games and asserts the search still filters them)

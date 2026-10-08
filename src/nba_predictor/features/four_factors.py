@@ -114,12 +114,19 @@ def add_rolling_four_factors(
             lambda s: means.get((factor, int(s)), np.nan)
         )
         # A season with no earlier games to average has nothing to regress
-        # toward; leave those rows alone rather than inventing a target.
-        target = target.fillna(games.groupby(factor)[factor].transform("mean"))
+        # toward. Do NOT fall back to the current season's mean: that would
+        # leak the current game's own box score into its feature via the
+        # groupby mean. Instead, leave those rows uncorrected (w=0 effectively).
+        # The carry_over_weight for games_into_season=0 is `weight` (full), so
+        # we must ensure target is NaN for those rows; the regression formula
+        # will then keep the original value.
         w = games["games_into_season"].map(
             lambda k: carry_over_weight(k, window=window, weight=carry_over_weight_value)
         )
-        games[col] = target + w * (games[col] - target)
+        # Only apply regression where target is available (has a prior-season mean).
+        mask = target.notna()
+        games.loc[mask, col] = target[mask] + w[mask] * (games.loc[mask, col] - target[mask])
+        # Rows without a target keep their original rolling value (no regression).
 
     return games
 

@@ -40,7 +40,14 @@ def _long_format_box_scores(games: pd.DataFrame) -> pd.DataFrame:
     return pd.concat([home_rows, away_rows], ignore_index=True)
 
 
-def build_feature_frame(games: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
+def build_feature_frame(
+    games: pd.DataFrame, carry_over_weight: float | None = None
+) -> tuple[pd.DataFrame, list[str]]:
+    """Features for `games`.
+
+    `carry_over_weight` is passed to `add_rolling_four_factors`; None (the
+    default, and every production caller) is today's behaviour exactly.
+    """
     games = games.copy()
 
     for col in _OPTIONAL_COLUMNS_DEFAULT_ZERO:
@@ -48,7 +55,9 @@ def build_feature_frame(games: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
             games[col] = 0.0
     games["power_rating_diff"] = games["home_power_rating"] - games["away_power_rating"]
 
-    long_form = add_rolling_four_factors(_long_format_box_scores(games))
+    long_form = add_rolling_four_factors(
+        _long_format_box_scores(games), carry_over_weight_value=carry_over_weight
+    )
     rolled = long_form.set_index(["game_id", "team"])[
         ["efg_pct_roll", "tov_rate_roll", "orb_pct_roll", "ft_rate_roll"]
     ]
@@ -102,5 +111,7 @@ def build_feature_frame(games: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     return games, FEATURE_COLUMNS
 
 
-def build_training_frame(games: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
-    return build_feature_frame(games)
+def build_training_frame(
+    games: pd.DataFrame, carry_over_weight: float | None = None
+) -> tuple[pd.DataFrame, list[str]]:
+    return build_feature_frame(games, carry_over_weight=carry_over_weight)

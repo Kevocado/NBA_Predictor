@@ -227,11 +227,18 @@ def walk_forward_carry_over(
         # Then split by game_ids so that ONLY test games are in test_df.
         full = pd.concat([hist, ordered], ignore_index=True) if hist is not None and len(hist) else ordered
         frame, feature_cols = feature_builder(full, weight)
-        frame = frame.assign(
-            home_margin=full["home_pts"] - full["away_pts"],
-            home_total=full["home_pts"] + full["away_pts"],
-            home_win=(full["home_pts"] > full["away_pts"]).astype(int),
-        )
+        # Merge outcomes by game_id so assignment is aligned, not positional.
+        # frame may already contain home_win/home_margin/home_total from input;
+        # only bring over missing ones so no duplicate columns arise.
+        missing_cols = [c for c in ["home_margin", "home_total", "home_win"]
+                        if c not in frame.columns]
+        if missing_cols:
+            outcomes = full.assign(
+                home_margin=full["home_pts"] - full["away_pts"],
+                home_total=full["home_pts"] + full["away_pts"],
+                home_win=(full["home_pts"] > full["away_pts"]).astype(int),
+            )[["game_id"] + missing_cols]
+            frame = pd.merge(frame, outcomes, on="game_id", how="left")
         test_ids = set(ordered.iloc[test_idx]["game_id"])
         train_df = frame[
             (frame[date_col].astype(str) < cutoff) & ~frame["game_id"].isin(test_ids)

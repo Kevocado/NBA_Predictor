@@ -200,7 +200,7 @@ def walk_forward_carry_over(
     target_to_col = {t: ("home_margin" if t == "margin" else "home_total" if t == "total" else target_col)
                      for t in model_factories}
     collected: dict[str, dict[str, list]] = {
-        t: {"preds": [], "y": []} for t in model_factories
+        t: {"preds": [], "y": [], "game_ids": []} for t in model_factories
     }
 
     for i, (train_idx, test_idx) in enumerate(expanding_windows(ordered[date_col], windows)):
@@ -251,6 +251,7 @@ def walk_forward_carry_over(
                 y_col = target_to_col[target]
                 collected[target]["y"].append(test_df[y_col].to_numpy())
             collected[target]["preds"].append(preds[target])
+            collected[target]["game_ids"].append(test_df["game_id"].to_numpy())
 
         records.append({
             "window": i,
@@ -266,7 +267,8 @@ def walk_forward_carry_over(
     for target, bag in collected.items():
         y = np.concatenate(bag["y"])
         p = np.concatenate(bag["preds"])
-        entry = {"y": y.tolist(), "preds": p.tolist(), "n": int(len(y))}
+        gids = np.concatenate(bag["game_ids"])
+        entry = {"y": y.tolist(), "preds": p.tolist(), "game_ids": gids.tolist(), "n": int(len(y))}
         if target == "win":
             from sklearn.metrics import brier_score_loss, log_loss, roc_auc_score
             entry.update({

@@ -171,6 +171,8 @@ def walk_forward_metrics(
     df = df.sort_values(date_col).reset_index(drop=True)
     history = _history(history_df, date_col)
     per_window, ys, ps, naive_ps = [], [], [], []
+    # Collect game_ids for explicit alignment
+    game_ids_collected = []
     # Everything an earlier window scored out-of-fold, which is the only data a
     # later window's calibrator may see.
     seen_y: list[np.ndarray] = []
@@ -186,6 +188,7 @@ def walk_forward_metrics(
                 train_df = pd.concat([extra, train_df], ignore_index=True)
         train_df = train_df.sort_values(date_col).reset_index(drop=True)
         y_test = test_df[target_col]
+        game_ids_collected.append(test_df["game_id"].to_numpy())
 
         train_max, test_min = str(train_df[date_col].max()), str(test_df[date_col].min())
         if train_max >= test_min:
@@ -258,6 +261,7 @@ def walk_forward_metrics(
 
     y_all = np.concatenate(ys)
     p_all = np.concatenate(ps)
+    game_ids_all = np.concatenate(game_ids_collected)
     pooled = classification_metrics(
         y_all, p_all, naive_base_rate=np.concatenate(naive_ps)
     )
@@ -267,6 +271,7 @@ def walk_forward_metrics(
     # `walk_forward_regression` already returns for margin and total.
     pooled["preds"] = p_all.tolist()
     pooled["y"] = y_all.tolist()
+    pooled["game_ids"] = game_ids_all.tolist()
     calibrated_windows = [r["window"] for r in calibration_record if r["calibrated"]]
     return {
         "windows": per_window,

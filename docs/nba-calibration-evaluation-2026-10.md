@@ -26,7 +26,7 @@ So there is no constant offset to remove. The league's home-win rate genuinely m
 
 A calibrator fitted on all 758 out-of-fold predictions and scored on those same 758 improves for a reason that has nothing to do with the model. So it is fitted **inside** the walk-forward: window *k*'s calibrator sees out-of-fold predictions from windows strictly before *k*, and nothing else.
 
-**Windows 1 and 2 are left uncalibrated.** They have 0 and 1 earlier windows respectively, which is not enough to fit anything trustworthy. The default threshold is 2 earlier windows. Per-window record from the run:
+**Windows 0 and 1 are left uncalibrated.** They have 0 and 1 earlier windows respectively, which is not enough to fit anything trustworthy. The default threshold is 2 earlier windows. Per-window record from the run:
 
 | window | calibrated | games it was fitted on | note |
 |---|---|---|---|
@@ -51,7 +51,7 @@ This is a structural limit of a leak-free calibrator on a short holdout, not a t
 | 4 | 152 | −0.0152 | +0.0187 | +0.0077 | −0.0288 |
 | **max \|gap\|** | | **0.0591** | **0.0720** | **0.0581** | **0.0503** |
 
-Both calibrators close the gap. Isotonic gets closest (0.0503, essentially at the "ideally ≤ 0.05" target). Bucket 2 remains the worst bucket for every arm — the models still over-predict home wins there, just by less.
+Both calibrators close the gap. Isotonic gets closest (0.0503, essentially at the "ideally ≤ 0.05" target). Bucket 2 remains the worst bucket for every arm. Note the direction: `gap = observed - predicted`, so a positive gap is the model **under**-predicting home wins — it says 0.554 where 0.612 of those games were home wins. The bias is a model that is too reluctant to call a close game for the home side, not one that over-calls it. Both calibrators reduce it; neither removes it.
 
 ## Paired bootstrap vs the Phase A baseline
 
@@ -100,4 +100,4 @@ Margin and total are identical across the arms because calibration is applied to
 
 I would not resolve this by picking the arm with the better AUC point estimate, and I have not: isotonic has the smallest AUC change of the two and the worst log-loss, and choosing on AUC would mean choosing the worse model.
 
-Note also that calibration cannot help AUC even in principle — a monotone recalibration preserves ranking. Platt's AUC is AUC-preserving to 1e-12; isotonic moves it only through the ties it creates, which is a tie artefact and never a better ranking.
+On AUC, note what calibration can and cannot do. Platt is a strictly monotone map, so it is AUC-preserving to 1e-12 — a test pins that, and it is why Platt's AUC moves only in the fifth decimal. Isotonic is monotone but not strictly so: where the observed rate does not separate two predictions it maps both to one value, and AUC scores ties as half-credit. So isotonic's AUC is not identical, and its movement is a tie artefact rather than a better ranking — the isotonic arm here collapses 400 distinct predictions to 17, which a second test bounds.

@@ -280,3 +280,30 @@ def test_no_calibrator_leaves_every_window_untouched():
     out = walk_forward_metrics(df, model_factory=lambda tr: _predictor(tr), windows=4)
     assert out["calibrated_from_window"] is None
     assert all(r["note"] == "no calibrator requested" for r in out["calibration"])
+
+
+def test_a_non_positive_platt_slope_is_refused_rather_than_inverting_the_ranking():
+    """A negative slope is not a calibration -- it ranks the games backwards.
+
+    It would change AUC, the one metric a monotone recalibration must leave
+    alone. Raising means the walk-forward scores that window uncalibrated and
+    records why; silently substituting the identity would hide a sign error
+    behind a green run.
+    """
+    rng = np.random.default_rng(9)
+    # Predictions deliberately ANTI-correlated with outcomes.
+    p = np.clip(rng.normal(0.5, 0.1, 400), 0.05, 0.95)
+    y = (rng.random(400) > p).astype(float)
+
+    with pytest.raises(ValueError, match="non-positive slope"):
+        fit_calibrator("platt", y, p)
+
+
+def test_a_healthy_platt_slope_is_accepted():
+    """The guard must not fire on a normal fit, or it disables calibration."""
+    rng = np.random.default_rng(10)
+    p = np.clip(rng.normal(0.5, 0.1, 400), 0.05, 0.95)
+    y = (rng.random(400) < p).astype(float)
+
+    calibrated = fit_calibrator("platt", y, p)(p)
+    assert np.all(np.diff(calibrated[np.argsort(p)]) >= -1e-12)

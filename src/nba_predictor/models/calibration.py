@@ -58,6 +58,23 @@ def _fit_platt(y: np.ndarray, p: np.ndarray):
     slope = float(lr.coef_[0][0])
     intercept = float(lr.intercept_[0])
 
+    # A negative slope INVERTS the ranking: the calibrator would rank the games
+    # backwards. That is not a calibration, it is a second opinion about which
+    # end of the scale means "likely", and it would silently change AUC -- the
+    # one metric a monotone recalibration is supposed to leave alone. It happens
+    # when the fitting window's predictions are anti-correlated with its
+    # outcomes, which is a real possibility on an early window with few games.
+    #
+    # Raising (rather than falling back to the identity) means the walk-forward
+    # catches it, scores that window uncalibrated, and records why. Silently
+    # substituting the identity would hide a sign error behind a passing run.
+    if slope <= 0:
+        raise ValueError(
+            f"Platt fit produced a non-positive slope ({slope:.4f}); the model is "
+            "anti-correlated with outcomes on this fitting window, so a "
+            "calibration would invert the ranking rather than correct it"
+        )
+
     def apply(scores: np.ndarray) -> np.ndarray:
         return np.clip(_sigmoid(slope * _logit(scores) + intercept), 1e-12, 1 - 1e-12)
 

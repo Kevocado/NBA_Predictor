@@ -105,9 +105,16 @@ def main() -> int:
             model_factory=lambda tr: candidates["ridge"]["total"](tr),
             target="home_total",
             windows=4,
-            # The league-average total of the Phase A frame, so the naive column
-            # reproduces the 16.375 in the Phase A doc rather than a constant
-            # I picked.
+            # The league-average total of this frame (230.174), a real baseline
+            # rather than a constant invented for the run.
+            #
+            # This does NOT reproduce the 16.375 recorded in the Phase A doc:
+            # against 230.174 it comes out 16.2256. The doc does not say what
+            # fixed constant it used, so that column is unmatched. It is a
+            # naive baseline, not a deciding metric, and no verdict here depends
+            # on it -- but the earlier claim that it "reproduces the 16.375" was
+            # wrong, and an unexplained mismatch is exactly the thing to write
+            # down rather than quietly leave.
             fixed_baseline=230.174,
             history_df=hist,
         )

@@ -48,6 +48,13 @@ def _naive(y: np.ndarray) -> np.ndarray:
 
 # --- the null case: the required one -------------------------------------
 
+#: Draws for tests whose conclusion is a robust direction. The null case below
+#: uses the full count because under-resampling there would weaken the very
+#: guarantee it exists to check; the rest assert a sign 400 draws resolve
+#: comfortably, and they were costing CI real time.
+QUICK = 400
+
+
 def test_identical_models_give_an_interval_that_contains_zero():
     """The true difference is exactly zero, so the interval must contain zero.
 
@@ -72,7 +79,7 @@ def test_identical_models_give_an_interval_that_contains_zero():
 def test_a_materially_better_model_is_called_improved():
     y, p = _games()
     naive = _naive(y)
-    out = paired_bootstrap(y, naive, p, "log_loss", n_resamples=2000, seed=4242)
+    out = paired_bootstrap(y, naive, p, "log_loss", n_resamples=QUICK, seed=4242)
     assert out["ci_high"] < 0, "a clearly better model was not detected"
     assert out["improved"] is True
     assert out["difference"] < 0
@@ -80,7 +87,7 @@ def test_a_materially_better_model_is_called_improved():
 
 def test_a_materially_worse_model_is_never_called_improved():
     y, p = _games()
-    out = paired_bootstrap(y, p, _naive(y), "log_loss", n_resamples=2000, seed=4242)
+    out = paired_bootstrap(y, p, _naive(y), "log_loss", n_resamples=QUICK, seed=4242)
     assert out["ci_low"] > 0, "the worse model did not show up as worse"
     assert out["improved"] is False
 
@@ -90,7 +97,7 @@ def test_improvement_requires_the_interval_to_exclude_zero_not_just_the_sign():
     y, p = _games()
     # A nudge far too small to survive resampling noise.
     nudge = np.clip(p + 1e-4, 1e-9, 1 - 1e-9)
-    out = paired_bootstrap(y, p, nudge, "log_loss", n_resamples=2000, seed=4242)
+    out = paired_bootstrap(y, p, nudge, "log_loss", n_resamples=QUICK, seed=4242)
     if out["difference"] < 0:
         assert out["improved"] is False, (
             "a difference smaller than the noise was called an improvement"
@@ -101,12 +108,12 @@ def test_auc_is_judged_in_the_opposite_direction_to_the_error_metrics():
     """Higher AUC is better. `improved` must not assume lower-is-better."""
     y, p = _games()
     naive = _naive(y)
-    better = paired_bootstrap(y, naive, p, "auc", n_resamples=1000, seed=1)
+    better = paired_bootstrap(y, naive, p, "auc", n_resamples=QUICK, seed=1)
     assert better["lower_is_better"] is False
     assert better["difference"] > 0
     assert better["improved"] is True
 
-    worse_out = paired_bootstrap(y, p, naive, "auc", n_resamples=1000, seed=1)
+    worse_out = paired_bootstrap(y, p, naive, "auc", n_resamples=QUICK, seed=1)
     assert worse_out["improved"] is False
 
 
@@ -123,7 +130,7 @@ def test_a_better_looking_model_whose_gap_is_smaller_than_the_noise_is_not_an_im
     this bar is exactly what the PR has to report, not assume.
     """
     y, p = _games(spread=0.09)
-    out = paired_bootstrap(y, _naive(y), p, "log_loss", n_resamples=2000, seed=4242)
+    out = paired_bootstrap(y, _naive(y), p, "log_loss", n_resamples=QUICK, seed=4242)
     assert out["difference"] < 0, "the fixture must have a real improvement to be worth testing"
     assert out["excludes_zero"] is False, "a sub-noise gap was claimed as excluding zero"
     assert out["improved"] is False
@@ -146,8 +153,8 @@ def test_pairing_narrows_the_interval_because_game_difficulty_cancels():
     y, p = _games()
     near_same = np.clip(p + 0.02 * np.random.default_rng(2).normal(size=len(y)), 1e-9, 1 - 1e-9)
 
-    paired = paired_bootstrap(y, p, near_same, "brier", n_resamples=2000, seed=5)
-    unpaired = _unpaired_bootstrap(y, p, near_same, "brier", n_resamples=2000, seed=5)
+    paired = paired_bootstrap(y, p, near_same, "brier", n_resamples=QUICK, seed=5)
+    unpaired = _unpaired_bootstrap(y, p, near_same, "brier", n_resamples=QUICK, seed=5)
 
     paired_width = paired["ci_high"] - paired["ci_low"]
     unpaired_width = unpaired[1] - unpaired[0]

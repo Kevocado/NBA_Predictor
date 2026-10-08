@@ -24,6 +24,11 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import brier_score_loss, log_loss, mean_absolute_error, roc_auc_score
 
+from nba_predictor.models.calibration import (
+    MIN_WINDOWS_FOR_CALIBRATION,
+    fit_calibrator,
+)
+
 #: log(2) -- what a model that knows nothing scores. The NFL repo's 0.6227 is
 #: quoted against this (spec section 5).
 COINFLIP_LOG_LOSS = math.log(2)
@@ -129,6 +134,8 @@ def walk_forward_metrics(
     date_col: str = "game_date",
     target_col: str = "home_win",
     history_df: pd.DataFrame | None = None,
+    calibrator: str | None = None,
+    min_windows_for_calibration: int = MIN_WINDOWS_FOR_CALIBRATION,
 ) -> dict:
     """Expanding-window walk-forward for the win model.
 
@@ -147,10 +154,28 @@ def walk_forward_metrics(
     scored on the same games, or the two numbers are not comparable and the
     comparison means nothing. History dated on or after a window's first test
     game is dropped, so the causality assertion below still holds.
+
+    **`calibrator` is fitted inside the walk-forward, never outside it.** Pass
+    "platt" or "isotonic" and window k's probabilities are mapped by a calibrator
+    fitted only on out-of-fold predictions from windows *strictly before* k. A
+    test game's own prediction is therefore never part of the data that
+    calibrates it, which is the only version of this that measures anything
+    rather than flattering the model.
+
+    The first `MIN_WINDOWS_FOR_CALIBRATION` windows have too little earlier
+    out-of-fold data to fit anything trustworthy, and are left uncalibrated. The
+    threshold is reported per window in `calibrated` and as
+    `calibrated_from_window`, so a pooled figure never silently mixes the two
+    without saying which games were which.
     """
     df = df.sort_values(date_col).reset_index(drop=True)
     history = _history(history_df, date_col)
     per_window, ys, ps, naive_ps = [], [], [], []
+    # Everything an earlier window scored out-of-fold, which is the only data a
+    # later window's calibrator may see.
+    seen_y: list[np.ndarray] = []
+    seen_p: list[np.ndarray] = []
+    calibration_record: list[dict] = []
 
     for i, (train_idx, test_idx) in enumerate(expanding_windows(df[date_col], windows)):
         train_df, test_df = df.iloc[train_idx], df.iloc[test_idx]
@@ -168,7 +193,45 @@ def walk_forward_metrics(
                 f"window {i}: train_max_date {train_max} >= test_min_date {test_min}"
             )
 
-        p = np.asarray(model_factory(train_df)(test_df), dtype=float)
+        p_raw = np.asarray(model_factory(train_df)(test_df), dtype=float)
+
+        # Calibrate against STRICTLY earlier windows. `seen_*` is appended at the
+        # bottom of this loop, so at this point it holds windows 0..i-1 and cannot
+        # contain anything from window i, let alone from window i's test games.
+        n_seen_windows = len(calibration_record)
+        if calibrator is not None and n_seen_windows >= min_windows_for_calibration:
+            prior_y = np.concatenate(seen_y)
+            prior_p = np.concatenate(seen_p)
+            try:
+                p = np.asarray(fit_calibrator(calibrator, prior_y, prior_p)(p_raw), dtype=float)
+                note = f"fitted on windows 0..{n_seen_windows - 1} (n={len(prior_y)})"
+                did_calibrate = True
+            except ValueError as exc:
+                # A prior window with one class cannot support a fit. Score this
+                # window uncalibrated and say so, rather than dropping the games.
+                p = p_raw
+                note = f"skipped: {exc}"
+                did_calibrate = False
+        else:
+            p = p_raw
+            did_calibrate = False
+            if calibrator is not None:
+                need = min_windows_for_calibration - n_seen_windows
+                note = f"not calibrated: {need} more earlier window(s) needed"
+            else:
+                note = "no calibrator requested"
+
+        calibration_record.append({
+            "window": i,
+            "calibrated": did_calibrate,
+            # How many games the calibrator actually saw, cumulatively -- not the
+            # size of the most recent window. A reader checking for leakage wants
+            # the total that was in scope.
+            "n_fit_games": int(sum(len(x) for x in seen_p)),
+            "n_fit_windows": n_seen_windows,
+            "note": note,
+        })
+
         # The naive comparator uses the TRAINING window's home-win rate, never
         # the test window's. A rate read off the answers would quietly
         # strengthen the baseline with hindsight, by an amount that grows as
@@ -188,6 +251,10 @@ def walk_forward_metrics(
         ys.append(y_true)
         ps.append(p)
         naive_ps.append(np.full(len(y_true), np.clip(train_rate, 1e-12, 1 - 1e-12)))
+        # Only now, after this window has been scored: these become the fitting
+        # data for LATER windows and never for this one.
+        seen_y.append(y_true)
+        seen_p.append(p_raw)
 
     y_all = np.concatenate(ys)
     p_all = np.concatenate(ps)
@@ -200,8 +267,14 @@ def walk_forward_metrics(
     # `walk_forward_regression` already returns for margin and total.
     pooled["preds"] = p_all.tolist()
     pooled["y"] = y_all.tolist()
+    calibrated_windows = [r["window"] for r in calibration_record if r["calibrated"]]
     return {
         "windows": per_window,
+        "calibration": calibration_record,
+        # The first window that actually got calibrated, or None when none did.
+        # A reader comparing two runs needs to know the pooled figure is a mix
+        # of calibrated and uncalibrated games, and where the mix starts.
+        "calibrated_from_window": calibrated_windows[0] if calibrated_windows else None,
         # Pooled naive uses each window's own training base rate, so the
         # comparator is honest about what was knowable at each point in time.
         "pooled": pooled,

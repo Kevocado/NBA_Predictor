@@ -86,12 +86,21 @@ def main() -> int:
     candidates = default_candidates(cols)
     results = {}
 
-    for label, hist in (("phase_a_only", None), ("with_history", hist_frame)):
+    # (label, history, calibrator) -- the three arms the ship rule compares.
+    # `None` calibrator is the Phase A baseline itself and must stay byte-identical.
+    ARMS = [
+        ("phase_a_only", None, None),
+        ("with_history", hist_frame, None),
+        ("history_platt", hist_frame, "platt"),
+        ("history_isotonic", hist_frame, "isotonic"),
+    ]
+    for label, hist, calib in ARMS:
         win = walk_forward_metrics(
             frame,
             model_factory=lambda tr: candidates["logistic"]["win"](tr),
             windows=4,
             history_df=hist,
+            calibrator=calib,
         )
         margin = walk_forward_regression(
             frame,
@@ -119,6 +128,10 @@ def main() -> int:
             history_df=hist,
         )
         results[label] = {"win": win, "margin": margin, "total": total}
+        if calib:
+            print(f"  calibration: from window {win['calibrated_from_window']}")
+            for rec in win["calibration"]:
+                print(f"    {rec}")
         print(f"\n--- {label}")
         print(f"  win    log_loss={win['pooled']['log_loss']:.4f} "
               f"brier={win['pooled']['brier']:.4f} auc={win['pooled']['auc']:.4f}")
@@ -148,92 +161,113 @@ def main() -> int:
             verdict = "history WINS" if with_history > reproduced else ("tie" if with_history == reproduced else "history LOSES")
         print(f"{name:<14}{published:>12.4f}{reproduced:>13.4f}{with_history:>12.4f}   {verdict}")
 
-    # --- (a) reliability, 5 quantile buckets, on the identical 758 ---------
+    # --- reliability + bootstrap, for every arm --------------------------
+    ARMS_REPORT = [
+        ("baseline (Phase A)", "phase_a_only"),
+        ("multi-season", "with_history"),
+        ("multi-season + Platt", "history_platt"),
+        ("multi-season + isotonic", "history_isotonic"),
+    ]
+    base_gap = None
     print("\n=== reliability: observed vs predicted, 5 equal-count buckets")
     print("(identical 758 out-of-fold games; equal-COUNT buckets because NBA")
     print(" win probabilities cluster near 0.56 and equal-width would fill one)")
-    for label, res in (("baseline", base), ("multi-season", hist)):
-        table = bucket_calibration(
-            np.asarray(res["win"]["pooled"]["y"]),
-            np.asarray(res["win"]["pooled"]["preds"]),
-            n_buckets=N_BUCKETS,
-        )
+    calib = {}
+    for label, key in ARMS_REPORT:
+        res = results[key]
+        y = np.asarray(res["win"]["pooled"]["y"])
+        p_pred = np.asarray(res["win"]["pooled"]["preds"])
+        table = bucket_calibration(y, p_pred, n_buckets=N_BUCKETS)
+        gap = calibration_gap(y, p_pred, n_buckets=N_BUCKETS)
+        calib[key] = {"table": table, "max_gap": gap}
+        if key == "phase_a_only":
+            base_gap = gap
         print(f"\n  {label}:")
         print(f"    {'bucket':<8}{'predicted':>11}{'observed':>11}{'gap':>9}{'n':>6}")
         for row in table:
             print(f"    {row['bucket']:<8}{row['predicted']:>11.4f}{row['observed']:>11.4f}"
                   f"{row['gap']:>+9.4f}{row['n']:>6}")
-        worst = max(table, key=lambda r: abs(r["gap"]))
-        gap = calibration_gap(
-            np.asarray(res["win"]["pooled"]["y"]),
-            np.asarray(res["win"]["pooled"]["preds"]),
-            n_buckets=N_BUCKETS,
-        )
-        results[f"{label}_calibration"] = {"table": table, "max_gap": gap}
-        print(f"    max |gap| = {gap:.4f}  (bucket {worst['bucket']})")
-    base_gap = results["baseline_calibration"]["max_gap"]
-    hist_gap = results["multi-season_calibration"]["max_gap"]
-    verdict = ("NOT WIDENED" if hist_gap <= base_gap
-               else f"WIDENED by {hist_gap - base_gap:+.4f}")
-    print(f"\n  calibration gap: baseline {base_gap:.4f} -> multi-season {hist_gap:.4f}  {verdict}")
+        flag = ""
+        if base_gap is not None and key != "phase_a_only":
+            flag = ("  <= ship bar 0.0591" if gap <= 0.0591
+                    else f"  (baseline {base_gap:.4f}, {'better' if gap < base_gap else 'worse'})")
+        print(f"    max |gap| = {gap:.4f}{flag}")
 
-    # --- (b) paired bootstrap on the identical 758 -------------------------
-    print(f"\n=== paired bootstrap, {N_RESAMPLES} resamples, seed {SEED}")
+    # --- paired bootstrap, every arm against the Phase A baseline ---------
+    print(f"\n=== paired bootstrap vs the Phase A baseline, {N_RESAMPLES} resamples, seed {SEED}")
     print("one draw of game indices applied to BOTH models; 95% percentile interval")
     print("on the DIFFERENCE. A metric counts as improved only if the interval")
     print("excludes zero in the direction that is better.")
-    win_y = np.asarray(base["win"]["pooled"]["y"])
-    margin_y = np.asarray(base["margin"]["pooled"]["y"])
-    total_y = np.asarray(base["total"]["pooled"]["y"])
+    win_y = np.asarray(results["phase_a_only"]["win"]["pooled"]["y"])
+    margin_y = np.asarray(results["phase_a_only"]["margin"]["pooled"]["y"])
+    total_y = np.asarray(results["phase_a_only"]["total"]["pooled"]["y"])
 
-    boot = {
-        "win log_loss": paired_bootstrap(
-            win_y, np.asarray(base["win"]["pooled"]["preds"]),
-            np.asarray(hist["win"]["pooled"]["preds"]), "log_loss",
-            n_resamples=N_RESAMPLES, seed=SEED),
-        "win brier": paired_bootstrap(
-            win_y, np.asarray(base["win"]["pooled"]["preds"]),
-            np.asarray(hist["win"]["pooled"]["preds"]), "brier",
-            n_resamples=N_RESAMPLES, seed=SEED),
-        "win auc": paired_bootstrap(
-            win_y, np.asarray(base["win"]["pooled"]["preds"]),
-            np.asarray(hist["win"]["pooled"]["preds"]), "auc",
-            n_resamples=N_RESAMPLES, seed=SEED),
-        "margin mae": paired_bootstrap(
-            margin_y, np.asarray(base["margin"]["pooled"]["preds"]),
-            np.asarray(hist["margin"]["pooled"]["preds"]), "mae",
-            n_resamples=N_RESAMPLES, seed=SEED),
-        "total mae": paired_bootstrap(
-            total_y, np.asarray(base["total"]["pooled"]["preds"]),
-            np.asarray(hist["total"]["pooled"]["preds"]), "mae",
-            n_resamples=N_RESAMPLES, seed=SEED),
-    }
-    print(f"\n  {'metric':<14}{'baseline':>10}{'+history':>10}{'diff':>10}"
-          f"{'95% interval':>22}   verdict")
-    n_improved = 0
-    for name, out in boot.items():
-        ci = f"[{out['ci_low']:+.4f}, {out['ci_high']:+.4f}]"
-        if out["improved"]:
-            verdict = "IMPROVED (CI excludes 0)"
-            n_improved += 1
-        else:
-            verdict = "NOT distinguishable from 0"
-        print(f"  {name:<14}{out['baseline']:>10.4f}{out['candidate']:>10.4f}"
-              f"{out['difference']:>+10.4f}{ci:>22}   {verdict}")
-    print(f"\n  {n_improved}/5 metrics have intervals excluding zero")
+    all_boot = {}
+    for label, key in ARMS_REPORT[1:]:
+        res = results[key]
+        all_boot[label] = {
+            "win log_loss": paired_bootstrap(
+                win_y, np.asarray(results["phase_a_only"]["win"]["pooled"]["preds"]),
+                np.asarray(res["win"]["pooled"]["preds"]), "log_loss",
+                n_resamples=N_RESAMPLES, seed=SEED),
+            "win brier": paired_bootstrap(
+                win_y, np.asarray(results["phase_a_only"]["win"]["pooled"]["preds"]),
+                np.asarray(res["win"]["pooled"]["preds"]), "brier",
+                n_resamples=N_RESAMPLES, seed=SEED),
+            "win auc": paired_bootstrap(
+                win_y, np.asarray(results["phase_a_only"]["win"]["pooled"]["preds"]),
+                np.asarray(res["win"]["pooled"]["preds"]), "auc",
+                n_resamples=N_RESAMPLES, seed=SEED),
+            "margin mae": paired_bootstrap(
+                margin_y, np.asarray(results["phase_a_only"]["margin"]["pooled"]["preds"]),
+                np.asarray(res["margin"]["pooled"]["preds"]), "mae",
+                n_resamples=N_RESAMPLES, seed=SEED),
+            "total mae": paired_bootstrap(
+                total_y, np.asarray(results["phase_a_only"]["total"]["pooled"]["preds"]),
+                np.asarray(res["total"]["pooled"]["preds"]), "mae",
+                n_resamples=N_RESAMPLES, seed=SEED),
+        }
 
-    # --- (c) the verdict, stated as a gate --------------------------------
-    print("\n=== verdict")
-    not_widened = hist_gap <= base_gap
-    print(f"  metrics improved with a 95% interval excluding zero: {n_improved}/5")
-    if not [n for n in boot if not boot[n]["improved"]]:
-        print("  calibration gap: not widened")
-        print("  VERDICT: all five metrics clear the bar and calibration holds.")
-    else:
-        short = [n for n in boot if not boot[n]["improved"]]
-        print(f"  calibration gap: baseline {base_gap:.4f} -> {hist_gap:.4f} "
-              f"({'not widened' if not_widened else 'WIDENED'})")
-        print(f"  VERDICT: NOT cleared. {len(short)} metric(s) do not: {', '.join(short)}.")
+    for label, boot in all_boot.items():
+        gap = calib[dict(ARMS_REPORT)[label]]["max_gap"]
+        print(f"\n  {label}   (max calibration gap {gap:.4f})")
+        print(f"    {'metric':<14}{'baseline':>10}{'this arm':>10}{'diff':>10}"
+              f"{'95% interval':>22}   verdict")
+        n_improved = 0
+        for name, out in boot.items():
+            ci = f"[{out['ci_low']:+.4f}, {out['ci_high']:+.4f}]"
+            ok = out["improved"]
+            n_improved += 1 if ok else 0
+            verdict = "IMPROVED" if ok else "NOT distinguishable from 0"
+            print(f"    {name:<14}{out['baseline']:>10.4f}{out['candidate']:>10.4f}"
+                  f"{out['difference']:>+10.4f}{ci:>22}   {verdict}")
+        print(f"    {n_improved}/5 intervals exclude zero")
+
+    # --- the ship rule ----------------------------------------------------
+    print("\n=== SHIP RULE: 5/5 intervals exclude zero AND max gap <= 0.0591")
+    for label, key in ARMS_REPORT[1:]:
+        boot = all_boot[label]
+        n_ok = sum(1 for o in boot.values() if o["improved"])
+        gap = calib[key]["max_gap"]
+        gap_ok = gap <= 0.0591
+        verdict = "SHIPS" if (n_ok == 5 and gap_ok) else "does NOT ship"
+        reasons = []
+        if n_ok < 5:
+            missing = [n for n, o in boot.items() if not o["improved"]]
+            reasons.append(f"{n_ok}/5 intervals exclude zero (missing: {', '.join(missing)})")
+        if not gap_ok:
+            reasons.append(f"max gap {gap:.4f} > 0.0591")
+        print(f"  {label:<24} {verdict}")
+        for r in reasons:
+            print(f"      - {r}")
+
+    # AUC note, because it is the recurring blocker.
+    print("\n=== AUC")
+    for label, boot in all_boot.items():
+        o = boot["win auc"]
+        print(f"  {label:<24} {o['difference']:+.4f}  95% [{o['ci_low']:+.4f}, {o['ci_high']:+.4f}]"
+              f"  {'excludes 0' if o['excludes_zero'] else 'CROSSES 0'}")
+
     return 0
 
 

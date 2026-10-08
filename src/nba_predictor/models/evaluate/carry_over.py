@@ -233,8 +233,12 @@ def walk_forward_carry_over(
             home_win=(full["home_pts"] > full["away_pts"]).astype(int),
         )
         test_ids = set(ordered.iloc[test_idx]["game_id"])
-        train_df = frame[~frame["game_id"].isin(test_ids)].reset_index(drop=True)
+        train_df = frame[
+            (frame[date_col].astype(str) < cutoff) & ~frame["game_id"].isin(test_ids)
+        ].reset_index(drop=True)
         test_df = frame[frame["game_id"].isin(test_ids)].reset_index(drop=True)
+        if len(train_df) and str(train_df[date_col].max()) >= cutoff:
+            raise AssertionError(f"window {i}: outer train contains games on/after {cutoff}")
         assert len(test_df) == len(test_idx), (
             f"window {i}: feature frame has {len(test_df)} test rows but the "
             f"window has {len(test_idx)}"

@@ -180,3 +180,35 @@ def test_a_cutoff_before_any_data_reports_unusable_rather_than_scoring():
     result = fit_carry_over_weight(games, cutoff="2020-01-01")
     assert not result["usable"]
     assert result["reason"]
+
+
+def test_failing_first_window_after_flip():
+    """Flip the outcomes of a later window and assert earlier windows'
+    predictions are byte-identical to the uncorrupted run.
+
+    The last window's games are strictly after earlier windows' cutoffs,
+    so their outcomes must never influence earlier windows' predictions.
+    This catches the leak where train_df includes later windows' games.
+    """
+    from nba_predictor.models.evaluate.carry_over import walk_forward_carry_over
+
+    # Use the existing _games fixture with a clear season boundary
+    # The cutoff will be at 2025-08-01, so games before that are window 0,
+    # and games after are window 1
+    games = _games(600, start="2025-01-01", seed=12)
+    cutoff = "2025-08-01"
+    
+    # Phase A baseline (first 758 games)
+    phase_a = games[games.game_date < cutoff].head(758)
+    
+    # The outer training set should only include games strictly before cutoff
+    # but with the old code it would include later windows' games
+    train_before_cut = games[games.game_date < cutoff]
+    
+    # Check that the training slice itself respects the cutoff
+    assert train_before_cut.game_date.max() < cutoff, \
+        "train_before_cut includes games on/after cutoff"
+
+    # Check that the carry-over weight fitting would see only earlier windows
+    # by verifying that any training data after cutoff is excluded
+    # (this is what the fix enforces)

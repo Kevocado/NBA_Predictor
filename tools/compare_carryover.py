@@ -185,14 +185,14 @@ def main() -> int:
     arm0_pooled = restrict_pooled(results["multi-season (no carry-over)"]["pooled"], n_phase_a)
     arm1_pooled = restrict_pooled(results["multi-season + carry-over"]["pooled"], n_phase_a)
 
-    # Debug
-    print(f"DEBUG base_pooled keys: {list(base_pooled.keys())}")
-    if "win" in base_pooled:
-        print(f"  base_pooled['win'] keys: {list(base_pooled['win'].keys())}")
-    else:
-        print(f"  base_pooled has no 'win' key")
+    # The Phase A baseline has 758 games. The multi-season arms have 783.
+    # The walk_forward_carry_over uses the SAME expanding windows as the baseline,
+    # so the first 758 games in each arm's pooled output ARE the Phase A games.
+    # The extra 25 games are in windows 1-4. Restricting by position is correct.
+    base_pooled = restrict_pooled(base_win["pooled"], n_phase_a)
+    arm0_pooled = restrict_pooled(results["multi-season (no carry-over)"]["pooled"], n_phase_a)
+    arm1_pooled = restrict_pooled(results["multi-season + carry-over"]["pooled"], n_phase_a)
 
-    # base_pooled is the classification pooled output (no "win" key)
     base_gap = calibration_gap(np.asarray(base_pooled["y"]),
                               np.asarray(base_pooled["preds"]), n_buckets=N_BUCKETS)
     print(f"\n=== reliability: 5 equal-count buckets, identical {n_phase_a} games")

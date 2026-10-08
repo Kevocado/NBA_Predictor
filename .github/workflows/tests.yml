@@ -21,7 +21,14 @@ concurrency:
 jobs:
   pytest:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 30, not 15. The suite has outgrown the old budget and no single test is
+    # responsible: locally the whole suite runs in about 2m35s with nothing
+    # above 18s, but a GitHub-hosted runner is roughly 5x slower, which put the
+    # run at 15m+ and killed it twice at exactly the 15-minute mark (#52). The
+    # suite reached 71% both times with no failures. A timeout that fires on a
+    # green suite is a false red that hides real failures behind it, so the
+    # budget is raised rather than the suite trimmed to fit an arbitrary clock.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 

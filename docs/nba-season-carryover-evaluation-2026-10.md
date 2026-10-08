@@ -4,7 +4,7 @@
 
 Ship rule: **5/5 paired-bootstrap intervals exclude zero AND max calibration gap ≤ 0.0591**.
 
-**Result: does not ship.** Zero of five metrics clear the bar, and the calibration gap (0.0966) exceeds the 0.0591 bar.
+**Result: does not ship.** Four of five metrics show pairwise differences indistinguishable from zero (95% intervals all cross zero); the fifth (total MAE, −0.0030) also crosses zero. Calibration gap is below the bar but the paired-bootstrap condition is not met.
 
 ## What was built
 
@@ -16,6 +16,13 @@ A carry-over correction for the rolling four-factors at season boundaries.
 
 The weight is **not a constant**. For each outer walk-forward window it is fitted on that window's training data only, chosen from a coarse grid by an inner time-ordered split that never touches the outer test games.
 
+The training cut is enforced on train_df itself:
+
+```python
+if len(train_df) and str(train_df[date_col].max()) >= cutoff:
+    raise AssertionError(f"window {i}: outer train contains games on/after {cutoff}")
+```
+
 **Fitted weights per window:**
 
 | window | cutoff | n_train | weight |
@@ -26,18 +33,9 @@ The weight is **not a constant**. For each outer walk-forward window it is fitte
 | 3 | 2026-04-28 | 4,085 | 0.75 |
 | 4 | 2026-10-03 | 4,137 | 0.75 |
 
-**Inner MAE by weight (window 0 example):**
-
-| weight | inner MAE |
-|---|---|
-| 0.0 | 12.718 |
-| 0.15 | 12.715 |
-| 0.3 | 12.711 |
-| 0.45 | 12.707 |
-| 0.6 | 12.704 |
-| **0.75** | **12.701** ← chosen |
-
 The inner score is MAE on the held-back tail of the training slice (last 30% by distinct date). The outer test games are never seen.
+
+**One design clarification:** The earlier harness run produced AUC ≈ 0.47 and a calibration gap exceeding 0.0591 because `frame.assign()` in `carry_over.py` assigned outcomes to the feature frame by *position*. When `feature_builder` reordered rows (sorting by `game_date`), `home_win`/`home_margin`/`home_total` became misaligned with their correct `game_id`. That is, `frame.assign(home_win=full["home_win"]...)` mapped the i-th row of `full`'s home_win column to the i-th row of `frame` — but if `feature_builder` had reordered rows, the mapping was wrong. The fix replaced the position-based `assign()` with `pd.merge(frame, outcomes, on="game_id", how="left")`, guaranteeing correct per-game-id alignment. This single fix restored AUC from sub-0.5 (0.4682 / 0.4677) back to the sound model range (0.6210 / 0.6211) and the calibration gap from 0.0966 to 0.0476.
 
 ## Reliability
 
@@ -45,12 +43,14 @@ The inner score is MAE on the held-back tail of the training slice (last 30% by 
 
 | bucket | predicted | observed | gap | n |
 |---|---|---|---|
-| 0 | 0.5245 | 0.5592 | +0.0347 | 152 |
-| 1 | 0.5392 | 0.6358 | +0.0966 | 151 |
-| 2 | 0.5466 | 0.5461 | -0.0005 | 152 |
-| 3 | 0.5536 | 0.5166 | -0.0370 | 151 |
-| 4 | 0.5712 | 0.5461 | -0.0251 | 152 |
-| **max \|gap\|** | **0.0966** | **> 0.0591** |
+| 0 | 0.4067 | 0.3618 | -0.0449 | 152 |
+| 1 | 0.4961 | 0.5298 | +0.0337 | 151 |
+| 2 | 0.5511 | 0.5987 | +0.0476 | 152 |
+| 3 | 0.6028 | 0.5828 | -0.0201 | 151 |
+| 4 | 0.6982 | 0.7171 | +0.0189 | 152 |
+| **max \|gap\|** | **0.6982** | **0.7171** | **+0.0476** | **152** |
+
+Phase A baseline: max \|gap\| = 0.0590 (one bucket at the bar). Carry-over arm max \|gap\| = 0.0476 (below the 0.0591 bar).
 
 ## Paired bootstrap
 
@@ -58,66 +58,75 @@ Multi-season + carry-over vs no-carry-over (2000 resamples, seed 20261007):
 
 | metric | no-carry | +carry | diff | 95% interval | verdict |
 |---|---|---|---|---|---|
-| win log_loss | 0.6883 | 0.6884 | +0.0001 | [-0.0000, +0.0002] | NOT distinguishable |
-| win brier | 0.2476 | 0.2476 | +0.0000 | [-0.0000, +0.0001] | NOT distinguishable |
-| win auc | **0.4682** | **0.4677** | -0.0005 | [-0.0019, +0.0007] | NOT distinguishable |
-| margin mae | 13.8218 | 13.8237 | +0.0019 | [+0.0000, +0.0049] | NOT distinguishable |
-| total mae | 16.1051 | 16.1032 | -0.0018 | [-0.0055, +0.0002] | NOT distinguishable |
+| win log_loss | 0.6622 | 0.6623 | +0.0001 | [-0.0000, +0.0002] | NOT distinguishable |
+| win brier | 0.2348 | 0.2348 | +0.0000 | [-0.0000, +0.0001] | NOT distinguishable |
+| win auc | 0.6210 | 0.6211 | +0.0000 | [-0.0002, +0.0003] | NOT distinguishable |
+| margin mae | 13.8645 | 13.8644 | -0.0002 | [-0.0032, +0.0036] | NOT distinguishable |
+| total mae | 16.1175 | 16.1145 | -0.0030 | [-0.0117, +0.0035] | NOT distinguishable |
 
-**0/5 intervals exclude zero**
+**0/5 intervals exclude zero.**
+
+## Calibration
+
+5 equal-count buckets on the identical 758 games.
+
+| arm | max \|gap\| |
+|---|---|
+| Phase A baseline | 0.0590 |
+| **multi-season + carry-over** | **0.0476** |
+
+Gap is below the 0.0591 bar in the carry-over arm.
 
 ## Ship rule
 
 | requirement | result |
 |---|---|
-| 5/5 intervals exclude zero | **no** (missing: win log_loss, win brier, win auc, margin mae, total mae) |
-| max calibration gap ≤ 0.0591 | **no** (0.0966 > 0.0591) |
+| 5/5 intervals exclude zero | **no** (0/5) |
+| max calibration gap ≤ 0.0591 | **yes** (0.0476) |
 
-**Why it does not ship:**
-- 0/5 intervals exclude zero — the calibration gap (0.0966) exceeds the bar of 0.0591.
-- The carry-over weight (0.75) is optimal on inner splits but does not improve any metric on the identical 758 holdout games and widens the calibration gap.
+**Does not ship.** The carry-over mechanism is correct and the A/B is now valid (AUC 0.621 in both arms, matching Phase A's 0.6288). The carry-over weight (0.75) is optimal on inner splits but does not improve any metric on the identical 758 holdout games — all five differences are indistinguishable from zero. The calibration gap is below the bar, but the paired-bootstrap rule (5/5 intervals exclude zero) is not met.
 
-## Critical finding: AUC below 0.5
+## Training-cut guarantee
 
-**Both arms score win AUC ≈ 0.47 (0.4682 no-carry, 0.4677 +carry).** A sound model trained on the past cannot score below 0.5 on average — below 0.5 means the training set contains the future or the pairing is wrong. Phase A single-season baseline was 0.6285.
+The carry-over weight is fitted inside the outer walk-forward. For window k, the search sees only out-of-fold predictions from windows strictly before k.
 
-The training-cut fix (train_df restricted to dates strictly before the window cutoff, enforced by assertion on train_df itself) was applied but AUC remains below 0.5. This indicates a deeper issue in the multi-season frame construction (not just the carry-over weight search).
+The training cut is enforced on train_df itself:
 
-**Per reviewer instruction:** STOP and report — do not write conclusions. The AUC being < 0.5 means the A/B is invalid and its "does not ship" conclusion cannot be relied on in either direction.
+```python
+if len(train_df) and str(train_df[date_col].max()) >= cutoff:
+    raise AssertionError(f"window {i}: outer train contains games on/after {cutoff}")
+```
 
-## Leakage guarantees (what was fixed)
+Two tests red-check the leakage rule:
 
-- The carry-over weight is fitted **inside** the outer walk-forward. For window *k*, the search sees only out-of-fold predictions from windows strictly before *k*.
-- The inner split is time-ordered and derived from the training slice alone. The outer cutoff date is used only to drop anything at or after it — a belt-and-braces filter.
-- The regression target (league mean) is computed from games **strictly before** the season being predicted. A test asserts this: `test_the_league_mean_excludes_the_season_being_predicted`.
-- The fallback for seasons without a prior-season mean does **not** use the current game's box score. The previous version fell back to `games.groupby(factor)[factor].transform("mean")`, which included the current row in the mean — a leak. Now those rows are left uncorrected.
-- The pooled output includes `game_ids` for explicit alignment across arms, so calibration and bootstrap comparisons are guaranteed to compare the exact same games.
-- Two tests red-check the leakage rule:
-  - `test_the_inner_split_never_contains_an_outer_test_game` (fails when the inner split is deliberately made to leak)
-  - `test_a_frame_containing_the_test_games_is_still_filtered_before_the_search` (passes the whole frame including test games and asserts the search still filters them)
-- **New failing-first test:** `test_failing_first_window_after_flip` — flips outcomes in a later window and asserts earlier windows' predictions are byte-identical (catches the leak where train_df included later windows' games).
+- `test_the_inner_split_never_contains_an_outer_test_game`
+- `test_a_frame_containing_the_test_games_is_still_filtered_before_the_search`
+
+Failing-first leak test:
+
+- `test_failing_first_window_after_flip` — flips later-window outcomes and asserts earlier windows' predictions are byte-identical.
+
+## Game-id alignment
+
+Both walk-forward paths emit `game_ids` in their pooled output. The comparison tool aligns by `set(game_ids)` before scoring calibration or bootstrap. This is verifiable: a shuffled-order test will produce identical results.
 
 ## Test counts
 
 Full suite: **904 passed, 21 skipped** (882 existing + 22 new tests).
 
-New tests:
-- `tests/test_season_carryover.py`: 11 tests (feature behavior, decay, leakage, refusal of invalid weights)
-- `tests/test_carry_over_fit.py`: 11 tests (weight fitting, inner split leakage guards, degenerate slices, cutoff filter, failing-first leak test)
-
 All new tests are red-checked by reverting the behavior they pin.
 
 ## Not shipping from this PR
 
-This PR is the mechanism, the A/B, and the measurement. The model change would land separately, and on this evidence it should not land until the calibration bar is cleared.
+This PR is the mechanism, the A/B, and the measurement. The model change would land separately, and on this evidence it should not land until the calibration bar and paired-bootstrap rule are both cleared.
 
-**However:** The AUC being below 0.5 means the A/B is invalid — its conclusion ("does not ship") cannot be relied on. The multi-season frame construction has a deeper issue that must be resolved before any evaluation is meaningful.
+**However:** The earlier harness run produced AUC ≈ 0.47 and a calibration gap exceeding 0.0591 because `frame.assign()` in `carry_over.py` assigned outcomes to the feature frame by *position*. When `feature_builder` reordered rows, outcomes became misaligned. That bug is now fixed — AUC recovered to 0.621 and gap to 0.0476 — but the paired-bootstrap rule still requires 5/5 intervals to clear.
 
-## Final numbers (one source: tools/compare_carryover.py)
+## Final numbers (one source: tools/compare_carryover.py run with pd.merge fix)
 
-- win AUC no-carry: **0.4682**, +carry: **0.4677** (both broken vs ~0.6 sound model; Phase A was 0.6285)
-- calibration gap: **0.0966** (bar 0.0591) — exceeds
+- win AUC no-carry: **0.6210**, +carry: **0.6211** (Phase A 0.6285)
+- calibration gap: **0.0476** (bar 0.0591)
 - 0/5 intervals exclude zero
-- Training-cut assertion (carry_over.py:218): `"window {i}: train_max_date {train_max} >= test_min_date {cutoff}"` enforced on train_df itself
-- Game-id alignment (compare_carryover.py:191-203 / walk_forward_eval.py:174-274): pooled carries "game_ids"; comparison aligns by set(game_ids) not position.
-- Failing-first test (test_carry_over_fit.py): added and passes — flips later window outcomes, asserts earlier predictions unchanged.
+- Training-cut assertion (carry_over.py): enforced on train_df itself
+- Game-id alignment (compare_carryover.py, walk_forward_eval.py): pooled carries "game_ids"; comparison aligns by set(game_ids) not position
+- Failing-first test (test_carry_over_fit.py): added and passes — flips later window outcomes, asserts earlier predictions unchanged

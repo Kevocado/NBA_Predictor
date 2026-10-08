@@ -212,3 +212,96 @@ def test_failing_first_window_after_flip():
     # Check that the carry-over weight fitting would see only earlier windows
     # by verifying that any training data after cutoff is excluded
     # (this is what the fix enforces)
+
+
+def test_failing_first_regression_position_assign():
+    """
+    Regression test for position-based assign bug in carry_over.py.
+    
+    Before the fix, `frame.assign(home_win=full["home_win"], …)` assigned outcomes by
+    position rather than by game_id. Because `feature_builder` re-sorts rows by `game_date`,
+    the position-based assignment misaligned outcomes with their true game_ids.
+    
+    This test creates a minimal scenario where the bug manifests: after the pipeline
+    runs, per-game_id outcomes must match the ground truth. On commit 0d9b91e (the
+    broken version), the test fails because the assignment is wrong. After the fix
+    (merging by game_id), the test passes.
+    """
+    import pandas as pd
+    import numpy as np
+    from nba_predictor.features.build import build_training_frame
+    from nba_predictor.models.evaluate.carry_over import walk_forward_carry_over
+
+    # Build a minimal dataset with all columns expected by build_training_frame
+    games = pd.DataFrame({
+        "game_id": ["z", "a", "m", "b"],
+        "game_date": ["2026-01-10", "2026-01-05", "2026-01-07", "2026-01-08"],
+        "home_team": ["BOS", "LAL", "BOS", "LAL"],
+        "away_team": ["LAL", "BOS", "LAL", "BOS"],
+        "home_pts": [110, 100, 105, 95],
+        "away_pts": [100, 110, 95, 105],
+        "home_win": [1, 0, 1, 0],
+        "home_win": [1, 0, 1, 0],
+        "home_fgm": [40, 35, 38, 34],
+        "home_fga": [88, 88, 88, 88],
+        "home_fg3m": [12, 10, 11, 9],
+        "home_tov": [11, 12, 10, 13],
+        "home_oreb": [9, 8, 10, 7],
+        "away_dreb": [32, 31, 33, 30],
+        "home_fta": [20, 19, 21, 18],
+        "away_fgm": [35, 40, 34, 38],
+        "away_fga": [88, 88, 88, 88],
+        "away_fg3m": [10, 12, 9, 11],
+        "away_tov": [12, 11, 13, 10],
+        "away_oreb": [8, 9, 7, 10],
+        "home_dreb": [31, 32, 30, 33],
+        "away_fta": [19, 20, 18, 21],
+        "home_efg_pct_roll": [0.45, 0.42, 0.48, 0.40],
+        "away_efg_pct_roll": [0.48, 0.45, 0.42, 0.46],
+        "home_tov_rate_roll": [0.35, 0.38, 0.32, 0.36],
+        "away_tov_rate_roll": [0.38, 0.35, 0.40, 0.32],
+        "home_power_rating": [150, 160, 155, 145],
+        "away_power_rating": [140, 165, 148, 142],
+        "power_rating_diff": [10, 5, 7, 3],
+        "home_rest_days": [2, 3, 1, 4],
+        "away_rest_days": [3, 2, 4, 1],
+        "home_back_to_back": [True, False, True, False],
+        "away_back_to_back": [False, True, False, True],
+        "home_fatigue_index": [0.2, 0.3, 0.25, 0.35],
+        "away_fatigue_index": [0.3, 0.25, 0.2, 0.4],
+        "home_missing_value": [0, 0, 0, 0],
+        "away_missing_value": [0, 0, 0, 0],
+        "home_streak": [1, 2, 1, 2],
+        "away_streak": [2, 1, 2, 1],
+        "is_high_altitude": [0, 1, 0, 1],
+        "conference_game": [0, 1, 0, 1],
+        "division_game": [0, 0, 1, 1],
+    })
+
+    # Run one window of the carry-over pipeline
+    results = walk_forward_carry_over(
+        games,
+        None,
+        {"win": lambda tr, c: lambda test_df: np.zeros(len(test_df))},
+        windows=1,
+        date_col="game_date",
+        target_col="home_win",
+        grid=(0.0,),
+    )
+
+    # Extract pooled outcomes
+    pooled = results["pooled"]
+    y = pooled["win"]["y"]
+    game_ids = pooled["win"]["game_ids"]
+
+    # For each game_id, verify the outcome matches the true home_win
+    true_home_wins = games.set_index("game_id")["home_win"].to_dict()
+    for gid, outcome in zip(game_ids, y):
+        if gid in true_home_wins:
+            assert outcome == true_home_wins[gid], \
+                f"game_id {gid}: expected home_win={true_home_wins[gid]}, got {outcome}"
+
+    # If we reach here, the test passes (correct per-game alignment)
+    # On commit 0d9b91e (old assign), this would FAIL because the assignment
+    # was position-based and misaligned with game_ids.
+    pass

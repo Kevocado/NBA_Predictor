@@ -207,3 +207,55 @@ Race: `src/nba_predictor/models/candidate_race.py` — a candidate that raises
 **fails the race** rather than being scored `inf` and losing silently, which is
 what produced a fake "XGBoost wins" result in a rejected draft.
 Probabilities: `src/nba_predictor/models/probability.py`.
+---
+
+# Task 4 candidates (2026-10-09)
+
+Audit followup `2026-10-06-nba-audit-followup.md` Task 4: one PR per candidate,
+each shipped only if walk-forward beats the current winner, and a candidate that
+does not win is documented here rather than shipped. This section is that record.
+
+## 4(d) — average Ridge and XGBoost margins instead of winner-take-all — **does not ship**
+
+The race is winner-take-all (`_pick_winner` takes the single best per target).
+This asks whether the plain mean of the two margin models does better than either
+alone, on the identical held-out games.
+
+Reproduced by `tests/test_margin_average_candidate.py`. The average is built the
+way a real candidate would be: both regressors fitted inside the walk-forward on
+the training slice only, then averaged. 4 windows, pooled n=758.
+
+| arm | margin MAE |
+|---|---|
+| Ridge (race winner) | 12.3170 |
+| XGBoost | 12.4391 |
+| **average** | **12.2959** |
+
+The average is **better on the point estimate by 0.0211**. That is not the ship
+rule. Paired bootstrap, 2,000 resamples, seed 20261009, one draw applied to both:
+
+| comparison | diff | 95% interval | verdict |
+|---|---|---|---|
+| average vs the best single model | −0.0211 | **[−0.0954, +0.0475]** | **NOT distinguishable** |
+
+The interval crosses zero by a wide margin — its half-width is roughly five times
+the effect. **4(d) does not ship.**
+
+The direction is worth noting because it is the *expected* one: averaging two
+regressors with decorrelated errors usually helps a little, and it did here on the
+point estimate. It is also unmeasurable at n=758, which is the same finding as
+every AUC question on this holdout. The honest conclusion is that this holdout
+cannot resolve a 0.02 MAE move, not that averaging is worthless.
+
+**Not relaxed.** The ship rule is "beats the current winner" and this does not
+demonstrably beat it, so it is documented and left out.
+
+## Still open
+
+| item | status |
+|---|---|
+| 4(a) star/minutes-weighted availability | not started — `features/availability.py` does not exist |
+| 4(b) rest/back-to-back/travel interactions | rest and back-to-back are live; **travel, congestion and fatigue are dead columns** — `_OPTIONAL_COLUMNS_DEFAULT_ZERO` fills them with 0.0 and nothing computes them |
+| 4(c) calibration fitted out-of-fold | done (PR #52); the **probability ceiling near 0.85** is not implemented |
+| 4(d) Ridge/XGBoost margin average | **evaluated above — does not ship** |
+| 4(e) total model from pace × opponent-adjusted efficiency | not started — needs the pace and adjusted blocks, which the feature-pipeline plan builds |

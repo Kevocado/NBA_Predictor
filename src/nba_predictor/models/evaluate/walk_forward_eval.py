@@ -114,6 +114,86 @@ def classification_metrics(
     }
 
 
+def ids_of(pooled: dict) -> list:
+    """The `game_ids` of a pooled dict, whichever of the two shapes it has.
+
+    `walk_forward_metrics` returns them at the top level; `walk_forward_carry_over`
+    returns one per target under `{"win": ..., "margin": ..., "total": ...}`.
+    Empty when a dict carries none -- the callers below are what decide that is
+    fatal, so the reader stays tolerant and the validators stay strict.
+    """
+    if "win" in pooled:
+        return pooled["win"].get("game_ids") or []
+    return pooled.get("game_ids") or []
+
+
+def phase_a_ids(base_pooled: dict, n_phase_a: int) -> list:
+    """The ordered id list a comparison is scored on: exactly the baseline's games.
+
+    The order is load-bearing, not decoration. Every arm is emitted in this
+    order, so row i of one arm's arrays is the same game as row i of another's
+    -- which is what `np.asarray(arm0["win"]["y"])` built into the paired
+    bootstrap requires. Raises when the baseline carries no usable ids rather
+    than falling back to "the first n rows", because position is not identity.
+    """
+    base_ids = ids_of(base_pooled)
+    if not base_ids:
+        raise ValueError("baseline (Phase A) pooled output carries no game_ids")
+    if len(base_ids) != n_phase_a:
+        raise ValueError(
+            f"baseline scored {len(base_ids)} games, expected the Phase A {n_phase_a}")
+    if len(set(base_ids)) != n_phase_a:
+        raise ValueError("Phase A game_ids are not unique")
+    return list(base_ids)
+
+
+def restrict_to_ids(pooled: dict, keep_order: list, n_phase_a: int, label: str) -> dict:
+    """Keep only the entries whose `game_id` is in `keep_order`, emitted in that order.
+
+    Emission order is the point. Selecting by id alone is not enough: two arms
+    whose rows are in different orders would still leave row i of one holding a
+    different game from row i of the other, and the caller assembles the three
+    arrays positionally. Re-emitting in `keep_order` makes every arm agree.
+
+    There is no positional fallback. Pairing the i-th prediction of one arm with
+    the i-th game of another is exactly the mislabelling that drove the
+    carry-over A/B's win AUC below 0.5, so an arm that carries no ids is a bug
+    and raises instead of quietly truncating.
+    """
+    keep = set(keep_order)
+
+    def _restrict(data: dict, what: str) -> dict:
+        gids = data.get("game_ids")
+        if not gids:
+            raise ValueError(
+                f"{label}: {what} carries no game_ids; refusing to align by position")
+        if len(set(gids)) != len(gids):
+            raise ValueError(f"{label}: {what} has duplicate game_ids")
+        index = {g: i for i, g in enumerate(gids)}
+        missing = keep - set(gids)
+        if missing:
+            raise ValueError(
+                f"{label}: {what} is missing {len(missing)} of the {n_phase_a} "
+                f"Phase A games (e.g. {sorted(missing)[:3]})")
+        return {k: ([v[index[g]] for g in keep_order]
+                    if isinstance(v, list) and len(v) == len(gids) else v)
+                for k, v in data.items()}
+
+    if "win" in pooled:                        # carry-over shape
+        return {t: _restrict(d, t) for t, d in pooled.items()}
+    return _restrict(pooled, "pooled")          # classification shape
+
+
+def assert_same_games(pooled: dict, keep_order: list, n_phase_a: int, label: str) -> None:
+    """Assert an arm is scored on exactly the Phase A games, by identity."""
+    arm_ids = set(ids_of(pooled))
+    if arm_ids != set(keep_order) or len(arm_ids) != n_phase_a:
+        raise ValueError(
+            f"{label} arm is not aligned to the Phase A {n_phase_a} games by "
+            f"game_id ({len(arm_ids)} ids, {len(set(keep_order) - arm_ids)} missing, "
+            f"{len(arm_ids - set(keep_order))} extra)")
+
+
 def _history(history_df: pd.DataFrame | None, date_col: str) -> pd.DataFrame | None:
     """The extra-history frame, sorted, or None when there is nothing to add.
 

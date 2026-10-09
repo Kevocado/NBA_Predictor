@@ -29,6 +29,9 @@ from nba_predictor.models.candidate_race import default_candidates  # noqa: E402
 from nba_predictor.models.evaluate.carry_over import walk_forward_carry_over  # noqa: E402
 from nba_predictor.models.evaluate.paired_bootstrap import paired_bootstrap  # noqa: E402
 from nba_predictor.models.evaluate.walk_forward_eval import (  # noqa: E402
+    assert_same_games,
+    phase_a_ids,
+    restrict_to_ids,
     walk_forward_metrics,
     walk_forward_regression,
 )
@@ -160,72 +163,21 @@ def main() -> int:
     print(f"  chosen weights: {[r['weight'] for r in out1['windows']]}")
 
     # ---- reliability ---------------------------------------------------
-    # The Phase A baseline has 758 games. The multi-season arms have 783.
-    # For a fair comparison, restrict both arms to the SAME 758 games
-    # that the Phase A baseline uses. Those are the first 758 games in order.
+    # The Phase A baseline has 758 games; the multi-season walk-forward has 783
+    # (it spans four seasons of dates, not one). A 783-game arm scored against
+    # a 758-game baseline is not an A/B, so every arm is restricted to the exact
+    # games the Phase A baseline scored, and that restriction is by identity.
     n_phase_a = base_win["pooled"]["n"]
-    def restrict_pooled(pooled, n):
-        """Restrict a pooled dict to first n games.
-        
-        Handles two structures:
-        - Classification: {"log_loss": ..., "brier": ..., "y": [...], "preds": [...], ...}
-        - Carry-over: {"win": {"y": [...], "preds": [...]}, "margin": {...}, "total": {...}}
-        """
-        if "win" in pooled:
-            # Carry-over structure: {"win": {...}, "margin": {...}, "total": {...}}
-            return {k: {sk: (sv[:n] if isinstance(sv, list) and len(sv) > n else sv) 
-                        for sk, sv in v.items()} 
-                    for k, v in pooled.items()}
-        else:
-            # Classification structure: {"y": [...], "preds": [...], "log_loss": ..., ...}
-            return {k: (v[:n] if isinstance(v, list) and len(v) > n else v) 
-                    for k, v in pooled.items()}
+    keep_order = phase_a_ids(base_win["pooled"], n_phase_a)
 
-    base_pooled = restrict_pooled(base_win["pooled"], n_phase_a)
-    arm0_pooled = restrict_pooled(results["multi-season (no carry-over)"]["pooled"], n_phase_a)
-    arm1_pooled = restrict_pooled(results["multi-season + carry-over"]["pooled"], n_phase_a)
+    def align(pooled, label):
+        restricted = restrict_to_ids(pooled, keep_order, n_phase_a, label)
+        assert_same_games(restricted, keep_order, n_phase_a, label)
+        return restricted
 
-    # The Phase A baseline has 758 games. The multi-season arms have 783.
-    # Both arms use walk_forward_carry_over with the SAME expanding windows,
-    # so the first 758 games in each arm ARE the Phase A games by game_id.
-    # We align by game_id explicitly now that pooled output includes game_ids.
-    n_phase_a = base_win["pooled"]["n"]
-    # base_win is classification structure, no "win" key - use y/preds directly
-    base_ids = set(base_win["pooled"]["game_ids"][:n_phase_a]) if "game_ids" in base_win["pooled"] else set()
-
-    def restrict_pooled_by_ids(pooled, keep_ids):
-        # pooled has "win", "margin", "total" each with "game_ids" list (carry-over)
-        # or classification structure with "game_ids" at top level
-        if "win" not in pooled:
-            # Classification structure: {"y": [...], "preds": [...], "game_ids": [...]}
-            if "game_ids" in pooled:
-                mask = [g in keep_ids for g in pooled["game_ids"]]
-                return {k: [v[i] for i, m in enumerate(mask) if m] if isinstance(v, list) and len(v) == len(pooled["game_ids"]) else v
-                        for k, v in pooled.items()}
-            # Fallback: position-based
-            n = n_phase_a
-            return {k: (v[:n] if isinstance(v, list) and len(v) > n else v)
-                    for k, v in pooled.items()}
-        # Carry-over structure: {"win": {...}, "margin": {...}, "total": {...}}
-        out = {}
-        for target_name, target_data in pooled.items():
-            gids = target_data.get("game_ids", [])
-            if gids:
-                mask = [g in keep_ids for g in gids]
-                out[target_name] = {k: [v[i] for i, m in enumerate(mask) if m] 
-                                   if isinstance(v, list) and len(v) == len(gids) else v
-                                   for k, v in target_data.items()}
-            else:
-                # Fallback: position-based
-                n = n_phase_a
-                out[target_name] = {k: (v[:n_phase_a] if isinstance(v, list) and len(v) > n_phase_a else v)
-                                   for k, v in target_data.items()}
-        return out
-
-    base_ids = set(base_win["pooled"].get("game_ids", [])[:n_phase_a]) if "game_ids" in base_win["pooled"] else set(range(n_phase_a))
-    base_pooled = restrict_pooled_by_ids(base_win["pooled"], base_ids)
-    arm0_pooled = restrict_pooled_by_ids(results["multi-season (no carry-over)"]["pooled"], base_ids)
-    arm1_pooled = restrict_pooled_by_ids(results["multi-season + carry-over"]["pooled"], base_ids)
+    base_pooled = align(base_win["pooled"], "baseline (Phase A)")
+    arm0_pooled = align(results["multi-season (no carry-over)"]["pooled"], "no carry-over")
+    arm1_pooled = align(results["multi-season + carry-over"]["pooled"], "+ carry-over")
 
     base_gap = calibration_gap(np.asarray(base_pooled["y"]),
                               np.asarray(base_pooled["preds"]), n_buckets=N_BUCKETS)
@@ -259,7 +211,6 @@ def main() -> int:
     margin_y = np.asarray(arm0["margin"]["y"])
     total_y = np.asarray(arm0["total"]["y"])
 
-    print(f"\n=== paired bootstrap: +carry-over vs no-carry-over, {N_RESAMPLES} resamples, seed {SEED}")
     boot = {
         "win log_loss": paired_bootstrap(win_y, np.asarray(arm0["win"]["preds"]),
                                          np.asarray(arm1["win"]["preds"]), "log_loss",

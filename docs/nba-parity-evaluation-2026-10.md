@@ -273,7 +273,81 @@ demonstrably beat it, so it is documented and left out.
 | item | status |
 |---|---|
 | 4(a) star/minutes-weighted availability | not started — `features/availability.py` does not exist |
-| 4(b) rest/back-to-back/travel interactions | rest and back-to-back are live; **travel, congestion and fatigue are dead columns** — `_OPTIONAL_COLUMNS_DEFAULT_ZERO` fills them with 0.0 and nothing computes them |
+| 4(b) rest/back-to-back/travel interactions | **evaluated above — does not ship, and measurably worse** (AUC −0.0435, gap 0.0591 → 0.0922). The dead-column defect is fixed and kept |
 | 4(c) calibration fitted out-of-fold | done (PR #52); the **probability ceiling near 0.85** is not implemented |
 | 4(d) Ridge/XGBoost margin average | **evaluated above — does not ship** |
 | 4(e) total model from pace × opponent-adjusted efficiency | not started — needs the pace and adjusted blocks, which the feature-pipeline plan builds |
+
+## 4(b) — rest, back-to-back and travel interactions — **does not ship, and it is actively harmful**
+
+`home_fatigue_index` and `away_fatigue_index` had been in `FEATURE_COLUMNS` since
+the column list was written, and `_OPTIONAL_COLUMNS_DEFAULT_ZERO` filled them with
+0.0 when they were absent. So a feature the model was told to expect was a constant
+zero — which is worse than not having the column, because it reads as a
+measurement and means nothing.
+
+`rest_travel.py` already had every function needed (`rolling_travel_miles`,
+`timezone_change_count`, `congestion_flags`, `fatigue_index`). They were written and
+then never called. This PR computes them and adds ten columns: travel miles,
+timezone changes, three-in-four and four-in-six congestion, and the fatigue index,
+for both sides.
+
+**The result is not "unhelpful". It is harm, and it is measurable.**
+
+Reproduced by `tools/compare_travel_fatigue.py` — holdout 1,390 games, pooled
+out-of-fold **n=758**, the identical Phase A window every other measurement here
+uses. Paired bootstrap, 2,000 resamples, seed 20261009.
+
+| metric | baseline | + travel/fatigue | diff | 95% interval | verdict |
+|---|---|---|---|---|---|
+| win log-loss | 0.6636 | 0.6789 | +0.0153 | [+0.0062, +0.0245] | **worse** |
+| win Brier | 0.2351 | 0.2424 | +0.0073 | [+0.0031, +0.0117] | **worse** |
+| win AUC | 0.6287 | **0.5852** | **−0.0435** | [−0.0696, −0.0193] | **worse** |
+| margin MAE | 13.2319 | 13.3148 | +0.0829 | [−0.0474, +0.2095] | not distinguishable |
+| total MAE | 16.5115 | 16.6153 | +0.1038 | [−0.0428, +0.2486] | not distinguishable |
+| **max calibration gap** | **0.0591** | **0.0922** | **+0.0331** | — | **above the bar** |
+
+**0/5 improve; 3/5 are measurably worse, not noise.** The intervals for log-loss,
+Brier and AUC all exclude zero in the wrong direction. AUC drops 4.35 points, from 0.6287
+to **0.5852** — still above the 0.500 a coin flip scores, but the naive always-home
+baseline scores 0.500 too, so the margin over naive falls from 0.129 to 0.085. The
+calibration gap widens past the bar.
+
+**This does not ship, and the feature is a defect to remove rather than a candidate
+to tune.** Ten columns correlated with schedule, fitted on 758 games, cost 4.35
+points of ranking. That is overfitting with a direction.
+
+The honest reading of the mechanism: travel, rest and congestion are all proxies for
+the same underlying thing — how tired a team is — and each is strongly collinear
+with the existing `home_rest_days` / `home_back_to_back` / `home_streak` block. On
+758 games the extra columns buy noise. The signal may well be real; on this holdout
+it is not separable from the columns already there.
+
+**What is worth keeping from this PR:** the bug fix and the tests. `home_fatigue_index`
+being a silent constant zero was a real defect independent of whether the feature
+helps, and `tests/test_travel_fatigue_features.py` now pins that it moves at all.
+
+## What I did NOT do
+
+- **I did not ship it.** 3/5 measurably worse and the gap widens is not a candidate
+  for "relax the bar and keep it".
+- **I did not keep the columns and disable the rest.** That would be tuning until
+  the holdout says yes, which is the failure mode the ship rule exists to stop.
+- **I did not delete the work.** The tool and the doc record why it lost, which is
+  what Task 4 asks for.
+
+
+## Correction (review of NBA#57): the Task 4(b) numbers above must be re-run
+
+The numbers in the travel / congestion / fatigue section were measured BEFORE two defects in the candidate's own
+features were fixed in review: (1) the travel path ended at the team's previous venue instead of the game's venue, and
+`len(dates) >= 2` forced every second game to zero travel; (2) the fatigue rest came from home/away-split last-game
+dates, so a home game followed by an away game the next day looked rested. Both are fixed and regression-tested, so the
+measured loss is not yet a measurement of the corrected feature. The candidate is also no longer in the default
+`FEATURE_COLUMNS` (`TRAVEL_FATIGUE_COLUMNS`, opt-in), so nothing ships by default either way. Re-run
+`tools/compare_travel_fatigue.py` (it needs `data/cache/training/games.json`, which is gitignored) before drawing a
+conclusion in either direction.
+
+**Separate finding, not changed here:** the default `home_rest_days` / `away_rest_days` / back-to-back features use the
+same role-split last-game dates, so a team's rest is measured from its last game in the SAME role. That is in the
+production feature contract and needs its own evaluated change.

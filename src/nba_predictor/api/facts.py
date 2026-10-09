@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
 from fastapi import APIRouter, HTTPException
 
 from .. import config
@@ -41,6 +42,46 @@ def _now() -> datetime:
 
 def _schedule() -> list[dict]:
     return deps.get_schedule(deps.get_schedule_path())
+
+
+def _box_score_history() -> pd.DataFrame:
+    """Completed games with their box scores, shaped for the duel ranker.
+
+    `enrich_with_boxscores` is the pipeline's own step that adds the flat
+    ``home_*/away_*`` box-score fields, and `to_training_frame` is its own
+    shaping step -- so the duels rank exactly the figures the features are built
+    from, rather than a second, separately-fetched copy that could disagree.
+
+    Cached per-process: the schedule repository keeps only scores, so the box
+    fields have to be re-fetched, and this is read once per upcoming game.
+    """
+    global _BOX_HISTORY
+    if _BOX_HISTORY is None:
+        from ..pipeline.ingest import enrich_with_boxscores, to_training_frame
+
+        schedule = _schedule()
+        _BOX_HISTORY = to_training_frame(enrich_with_boxscores(schedule))
+    return _BOX_HISTORY
+
+
+_BOX_HISTORY: pd.DataFrame | None = None
+
+
+def _matchup_rows(home: str, away: str, as_of, pick_side: str | None) -> list[dict]:
+    """Four-factors rank duels for this game, in the facts bundle's shape.
+
+    Delegates to `signals.four_factors_duel`, which owns the window, the
+    `min_gap` and the ranking. Empty when either team has not played enough
+    games to be ranked -- a duel off last month's roster is a number, not a
+    measurement.
+    """
+    from ..signals.four_factors_duel import four_factors_duel, to_context
+
+    history = _box_score_history()
+    if not len(history):
+        return []
+    duels = four_factors_duel(home, away, history, as_of)
+    return to_context(duels, pick_side)
 
 
 def _db_path() -> Path:
@@ -263,9 +304,14 @@ def _players(game_id: str, teams: set[str]) -> list[dict]:
 
 
 
-def _context(game: dict, schedule: list[dict]) -> dict:
-    """Rest and back-to-back, but only when the schedule already carries
-    them. No new features are computed here."""
+def _context(game: dict, schedule: list[dict], started: bool = False, pick: dict | None = None) -> dict:
+    """Rest, back-to-back and the four-factors rank duels.
+
+    Rest and back-to-back come from the schedule and only when it already
+    carries them. The duels are computed here from box scores, because there is
+    nowhere else for them to come from: the schedule repository keeps only
+    scores, so `_box_score_history` re-reads the box fields.
+    """
     context: dict[str, Any] = {}
     home_rest = game.get("home_rest_days")
     away_rest = game.get("away_rest_days")
@@ -273,6 +319,23 @@ def _context(game: dict, schedule: list[dict]) -> dict:
         context["rest"] = f"Rest {home_rest} v {away_rest} days"
     if game.get("home_back_to_back") is not None:
         context["back_to_back"] = bool(game.get("home_back_to_back") or game.get("away_back_to_back"))
+
+    if not started:
+        home, away = game["home_team"], game["away_team"]
+        pick_side = None
+        if pick:
+            # The duel's `toward` is "home"/"away", so the pick has to be read as
+            # a side rather than as the team name `_favourite` returns.
+            pick_side = "home" if pick.get("label") == home else "away" if pick.get("label") == away else None
+        try:
+            matchups = _matchup_rows(home, away, game["game_date"], pick_side)
+        except Exception:
+            # A duel is an enhancement on a game page, and the page has to
+            # survive its absence -- the same rule the signals endpoint follows.
+            logger.exception("matchup duels unavailable for %s", game.get("game_id"))
+            matchups = []
+        if matchups:
+            context["matchups"] = matchups
     return context
 
 
@@ -384,7 +447,7 @@ def get_facts(game_id: str) -> dict:
         "pick": pick,
         "markets": [] if (started and chosen is None) else _markets(game, prediction),
         "drivers": [],
-        "context": _context(game, schedule),
+        "context": _context(game, schedule, started=started, pick=pick),
         "players": _players(str(game_id), {home_team, away_team}),
         "record": _record(),
         "result": _result(game, status, pick_timing, home_prob),

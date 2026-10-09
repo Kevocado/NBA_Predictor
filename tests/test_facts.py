@@ -266,6 +266,75 @@ def test_context_is_omitted_when_the_schedule_has_no_rest_fields(api):
     assert "rest" not in body["context"]
 
 
+# --- matchup duels in context.matchups ----------------------------------
+
+DUEL_ROWS = [
+    {"id": "efg_pct:home", "attacker": "BOS", "defender": "MIA", "stat": "shooting",
+     "foil": "shooting defence", "attacker_rank": 3, "defender_rank": 28,
+     "n_teams": 30, "toward_pick": True},
+    {"id": "orb_pct:away", "attacker": "MIA", "defender": "BOS", "stat": "offensive rebounding",
+     "foil": "defensive rebounding", "attacker_rank": 27, "defender_rank": 4,
+     "n_teams": 30, "toward_pick": False},
+]
+
+
+def test_facts_carry_matchups_for_an_upcoming_game(api, monkeypatch):
+    monkeypatch.setattr(facts_mod, "_matchup_rows", lambda *a, **k: DUEL_ROWS)
+
+    body = api.get(f"/facts/{GAME_ID}").json()
+
+    assert body["context"]["matchups"] == DUEL_ROWS
+
+
+def test_a_started_game_has_no_matchups(api, monkeypatch):
+    """A duel ranks form that has already been played out. Quoting one after
+    tip-off is hindsight wearing a prediction's clothes."""
+    monkeypatch.setattr(facts_mod, "_matchup_rows", lambda *a, **k: DUEL_ROWS)
+    monkeypatch.setattr(
+        facts_mod, "_schedule",
+        lambda: [_game(completed=True, home_pts=110, away_pts=100, tip_off="2026-01-15T12:00:00Z")],
+    )
+
+    body = api.get(f"/facts/{GAME_ID}").json()
+
+    assert "matchups" not in body["context"]
+
+
+def test_matchups_are_omitted_rather_than_an_empty_row(api, monkeypatch):
+    """"No data, no signal" applies to duels too: an empty list is not a row."""
+    monkeypatch.setattr(facts_mod, "_matchup_rows", lambda *a, **k: [])
+
+    body = api.get(f"/facts/{GAME_ID}").json()
+
+    assert "matchups" not in body["context"]
+
+
+def test_matchup_rows_carry_a_rank_out_of_thirty(api, monkeypatch):
+    """A rank is meaningless without the league it is out of."""
+    monkeypatch.setattr(facts_mod, "_matchup_rows", lambda *a, **k: DUEL_ROWS)
+
+    rows = api.get(f"/facts/{GAME_ID}").json()["context"]["matchups"]
+
+    for row in rows:
+        assert row["n_teams"] == 30, f"{row['id']} ranks out of {row['n_teams']}"
+        assert 1 <= row["attacker_rank"] <= 30
+        assert 1 <= row["defender_rank"] <= 30
+
+
+def test_an_unreadable_box_score_history_yields_no_matchups(api, monkeypatch):
+    """A duel adapter that raises must not take the game page down with it."""
+    def boom(*a, **k):
+        raise RuntimeError("box score history unavailable")
+
+    monkeypatch.setattr(facts_mod, "_matchup_rows", boom)
+
+    body = api.get(f"/facts/{GAME_ID}").json()
+
+    assert "matchups" not in body["context"]
+    # The rest of the bundle survived.
+    assert body["pick"]["label"] == "BOS"
+
+
 # --- pick_timing: the three cases ---------------------------------------
 
 def test_pick_timing_is_pre_kickoff_for_a_pre_tip_row(api):

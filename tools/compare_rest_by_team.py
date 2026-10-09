@@ -1,4 +1,11 @@
-"""Task 4(b): do travel, congestion and fatigue earn their place in the frame?
+"""Does measuring rest from the team's last game (any role) beat the role-split default?
+
+Adapted from compare_travel_fatigue.py. The baseline arm is the production default (rest from the last game in the SAME
+role); the candidate arm passes rest_by_team=True. Same holdout, same rule: a metric counts only if its paired-bootstrap
+interval excludes zero in the better direction (AUC: excludes a decline), and the calibration gap must not widen.
+Nothing ships from a run of this tool: switching the default is its own reviewed PR with these numbers in it.
+
+(Original header, for the shared machinery below:) Task 4(b): do travel, congestion and fatigue earn their place?
 
 Audit followup `2026-10-06-nba-audit-followup.md` Task 4(b). `home_fatigue_index`
 and `away_fatigue_index` were in `FEATURE_COLUMNS` and zero-filled by
@@ -15,7 +22,7 @@ gitignored, so a test reading it would pass locally and error in CI -- which is 
 a green run stops meaning anything. `tools/compare_carryover.py` is the same shape.
 
 Run:
-    uv run --python 3.13 python tools/compare_travel_fatigue.py
+    uv run --python 3.13 python tools/compare_rest_by_team.py
 """
 
 import json
@@ -101,7 +108,7 @@ def main() -> int:
     full = pd.concat([history, current], ignore_index=True).sort_values("game_date").reset_index(drop=True)
     arms = {}
     for label, candidate in (("baseline", False), ("+ travel/fatigue", True)):
-        frame_all, cols = build_training_frame(full, include_travel_fatigue=candidate)
+        frame_all, cols = build_training_frame(full, rest_by_team=candidate)
         frame_all = frame_all.assign(home_margin=frame_all.home_pts - frame_all.away_pts,
                                      home_total=frame_all.home_pts + frame_all.away_pts)
         in_holdout = (frame_all.game_date >= PHASE_A_START) & (frame_all.game_date <= PHASE_A_END)
@@ -113,10 +120,9 @@ def main() -> int:
         frame = arm["frame"]
         rows[label] = _run(arm["cols"], frame, arm["history"], label)
 
-
     a, b = rows["baseline"], rows["+ travel/fatigue"]
     print(f"\nframe: holdout {len(current)} games, pooled out-of-fold n={a['n']}")
-    print(f"added columns: {len(NEW_COLUMNS)}")
+    print("candidate: rest_by_team=True (no columns added, the two rest columns and back-to-back flags change)")
 
     print(f"\n=== paired bootstrap: + travel/fatigue vs baseline, "
           f"{N_RESAMPLES} resamples, seed {SEED}")

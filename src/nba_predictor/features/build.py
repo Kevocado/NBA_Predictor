@@ -70,7 +70,8 @@ def _long_format_box_scores(games: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_feature_frame(
-    games: pd.DataFrame, carry_over_weight: float | None = None, include_travel_fatigue: bool = False
+    games: pd.DataFrame, carry_over_weight: float | None = None, include_travel_fatigue: bool = False,
+    rest_by_team: bool = False,
 ) -> tuple[pd.DataFrame, list[str]]:
     """Features for `games`.
 
@@ -127,8 +128,16 @@ def build_feature_frame(
     for _, row in games.iterrows():
         home, away, game_date = row["home_team"], row["away_team"], row["game_date"]
 
-        rest_days_home.append(compute_rest_days(game_date, home_last_game.get(home)))
-        rest_days_away.append(compute_rest_days(game_date, away_last_game.get(away)))
+        if rest_by_team:
+            # Rest from the team's last game whatever its role. OPT-IN: the default below is what every committed
+            # model was fitted on, so changing it silently would shift live inputs before it has been evaluated.
+            rest_days_home.append(compute_rest_days(game_date, team_last_game.get(home)))
+            rest_days_away.append(compute_rest_days(game_date, team_last_game.get(away)))
+        else:
+            # Role-split: a home game's rest is measured from the team's last HOME game, an away game's from its
+            # last AWAY game, so DEN at home on the 3rd and away on the 4th looks rested on the 4th.
+            rest_days_home.append(compute_rest_days(game_date, home_last_game.get(home)))
+            rest_days_away.append(compute_rest_days(game_date, away_last_game.get(away)))
         streak_home.append(current_streak(home_results.get(home, [])))
         streak_away.append(current_streak(away_results.get(away, [])))
 
@@ -209,6 +218,8 @@ def build_feature_frame(
 
 
 def build_training_frame(
-    games: pd.DataFrame, carry_over_weight: float | None = None, include_travel_fatigue: bool = False
+    games: pd.DataFrame, carry_over_weight: float | None = None, include_travel_fatigue: bool = False,
+    rest_by_team: bool = False,
 ) -> tuple[pd.DataFrame, list[str]]:
-    return build_feature_frame(games, carry_over_weight=carry_over_weight, include_travel_fatigue=include_travel_fatigue)
+    return build_feature_frame(games, carry_over_weight=carry_over_weight, include_travel_fatigue=include_travel_fatigue,
+                               rest_by_team=rest_by_team)

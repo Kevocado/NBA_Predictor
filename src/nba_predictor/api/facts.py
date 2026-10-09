@@ -162,12 +162,15 @@ def start_box_history_warmer(
     sleep=time.sleep,
     should_stop=None,
 ) -> threading.Thread:
-    """Warm the box-score history for every upcoming date, then re-warm when the
-    schedule cache changes.
+    """Warm the next `BOX_HISTORY_KEEP` upcoming dates -- as many as the cache
+    holds -- then re-warm when the schedule cache changes or a build failed.
 
-    Every upcoming date, not the next one: a request is served from the cache
-    only, so a date the warmer skipped is a date with no duels. The explainer's
-    pre-generation walks the week, and a game page can ask for any of them.
+    Only as many as the cache holds: a date warmed and then evicted before it is
+    served is no better than one never warmed, so the bound and the warm list have
+    to agree.
+
+    A date whose build failed is retried on the next tick rather than left cold
+    until the schedule happens to change under it.
 
     A daemon thread started from the app's lifespan: serving begins whether or
     not the warm finishes, and a warm that hangs cannot hold shutdown either.
@@ -182,19 +185,33 @@ def start_box_history_warmer(
 
     def _run() -> None:
         last_state: tuple[int, int] | None = None
+        pending: set[str] = set()
         while should_stop is None or not should_stop():
             state = _schedule_state(schedule_path)
-            if state != last_state:
+            if state != last_state or pending:
                 schedule = _schedule()
                 upcoming = sorted({
                     str(g["game_date"]) for g in schedule
                     if not g.get("completed") and g.get("game_date")
                 })
-                for date in upcoming:
-                    warm_box_history(date)
                 if not upcoming:
                     logger.info("no upcoming games to warm duel history for")
-                last_state = state
+                # Warm only as many dates as the cache holds. A date warmed and
+                # then evicted before it is served is no better than one never
+                # warmed, so the bound and the warm list have to agree -- warming
+                # the whole week into an eight-entry cache would leave the
+                # earliest dates permanently cold.
+                dates = set(upcoming[:BOX_HISTORY_KEEP]) | pending
+                pending = set()
+                for date in sorted(dates):
+                    if not warm_box_history(date):
+                        pending.add(date)
+                # `last_state` advances only once every date in the pass
+                # succeeded, so a date whose box scores could not be read is
+                # retried on the next tick instead of being left cold until the
+                # schedule happens to change under it.
+                if not pending:
+                    last_state = state
             sleep(BOX_WARM_POLL_SECONDS)
 
     thread = threading.Thread(target=_run, name="box-history-warmer", daemon=True)

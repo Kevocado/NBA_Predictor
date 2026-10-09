@@ -239,30 +239,67 @@ def test_a_failed_warm_is_reported_and_does_not_raise(offline, monkeypatch):
     assert facts_mod.warm_box_history("2026-03-18") is False
 
 
-def test_the_warmer_warms_every_upcoming_date(offline, monkeypatch):
-    """Every upcoming date, not the next one: a skipped date has no duels."""
+def test_the_warmer_warms_only_as_many_dates_as_the_cache_holds(offline, monkeypatch):
+    """A date warmed and then evicted before it is served is no better than a date
+    never warmed, so the warm list and the cache bound have to agree."""
     warmed: list[str] = []
     monkeypatch.setattr(
         facts_mod, "_schedule",
         lambda: [
-            _game("a", "2026-03-18", "BOS", "MIA", completed=False),
-            _game("b", "2026-03-19", "BOS", "MIA", completed=False),
-            _game("c", "2026-03-19", "LAL", "BOS", completed=False),
-            _game("d", "2026-03-20", "BOS", "MIA", completed=False),
+            _game(f"g{i}", f"2026-03-{18 + i:02d}", "BOS", "MIA", completed=False)
+            for i in range(12)
         ],
     )
     monkeypatch.setattr(facts_mod, "warm_box_history", lambda as_of: warmed.append(as_of) or True)
 
     ticked = {"n": 0}
-
     facts_mod.start_box_history_warmer(
         __import__("pathlib").Path("/nonexistent/schedule.json"),
         sleep=lambda _: ticked.__setitem__("n", ticked["n"] + 1),
         should_stop=lambda: ticked["n"] >= 1,
     ).join(timeout=5)
 
-    assert sorted(warmed) == ["2026-03-18", "2026-03-19", "2026-03-20"], (
-        f"the warmer warmed {warmed}; every upcoming date needs a window"
+    assert warmed == sorted(warmed), f"the warmer warmed {warmed} out of order"
+    assert len(warmed) == facts_mod.BOX_HISTORY_KEEP, (
+        f"the warmer warmed {len(warmed)} dates into a {facts_mod.BOX_HISTORY_KEEP}-entry "
+        "cache: the earliest would be evicted before being served"
+    )
+    assert warmed[0] == "2026-03-18", f"the warmer skipped the earliest date: {warmed[0]}"
+
+
+def test_a_date_whose_warm_fails_is_retried(offline, monkeypatch):
+    """A transient read failure must not leave that date cold forever.
+
+    `last_state` only advances once the whole pass succeeded, so the next tick
+    redoes the pass. Before this, a failed date was skipped until the schedule
+    happened to change under it.
+    """
+    attempts: dict[str, int] = {}
+    monkeypatch.setattr(
+        facts_mod, "_schedule",
+        lambda: [
+            _game("a", "2026-03-18", "BOS", "MIA", completed=False),
+            _game("b", "2026-03-19", "BOS", "MIA", completed=False),
+        ],
+    )
+
+    def flaky(as_of):
+        attempts[as_of] = attempts.get(as_of, 0) + 1
+        # 2026-03-18 fails on the first attempt, then succeeds.
+        return not (as_of == "2026-03-18" and attempts[as_of] == 1)
+
+    monkeypatch.setattr(facts_mod, "warm_box_history", flaky)
+
+    ticked = {"n": 0}
+    facts_mod.start_box_history_warmer(
+        __import__("pathlib").Path("/nonexistent/schedule.json"),
+        sleep=lambda _: ticked.__setitem__("n", ticked["n"] + 1),
+        should_stop=lambda: ticked["n"] >= 2,
+    ).join(timeout=5)
+
+    assert attempts.get("2026-03-18", 0) >= 2, (
+        f"2026-03-18 was attempted {attempts.get('2026-03-18', 0)} times; a failed "
+        "build is not retried"
     )
 
 

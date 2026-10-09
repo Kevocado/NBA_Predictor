@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Literal
 
 import pytest
+import pandas as pd
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, ConfigDict, model_validator
 
@@ -264,6 +265,153 @@ def test_context_is_omitted_when_the_schedule_has_no_rest_fields(api):
 
     # Nothing is invented: no rest computation when the schedule lacks it.
     assert "rest" not in body["context"]
+
+
+# --- matchup duels in context.matchups ----------------------------------
+
+DUEL_ROWS = [
+    {"id": "efg_pct:home", "attacker": "BOS", "defender": "MIA", "stat": "shooting",
+     "foil": "shooting defence", "attacker_rank": 3, "defender_rank": 28,
+     "n_teams": 30, "toward_pick": True},
+    {"id": "orb_pct:away", "attacker": "MIA", "defender": "BOS", "stat": "offensive rebounding",
+     "foil": "defensive rebounding", "attacker_rank": 27, "defender_rank": 4,
+     "n_teams": 30, "toward_pick": False},
+]
+
+
+def test_facts_carry_matchups_for_an_upcoming_game(api, monkeypatch):
+    monkeypatch.setattr(facts_mod, "_matchup_rows", lambda *a, **k: DUEL_ROWS)
+
+    body = api.get(f"/facts/{GAME_ID}").json()
+
+    assert body["context"]["matchups"] == DUEL_ROWS
+
+
+def test_a_started_game_has_no_matchups(api, monkeypatch):
+    """A duel ranks form that has already been played out. Quoting one after
+    tip-off is hindsight wearing a prediction's clothes."""
+    monkeypatch.setattr(facts_mod, "_matchup_rows", lambda *a, **k: DUEL_ROWS)
+    monkeypatch.setattr(
+        facts_mod, "_schedule",
+        lambda: [_game(completed=True, home_pts=110, away_pts=100, tip_off="2026-01-15T12:00:00Z")],
+    )
+
+    body = api.get(f"/facts/{GAME_ID}").json()
+
+    assert "matchups" not in body["context"]
+
+
+def test_matchups_are_omitted_rather_than_an_empty_row(api, monkeypatch):
+    """"No data, no signal" applies to duels too: an empty list is not a row."""
+    monkeypatch.setattr(facts_mod, "_matchup_rows", lambda *a, **k: [])
+
+    body = api.get(f"/facts/{GAME_ID}").json()
+
+    assert "matchups" not in body["context"]
+
+
+def test_matchup_rows_carry_a_rank_out_of_thirty(api, monkeypatch):
+    """A rank is meaningless without the league it is out of."""
+    monkeypatch.setattr(facts_mod, "_matchup_rows", lambda *a, **k: DUEL_ROWS)
+
+    rows = api.get(f"/facts/{GAME_ID}").json()["context"]["matchups"]
+
+    for row in rows:
+        assert row["n_teams"] == 30, f"{row['id']} ranks out of {row['n_teams']}"
+        assert 1 <= row["attacker_rank"] <= 30
+        assert 1 <= row["defender_rank"] <= 30
+
+
+def test_an_unreadable_box_score_history_yields_no_matchups(api, monkeypatch):
+    """A duel adapter that raises must not take the game page down with it."""
+    def boom(*a, **k):
+        raise RuntimeError("box score history unavailable")
+
+    monkeypatch.setattr(facts_mod, "_matchup_rows", boom)
+
+    body = api.get(f"/facts/{GAME_ID}").json()
+
+    assert "matchups" not in body["context"]
+    # The rest of the bundle survived.
+    assert body["pick"]["label"] == "BOS"
+
+
+def test_the_real_matchup_rows_reach_the_bundle(monkeypatch):
+    """End to end through the REAL `_matchup_rows`, not a stub of it.
+
+    This is the test that catches the failure mode the stubs cannot see:
+    `_matchup_rows` used to call `_box_score_history()` with no argument, which
+    raised a TypeError that `_context`'s own `except` swallowed -- so the duels
+    were silently missing from every bundle and every stubbed test still passed.
+    A stub above this line can never notice that, so this one does not stub.
+    """
+    import pandas as pd
+    from fastapi.testclient import TestClient
+    from nba_predictor.api.app import create_app
+    from nba_predictor.api import deps
+
+    from tests.test_four_factors_duel import _schedule
+
+    game = _game(tip_off="2026-03-18T00:30:00Z")
+    monkeypatch.setattr(
+        facts_mod, "_now",
+        lambda: datetime(2026, 3, 17, 18, 0, tzinfo=timezone.utc),
+    )
+    monkeypatch.setattr(facts_mod, "_schedule", lambda: [game])
+    monkeypatch.setattr(facts_mod, "_predictions", lambda game_id: [_prediction_row()])
+    monkeypatch.setattr(facts_mod, "_market_rows", lambda game_id: [])
+    # The REAL _box_score_history, fed the real pipeline's own shaping.
+    monkeypatch.setattr(
+        facts_mod, "_box_score_history",
+        lambda as_of: pd.DataFrame([
+            {"game_id": f"g{i}", "game_date": d, "home_team": h, "away_team": a,
+             "home_pts": 110, "away_pts": 100, "home_win": 1,
+             **{f"home_{f}": v for f, v in
+                (("fgm", 30 + i), ("fga", 88), ("fg3m", 4), ("tov", 11), ("oreb", 9), ("dreb", 32), ("fta", 20))},
+             **{f"away_{f}": v for f, v in
+                (("fgm", 30 + j), ("fga", 88), ("fg3m", 4), ("tov", 11), ("oreb", 9), ("dreb", 32), ("fta", 20))}}
+            for i, (d, h, a, j) in enumerate([
+                ("2026-03-01", "BOS", "MIA", 1), ("2026-03-02", "MIA", "BOS", 0),
+                ("2026-03-03", "BOS", "MIA", 2), ("2026-03-04", "MIA", "BOS", 3),
+            ])
+        ]),
+    )
+
+    app = create_app()
+    app.dependency_overrides[deps.get_injury_report] = lambda: []
+    try:
+        with TestClient(app) as client:
+            body = client.get(f"/facts/{GAME_ID}").json()
+    finally:
+        app.dependency_overrides.clear()
+
+    # A two-team league cannot rank 30 teams, so the honest answer is no duels --
+    # but the pipeline must have RUN, not raised and been swallowed.
+    assert "matchups" not in body["context"] or body["context"]["matchups"] == []
+    # The tell-tale: the request succeeded and returned a full bundle.
+    assert body["sport"] == "nba"
+    assert body["pick"]["label"] == "BOS"
+
+
+def test_matchup_rows_really_call_box_score_history_with_as_of(monkeypatch):
+    """`_matchup_rows` must pass the game's date into the history lookup.
+
+    The bug this pins: `_box_score_history()` called with no argument, which
+    raised and was swallowed one frame up, leaving every bundle missing its duels.
+    """
+    seen = {}
+
+    def spy(as_of):
+        seen["as_of"] = as_of
+        return pd.DataFrame()          # too little data to rank: no duels
+
+    monkeypatch.setattr(facts_mod, "_box_score_history", spy)
+
+    facts_mod._matchup_rows("BOS", "MIA", "2026-03-18", "home")
+
+    assert seen.get("as_of") == "2026-03-18", (
+        f"_box_score_history was called with {seen.get('as_of')!r}, not the game's date"
+    )
 
 
 # --- pick_timing: the three cases ---------------------------------------

@@ -18,10 +18,14 @@ rules cheap to honour, and they are the same rules the other sports follow:
 from __future__ import annotations
 
 import logging
+import os
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
 from fastapi import APIRouter, HTTPException
 
 from .. import config
@@ -41,6 +45,197 @@ def _now() -> datetime:
 
 def _schedule() -> list[dict]:
     return deps.get_schedule(deps.get_schedule_path())
+
+
+#: How far back the duels' history reaches. A team plays ~3 games a week and a
+#: duel reads its last 15, so five weeks covers a full window with room for a
+#: team that has played less. Ranking further back than that reads a form the
+#: team has since moved on from.
+BOX_LOOKBACK_DAYS = 120
+
+_BOX_HISTORY: dict = {}
+
+#: How many `as_of` windows to keep. A game page asks for one and the explainer's
+#: pre-generation walks the week's games, so a handful covers a full pass; more
+#: than that and the oldest entries have gone cold anyway.
+BOX_HISTORY_KEEP = 8
+
+#: How often the warmer checks the schedule cache. Same reasoning as the odds
+#: refresher's tick: a faster one spends no requests when nothing has changed,
+#: because both readers are cached files.
+BOX_WARM_POLL_SECONDS = float(os.getenv("BOX_WARM_POLL_SECONDS", "30"))
+
+
+def _build_box_history(as_of: str) -> pd.DataFrame:
+    """Build the lookback window of completed games with their box scores.
+
+    `enrich_with_boxscores` is the pipeline's own step that adds the flat
+    ``home_*/away_*`` box-score fields, and `to_training_frame` is its own
+    shaping step -- so the duels rank exactly the figures the features are built
+    from, rather than a second, separately-fetched copy that could disagree.
+
+    **Bounded.** The ranker needs each team's last `window` games, so only
+    completed games in a lookback window ending at `as_of` are enriched. Reading
+    every completed game in the schedule would put a season of ESPN calls on a
+    single request.
+
+    Only ever called from `warm_box_history`, which runs on a daemon thread.
+    """
+    from ..pipeline.ingest import enrich_with_boxscores, to_training_frame
+
+    start = (pd.Timestamp(as_of) - pd.Timedelta(days=BOX_LOOKBACK_DAYS)).date().isoformat()
+    window = [
+        g for g in _schedule()
+        if start <= str(g.get("game_date", "")) < str(as_of) and g.get("completed")
+    ]
+    return to_training_frame(enrich_with_boxscores(window))
+
+
+def _box_score_history(as_of: str) -> pd.DataFrame:
+    """The warmed history for `as_of`, or an empty frame when it is not warm.
+
+    **Never builds.** Building reads box scores, which means I/O, and I/O on a
+    request thread is what puts a season of ESPN calls on the first visitor.
+    `warm_box_history` is what builds, from a daemon thread started at the app's
+    lifespan, for every upcoming date -- so a request that arrives before the
+    warm finishes shows no matchup duels rather than making its visitor wait.
+
+    An empty frame is read as "no data, no signal", the same rule the signals
+    endpoint follows. It is logged, because a warmer that silently never
+    succeeds is a cold path nobody would otherwise be told about.
+
+    Cached on ``(schedule state, as_of)``. The schedule cache is what gains rows
+    as games complete, so its (mtime, size) is the honest invalidation signal --
+    the same shape `routes._db_state` uses for the MAE cache, and an unchanged
+    file costs one stat().
+    """
+    state = _schedule_state(deps.get_schedule_path())
+    key = (state, str(as_of))
+    frame = _BOX_HISTORY.get(key)
+    if frame is None:
+        logger.info(
+            "box-score history for %s is not warm; no matchup duels on this request", as_of
+        )
+        return pd.DataFrame()
+    return frame
+
+
+def _schedule_state(path: Path) -> tuple[int, int]:
+    """(mtime_ns, size) of the schedule cache, or (-1, -1) when unreadable."""
+    try:
+        st = Path(path).stat()
+        return (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return (-1, -1)
+
+
+def warm_box_history(as_of: str) -> bool:
+    """Build `as_of`'s window and store it, off the request path. Never raises.
+
+    Same contract as `routes.warm_mae_cache`: a warm that fails must not take the
+    API down, and must not overwrite a previous window with a broken one. It logs
+    instead, because a warm that silently never succeeds is a cold path nobody is
+    told about.
+    """
+    try:
+        frame = _build_box_history(as_of)
+    except Exception as exc:  # noqa: BLE001 - reported, not raised: see docstring
+        logger.error("box-score history warm failed for %s: %s: %s", as_of, type(exc).__name__, exc)
+        return False
+    _store_box_history(as_of, frame)
+    return True
+
+
+def _store_box_history(as_of: str, frame: pd.DataFrame) -> None:
+    """Put `frame` in the cache for `as_of`, evicting the coldest entry."""
+    state = _schedule_state(deps.get_schedule_path())
+    _BOX_HISTORY[(state, str(as_of))] = frame
+    # dicts keep insertion order, so the first key is the coldest one.
+    while len(_BOX_HISTORY) > BOX_HISTORY_KEEP:
+        del _BOX_HISTORY[next(iter(_BOX_HISTORY))]
+
+
+def start_box_history_warmer(
+    schedule_path: Path,
+    *,
+    clock=time.monotonic,
+    sleep=time.sleep,
+    should_stop=None,
+) -> threading.Thread:
+    """Warm the next `BOX_HISTORY_KEEP` upcoming dates -- as many as the cache
+    holds -- then re-warm when the schedule cache changes or a build failed.
+
+    Only as many as the cache holds: a date warmed and then evicted before it is
+    served is no better than one never warmed, so the bound and the warm list have
+    to agree.
+
+    A date whose build failed is retried on the next tick rather than left cold
+    until the schedule happens to change under it.
+
+    A daemon thread started from the app's lifespan: serving begins whether or
+    not the warm finishes, and a warm that hangs cannot hold shutdown either.
+    ``clock``, ``sleep`` and ``should_stop`` are injected so the loop is testable
+    without waiting on a real tick.
+
+    The invalidation signal is the schedule cache's (mtime, size) -- the file that
+    gains a row each time a game completes, which is the moment the duels' answer
+    changes. An unchanged file costs one stat() per tick and nothing else.
+    """
+    schedule_path = Path(schedule_path)
+
+    def _run() -> None:
+        seen_state: tuple[int, int] | None = None
+        pending: set[str] = set()
+        while should_stop is None or not should_stop():
+            state = _schedule_state(schedule_path)
+            if state != seen_state:
+                # A schedule state this pass has not covered yet: warm the next
+                # `BOX_HISTORY_KEEP` dates. Only as many as the cache holds -- a
+                # date warmed and then evicted before it is served is no better
+                # than one never warmed, so the bound and the warm list have to
+                # agree -- plus anything still pending from before.
+                schedule = _schedule()
+                upcoming = sorted({
+                    str(g["game_date"]) for g in schedule
+                    if not g.get("completed") and g.get("game_date")
+                })
+                if not upcoming:
+                    logger.info("no upcoming games to warm duel history for")
+                dates = set(upcoming[:BOX_HISTORY_KEEP]) | pending
+                seen_state = state
+            elif pending:
+                # Same schedule, but a date failed last time: retry only that.
+                # Re-warming the dates that already succeeded would rebuild them
+                # for nothing.
+                dates = set(pending)
+            else:
+                dates = set()
+            pending = set()
+            for date in sorted(dates):
+                if not warm_box_history(date):
+                    pending.add(date)
+            sleep(BOX_WARM_POLL_SECONDS)
+
+    thread = threading.Thread(target=_run, name="box-history-warmer", daemon=True)
+    thread.start()
+    return thread
+
+
+def _matchup_rows(home: str, away: str, as_of, pick_side: str | None) -> list[dict]:
+    """Four-factors rank duels for this game, in the facts bundle's shape.
+
+    Delegates to `signals.four_factors_duel`, which owns the window, the
+    `min_gap` and the ranking. Empty when either team has not played enough
+    games to be ranked -- a duel off last month's roster is a number, not a
+    measurement.
+    """
+    from ..signals.four_factors_duel import four_factors_duel, to_context
+
+    history = _box_score_history(as_of)
+    if not len(history):
+        return []
+    duels = four_factors_duel(home, away, history, as_of)
+    return to_context(duels, pick_side)
 
 
 def _db_path() -> Path:
@@ -263,9 +458,14 @@ def _players(game_id: str, teams: set[str]) -> list[dict]:
 
 
 
-def _context(game: dict, schedule: list[dict]) -> dict:
-    """Rest and back-to-back, but only when the schedule already carries
-    them. No new features are computed here."""
+def _context(game: dict, schedule: list[dict], started: bool = False, pick: dict | None = None) -> dict:
+    """Rest, back-to-back and the four-factors rank duels.
+
+    Rest and back-to-back come from the schedule and only when it already
+    carries them. The duels are computed here from box scores, because there is
+    nowhere else for them to come from: the schedule repository keeps only
+    scores, so `_box_score_history` re-reads the box fields.
+    """
     context: dict[str, Any] = {}
     home_rest = game.get("home_rest_days")
     away_rest = game.get("away_rest_days")
@@ -273,6 +473,23 @@ def _context(game: dict, schedule: list[dict]) -> dict:
         context["rest"] = f"Rest {home_rest} v {away_rest} days"
     if game.get("home_back_to_back") is not None:
         context["back_to_back"] = bool(game.get("home_back_to_back") or game.get("away_back_to_back"))
+
+    if not started:
+        home, away = game["home_team"], game["away_team"]
+        pick_side = None
+        if pick:
+            # The duel's `toward` is "home"/"away", so the pick has to be read as
+            # a side rather than as the team name `_favourite` returns.
+            pick_side = "home" if pick.get("label") == home else "away" if pick.get("label") == away else None
+        try:
+            matchups = _matchup_rows(home, away, game["game_date"], pick_side)
+        except Exception:
+            # A duel is an enhancement on a game page, and the page has to
+            # survive its absence -- the same rule the signals endpoint follows.
+            logger.exception("matchup duels unavailable for %s", game.get("game_id"))
+            matchups = []
+        if matchups:
+            context["matchups"] = matchups
     return context
 
 
@@ -384,7 +601,7 @@ def get_facts(game_id: str) -> dict:
         "pick": pick,
         "markets": [] if (started and chosen is None) else _markets(game, prediction),
         "drivers": [],
-        "context": _context(game, schedule),
+        "context": _context(game, schedule, started=started, pick=pick),
         "players": _players(str(game_id), {home_team, away_team}),
         "record": _record(),
         "result": _result(game, status, pick_timing, home_prob),

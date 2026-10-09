@@ -268,7 +268,8 @@ def test_the_warmer_warms_only_as_many_dates_as_the_cache_holds(offline, monkeyp
 
 
 def test_a_date_whose_warm_fails_is_retried(offline, monkeypatch):
-    """A transient read failure must not leave that date cold forever.
+    """A transient read failure must not leave that date cold forever, and must not
+    cost a rebuild of the dates that already succeeded.
 
     `last_state` only advances once the whole pass succeeded, so the next tick
     redoes the pass. Before this, a failed date was skipped until the schedule
@@ -300,6 +301,10 @@ def test_a_date_whose_warm_fails_is_retried(offline, monkeypatch):
     assert attempts.get("2026-03-18", 0) >= 2, (
         f"2026-03-18 was attempted {attempts.get('2026-03-18', 0)} times; a failed "
         "build is not retried"
+    )
+    assert attempts.get("2026-03-19", 0) == 1, (
+        f"2026-03-19 was rebuilt {attempts.get('2026-03-19', 0)} times; the retry "
+        "re-warms dates that already succeeded"
     )
 
 

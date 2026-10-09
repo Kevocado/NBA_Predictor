@@ -184,11 +184,16 @@ def start_box_history_warmer(
     schedule_path = Path(schedule_path)
 
     def _run() -> None:
-        last_state: tuple[int, int] | None = None
+        seen_state: tuple[int, int] | None = None
         pending: set[str] = set()
         while should_stop is None or not should_stop():
             state = _schedule_state(schedule_path)
-            if state != last_state or pending:
+            if state != seen_state:
+                # A schedule state this pass has not covered yet: warm the next
+                # `BOX_HISTORY_KEEP` dates. Only as many as the cache holds -- a
+                # date warmed and then evicted before it is served is no better
+                # than one never warmed, so the bound and the warm list have to
+                # agree -- plus anything still pending from before.
                 schedule = _schedule()
                 upcoming = sorted({
                     str(g["game_date"]) for g in schedule
@@ -196,22 +201,19 @@ def start_box_history_warmer(
                 })
                 if not upcoming:
                     logger.info("no upcoming games to warm duel history for")
-                # Warm only as many dates as the cache holds. A date warmed and
-                # then evicted before it is served is no better than one never
-                # warmed, so the bound and the warm list have to agree -- warming
-                # the whole week into an eight-entry cache would leave the
-                # earliest dates permanently cold.
                 dates = set(upcoming[:BOX_HISTORY_KEEP]) | pending
-                pending = set()
-                for date in sorted(dates):
-                    if not warm_box_history(date):
-                        pending.add(date)
-                # `last_state` advances only once every date in the pass
-                # succeeded, so a date whose box scores could not be read is
-                # retried on the next tick instead of being left cold until the
-                # schedule happens to change under it.
-                if not pending:
-                    last_state = state
+                seen_state = state
+            elif pending:
+                # Same schedule, but a date failed last time: retry only that.
+                # Re-warming the dates that already succeeded would rebuild them
+                # for nothing.
+                dates = set(pending)
+            else:
+                dates = set()
+            pending = set()
+            for date in sorted(dates):
+                if not warm_box_history(date):
+                    pending.add(date)
             sleep(BOX_WARM_POLL_SECONDS)
 
     thread = threading.Thread(target=_run, name="box-history-warmer", daemon=True)

@@ -81,7 +81,7 @@ def test_fatigue_index_is_computed_rather_than_zero_filled():
     )
     games = _sample_games()
     assert "home_fatigue_index" not in games.columns, "fixture must not pre-supply it"
-    result_df, feature_cols = build_training_frame(games)
+    result_df, feature_cols = build_training_frame(games, include_travel_fatigue=True)
     assert "home_fatigue_index" in feature_cols
     assert len(set(result_df["home_fatigue_index"])) > 1, (
         "the computed fatigue index has only one value; it is not reading anything"

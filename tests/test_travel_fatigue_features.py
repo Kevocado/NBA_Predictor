@@ -99,17 +99,42 @@ def test_the_same_holds_for_the_away_side():
     assert not (away == 0.0).all(), "every away_fatigue_index is 0.0"
 
 
-def test_a_first_game_has_no_travel_history():
-    """A team's first game in the frame has not flown anywhere, so its travel
-    contribution is zero even though fatigue is not."""
+def test_the_trip_into_the_game_being_scored_counts():
+    """CodeRabbit Major: the path used to end at the team's PREVIOUS venue, so DEN at home on the 3rd and at LAL
+    on the 4th recorded no DEN->LAL leg. The path ends at THIS game's venue (the home team's arena, known
+    before tip-off)."""
+    from nba_predictor.features.rest_travel import rolling_travel_miles
+
     frame, _ = build_feature_frame(_trip_frame())
-    first = frame.iloc[0]
-    # DEN's first game: no prior games, so no travel miles.
-    assert first["home_travel_miles"] == 0.0, (
-        f"a first game reports {first['home_travel_miles']} travel miles from nowhere"
-    )
-    # But fatigue is not necessarily zero -- short rest still counts.
-    assert "home_fatigue_index" in frame.columns
+    m2 = frame[frame["game_id"] == "m2"].iloc[0]          # LAL hosts DEN the day after DEN hosted LAL
+    assert m2["away_travel_miles"] >= rolling_travel_miles(["DEN", "LAL"]) > 0
+
+
+def test_fatigue_rest_is_measured_from_the_teams_last_game_home_or_away():
+    """CodeRabbit Major: home and away last-game dates were tracked separately, so DEN at home on the 3rd and away
+    on the 4th looked rested on the 4th. The fatigue candidate must see the back-to-back."""
+    from nba_predictor.features.rest_travel import (
+        compute_rest_days, fatigue_index, rolling_travel_miles, timezone_change_count)
+
+    frame, _ = build_feature_frame(_trip_frame())
+    m2 = frame[frame["game_id"] == "m2"].iloc[0]
+    # DEN's path in the 7 days to m2 ends DEN (m1 venue) -> LAL (m2 venue), after earlier venues; recompute it
+    # from the frame's own columns instead of re-deriving the whole window.
+    rest = compute_rest_days("2026-01-04", "2026-01-03")
+    expected = fatigue_index(m2["away_travel_miles"], m2["away_timezone_changes"], rest)
+    assert m2["away_fatigue_index"] == pytest.approx(expected)
+    assert rest <= 1
+
+
+def test_the_candidate_columns_are_not_in_the_default_model_contract():
+    """CodeRabbit Major: the candidate loses its evaluation, so a default retrain must not pick it up."""
+    from nba_predictor.features.build import FEATURE_COLUMNS, TRAVEL_FATIGUE_COLUMNS, build_training_frame
+
+    assert not set(TRAVEL_FATIGUE_COLUMNS) & set(FEATURE_COLUMNS)
+    _, default_cols = build_training_frame(_trip_frame())
+    assert not set(TRAVEL_FATIGUE_COLUMNS) & set(default_cols)
+    _, opted_in = build_training_frame(_trip_frame(), include_travel_fatigue=True)
+    assert set(TRAVEL_FATIGUE_COLUMNS) <= set(opted_in)
 
 
 def test_travel_uses_only_the_teams_own_prior_games():

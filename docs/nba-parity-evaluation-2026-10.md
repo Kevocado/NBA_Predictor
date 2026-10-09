@@ -335,3 +335,19 @@ helps, and `tests/test_travel_fatigue_features.py` now pins that it moves at all
   the holdout says yes, which is the failure mode the ship rule exists to stop.
 - **I did not delete the work.** The tool and the doc record why it lost, which is
   what Task 4 asks for.
+
+
+## Correction (review of NBA#57): the Task 4(b) numbers above must be re-run
+
+The numbers in the travel / congestion / fatigue section were measured BEFORE two defects in the candidate's own
+features were fixed in review: (1) the travel path ended at the team's previous venue instead of the game's venue, and
+`len(dates) >= 2` forced every second game to zero travel; (2) the fatigue rest came from home/away-split last-game
+dates, so a home game followed by an away game the next day looked rested. Both are fixed and regression-tested, so the
+measured loss is not yet a measurement of the corrected feature. The candidate is also no longer in the default
+`FEATURE_COLUMNS` (`TRAVEL_FATIGUE_COLUMNS`, opt-in), so nothing ships by default either way. Re-run
+`tools/compare_travel_fatigue.py` (it needs `data/cache/training/games.json`, which is gitignored) before drawing a
+conclusion in either direction.
+
+**Separate finding, not changed here:** the default `home_rest_days` / `away_rest_days` / back-to-back features use the
+same role-split last-game dates, so a team's rest is measured from its last game in the SAME role. That is in the
+production feature contract and needs its own evaluated change.

@@ -97,7 +97,9 @@ def main() -> int:
     base_cols = None
     arms = {}
     for label, drop_new in (("baseline", True), ("+ travel/fatigue", False)):
-        frame, cols = build_training_frame(current)
+        # The candidate columns are opt-in now (they are not in the default contract): the baseline arm is the
+        # default, the candidate arm opts in.
+        frame, cols = build_training_frame(current, include_travel_fatigue=not drop_new)
         if drop_new:
             frame = frame.drop(columns=[c for c in NEW_COLUMNS if c in frame.columns])
             cols = [c for c in cols if c not in NEW_COLUMNS]

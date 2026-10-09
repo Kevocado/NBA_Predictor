@@ -17,16 +17,23 @@ from nba_predictor.features.rest_travel import (
 #: home stand. A longer window makes this a season total with a week's name.
 TRAVEL_WINDOW_DAYS = 7
 
-FEATURE_COLUMNS = [
-    "home_efg_pct_roll", "home_tov_rate_roll", "home_orb_pct_roll", "home_ft_rate_roll",
-    "away_efg_pct_roll", "away_tov_rate_roll", "away_orb_pct_roll", "away_ft_rate_roll",
-    "home_power_rating", "away_power_rating", "power_rating_diff",
-    "home_rest_days", "away_rest_days", "home_back_to_back", "away_back_to_back",
+#: The travel / congestion / fatigue CANDIDATE (audit follow-up Task 4(b)). They are computed for every frame so
+#: the comparison tool can use them, but they are NOT in the default model contract: the candidate loses its
+#: evaluation (docs/nba-parity-evaluation-2026-10.md), so a retrain must not pick them up by default.
+#: `build_feature_frame(..., include_travel_fatigue=True)` opts in.
+TRAVEL_FATIGUE_COLUMNS = [
     "home_travel_miles", "away_travel_miles",
     "home_timezone_changes", "away_timezone_changes",
     "home_three_in_four", "away_three_in_four",
     "home_four_in_six", "away_four_in_six",
     "home_fatigue_index", "away_fatigue_index",
+]
+
+FEATURE_COLUMNS = [
+    "home_efg_pct_roll", "home_tov_rate_roll", "home_orb_pct_roll", "home_ft_rate_roll",
+    "away_efg_pct_roll", "away_tov_rate_roll", "away_orb_pct_roll", "away_ft_rate_roll",
+    "home_power_rating", "away_power_rating", "power_rating_diff",
+    "home_rest_days", "away_rest_days", "home_back_to_back", "away_back_to_back",
     "home_missing_value", "away_missing_value",
     "home_streak", "away_streak",
     "is_high_altitude", "conference_game", "division_game",
@@ -63,7 +70,7 @@ def _long_format_box_scores(games: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_feature_frame(
-    games: pd.DataFrame, carry_over_weight: float | None = None
+    games: pd.DataFrame, carry_over_weight: float | None = None, include_travel_fatigue: bool = False
 ) -> tuple[pd.DataFrame, list[str]]:
     """Features for `games`.
 
@@ -105,6 +112,9 @@ def build_feature_frame(
 
     home_last_game: dict[str, str] = {}
     away_last_game: dict[str, str] = {}
+    #: ONE last-game date per team, home or away. The fatigue candidate needs the team's real rest: DEN at home
+    #: on the 3rd and away on the 4th is on zero days' rest, which the role-split dicts above cannot see.
+    team_last_game: dict[str, str] = {}
     home_results: dict[str, list[str]] = {}
     away_results: dict[str, list[str]] = {}
     rest_days_home, rest_days_away = [], []
@@ -125,21 +135,22 @@ def build_feature_frame(
         # Travel and congestion are built from each team's OWN games strictly
         # before this one -- the venue list is read before either side is
         # appended, so no game is ever its own history.
-        for side, team, rest, miles, tz, congested, fatigue in (
-            ("home", home, rest_days_home[-1], travel_home, tz_home, congestion_home, fatigue_home),
-            ("away", away, rest_days_away[-1], travel_away, tz_away, congestion_away, fatigue_away),
+        for side, team, miles, tz, congested, fatigue in (
+            ("home", home, travel_home, tz_home, congestion_home, fatigue_home),
+            ("away", away, travel_away, tz_away, congestion_away, fatigue_away),
         ):
+            rest = compute_rest_days(game_date, team_last_game.get(team))
             dates = team_game_dates.get(team, [])
             venues = team_game_venues.get(team, [])
-            if len(dates) >= 2:
+            if len(dates) >= 1:
                 window = [
-                    venues[i] for i in range(len(dates) - 1)
+                    venues[i] for i in range(len(dates))
                     if date.fromisoformat(dates[i]).toordinal()
                     >= date.fromisoformat(game_date).toordinal() - (TRAVEL_WINDOW_DAYS - 1)
                 ]
-                # The last game before this one is where the team currently is,
-                # so the trip to its current venue is the one that counts.
-                window.append(venues[-1])
+                # The path ends at THIS game's venue (the home team's arena, known before tip-off, never
+                # the result): the trip into the game being scored is part of the load it carries.
+                window.append(home)
                 miles.append(rolling_travel_miles(window))
                 tz.append(timezone_change_count(window))
                 flags = congestion_flags(dates, game_date)
@@ -155,6 +166,8 @@ def build_feature_frame(
 
         home_last_game[home] = game_date
         away_last_game[away] = game_date
+        team_last_game[home] = game_date
+        team_last_game[away] = game_date
         if pd.notna(row["home_win"]):
             home_results.setdefault(home, []).append("W" if row["home_win"] == 1 else "L")
             away_results.setdefault(away, []).append("L" if row["home_win"] == 1 else "W")
@@ -190,11 +203,12 @@ def build_feature_frame(
     games["conference_game"] = flags["conference_game"]
     games["division_game"] = flags["division_game"]
 
-    games = games.dropna(subset=FEATURE_COLUMNS).reset_index(drop=True)
-    return games, FEATURE_COLUMNS
+    columns = FEATURE_COLUMNS + (TRAVEL_FATIGUE_COLUMNS if include_travel_fatigue else [])
+    games = games.dropna(subset=columns).reset_index(drop=True)
+    return games, columns
 
 
 def build_training_frame(
-    games: pd.DataFrame, carry_over_weight: float | None = None
+    games: pd.DataFrame, carry_over_weight: float | None = None, include_travel_fatigue: bool = False
 ) -> tuple[pd.DataFrame, list[str]]:
-    return build_feature_frame(games, carry_over_weight=carry_over_weight)
+    return build_feature_frame(games, carry_over_weight=carry_over_weight, include_travel_fatigue=include_travel_fatigue)

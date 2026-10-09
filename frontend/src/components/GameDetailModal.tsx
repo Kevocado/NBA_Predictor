@@ -50,31 +50,6 @@ export function computePostMatchVerdict(detail: GameDetail): PostMatchVerdict | 
   };
 }
 
-export function marketVerdict(market: MarketPrediction, detail: GameDetail): boolean | null {
-  if (!detail.completed || detail.home_pts === null || detail.away_pts === null) return null;
-
-  // Priced after tip-off: shown for reference, never judged.
-  if (market.rebuilt) return null;
-  if (market.market === "h2h") {
-    const actualWinner = detail.home_pts > detail.away_pts ? detail.home_team : detail.away_team;
-    return market.selection === actualWinner;
-  }
-  if (market.market === "spread") {
-    if (market.point === null) return null;
-    const teamMargin =
-      market.selection === detail.home_team
-        ? detail.home_pts - detail.away_pts
-        : detail.away_pts - detail.home_pts;
-    return teamMargin > -market.point;
-  }
-  if (market.market === "total") {
-    if (market.point === null) return null;
-    const actualTotal = detail.home_pts + detail.away_pts;
-    return market.selection === "over" ? actualTotal > market.point : actualTotal < market.point;
-  }
-  return null;
-}
-
 function FormBadge({ result }: { result: string }) {
   return (
     <span
@@ -233,7 +208,6 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [onClose]);
 
-  const sortedMarkets = detail ? [...detail.markets].sort((a, b) => (b.edge ?? 0) - (a.edge ?? 0)) : [];
   const verdict = detail ? computePostMatchVerdict(detail) : null;
   // The flow's facts: what this modal already holds, no request. The away
   // probability is the site's own convention (`favourite` derives the pair the
@@ -647,64 +621,6 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
         {detail && detail.injury_summary && (
           <div className="mb-5 border-b border-[var(--color-line)] pb-5 text-sm">
             <div className="text-xs text-[var(--color-net-faint)]">{detail.injury_summary}</div>
-          </div>
-        )}
-
-        {sortedMarkets.length > 0 && (
-          <div className="overflow-x-auto">
-            <table className="mb-4 w-full text-sm">
-              <thead>
-                <tr className="text-left text-[var(--color-net-faint)]">
-                  <th>Market</th>
-                  <th>Selection</th>
-                  <th>Line</th>
-                  <th>Bookmaker</th>
-                  <th>Odds</th>
-                  <th>Model %</th>
-                  <th>Market %</th>
-                  <th>Edge</th>
-                  <th>Result</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sortedMarkets.map((market, i) => {
-                  const verdict = detail ? marketVerdict(market, detail) : null;
-                  return (
-                    <tr key={i} data-testid="market-row">
-                    <td>{market.market}</td>
-                    <td>{market.selection}</td>
-                    <td>{market.point !== null ? market.point : "—"}</td>
-                    <td>{market.bookmaker ?? "—"}</td>
-                    <td>{market.american_odds !== null ? market.american_odds : "—"}</td>
-                    <td>{pct(market.model_probability)}</td>
-                    <td>{market.market_probability !== null ? pct(market.market_probability) : "—"}</td>
-                    <td
-                      className={
-                        market.edge === null
-                          ? undefined
-                          : market.edge > 0
-                            ? "text-[var(--color-win)]"
-                            : "text-[var(--color-shotclock)]"
-                      }
-                    >
-                      {market.edge !== null ? `${(market.edge * 100).toFixed(1)}pp` : "—"}
-                    </td>
-                    <td>
-                      {market.rebuilt ? (
-                        <span className="text-pr-text-dim">Rebuilt</span>
-                      ) : verdict === null ? (
-                        "—"
-                      ) : verdict ? (
-                        <span className="text-[var(--color-win)]">✓</span>
-                      ) : (
-                        <span className="text-[var(--color-shotclock)]">✗</span>
-                      )}
-                    </td>
-                  </tr>
-                );
-                })}
-              </tbody>
-            </table>
           </div>
         )}
 

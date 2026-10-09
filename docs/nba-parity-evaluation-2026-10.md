@@ -224,7 +224,11 @@ alone, on the identical held-out games.
 Reproduced by `tools/compare_margin_average.py` (deterministic — verified
 identical across consecutive runs). The average is built the way a real candidate
 would be: both regressors fitted inside the walk-forward on the training slice
-only, then averaged. 4 windows, pooled n=758.
+only, then averaged. 4 expanding windows over the **multi-season frame (4,149
+games, pooled out-of-fold n=2,432)** — which is the frame the race itself runs on,
+so this is the comparison the race would actually make, not the 758-game Phase A
+window. An earlier draft of this section said n=758; that was wrong and has been
+corrected.
 
 | arm | margin MAE |
 |---|---|
@@ -239,8 +243,13 @@ rule. Paired bootstrap, 2,000 resamples, seed 20261009, one draw applied to both
 |---|---|---|---|
 | average vs the best single model | −0.0233 | **[−0.0994, +0.0483]** | **NOT distinguishable** |
 
-The interval crosses zero by a wide margin — its half-width is roughly five times
-the effect. **4(d) does not ship.**
+The interval crosses zero by a wide margin — its half-width is 0.0738 against a
+0.0233 effect, about 3.2× it. **4(d) does not ship.**
+
+Worth noting *how* it fails: this is the multi-season frame, so n=2,432 — more
+than three times the Phase A holdout, and the interval still crosses zero. A
+0.023 MAE move is not a small-data problem; it is a move this race cannot resolve
+at any holdout it is likely to get soon.
 
 The direction is worth noting because it is the *expected* one: averaging two
 regressors with decorrelated errors usually helps a little, and it did here on the

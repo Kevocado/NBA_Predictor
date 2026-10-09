@@ -85,25 +85,38 @@ def test_per_window_maps_reorder_games_across_windows():
 
     pooled_auc = roc_auc_score(y, calibrated)
 
-    # Not "it must move" -- it might not. The property is that the raw ranking is
-    # preserved WITHIN each window, so any pooled movement is re-ordering across
-    # them rather than a better ranking. Assert that directly: hand back each
-    # window's own raw predictions and the within-window order is identical.
-    within_window_order_preserved = True
+    # Within each window the calibrated values must be in the SAME order as the
+    # raw ones -- strictly, on every pair, not just neighbouring ones, because a
+    # monotone map cannot reverse any pair. This is the premise the whole decision
+    # rests on, so it is checked exactly rather than approximately.
     start = 0
-    for k, size in enumerate(sizes):
+    for size in sizes:
         end = start + size
-        if np.any(np.sign(np.diff(calibrated[start:end])) != np.sign(np.diff(p[start:end]))):
-            within_window_order_preserved = False
+        order = np.argsort(calibrated[start:end], kind="stable")
+        inverse = np.empty_like(order)
+        inverse[order] = np.arange(end - start)
+        assert np.array_equal(inverse, np.argsort(p[start:end], kind="stable").argsort()), (
+            "the calibrated order differs from the raw order inside a window: Platt is "
+            "not monotone here, which contradicts the premise"
+        )
         start = end
-    assert within_window_order_preserved, (
-        "the calibrated order differs from the raw order inside a window: Platt is "
-        "not monotone here, which contradicts the premise"
-    )
 
     print(f"\nraw AUC {raw_auc:.6f} | one Platt map {single_map_auc:.6f} | "
           f"per-window {pooled_auc:.6f} (delta {pooled_auc - raw_auc:+.6f})")
-    assert pooled_auc == pytest.approx(raw_auc, abs=1e-12) or True
+
+    # The cross-window movement is real and DIRECTIONAL, which is what makes
+    # "AUC must improve" a coin flip rather than a test. On this pinned fixture it
+    # goes down; the pinned value is asserted so the claim cannot silently become
+    # true by a data change.
+    assert pooled_auc < raw_auc, (
+        f"per-window calibration did not move pooled AUC down on this fixture "
+        f"({raw_auc:.6f} -> {pooled_auc:.6f}); the direction-independence argument "
+        "needs the fixture to be re-pinned"
+    )
+    assert abs(pooled_auc - raw_auc) > 0.001, (
+        f"the pooled movement is {pooled_auc - raw_auc:+.6f}, too small to be the "
+        "effect being described"
+    )
 
 
 def test_isotonic_is_not_strictly_monotone_so_it_can_move_auc():

@@ -111,10 +111,17 @@ def main() -> int:
     print(f"  verdict: {'IMPROVED' if out['improved'] else 'NOT distinguishable'}")
 
     ships = out["improved"]
+    worse = out["difference"] > 0
     print(f"\n=== ship rule: the candidate must BEAT the current winner")
+    print(f"  held-out games: {avg['pooled']['n']}")
     print(f"  Task 4(d)    {'SHIPS' if ships else 'does NOT ship'}")
-    if not ships:
-        print(f"      - the interval crosses zero; a 758-game holdout cannot resolve "
+    if worse:
+        print(f"      - the average is WORSE than {best} by {out['difference']:+.4f}; the "
+              "interval excludes zero in the wrong direction")
+    elif not ships:
+        print(f"      - inconclusive, not worse: the interval "
+              f"[{out['ci_low']:+.4f}, {out['ci_high']:+.4f}] crosses zero, so a "
+              f"{avg['pooled']['n']}-game holdout cannot resolve "
               f"{abs(out['difference']):.4f} of margin MAE")
     return 0
 

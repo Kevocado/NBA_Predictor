@@ -23,7 +23,7 @@ The doc claimed both "Platt is a strictly monotone map, so it is AUC-preserving 
 
 Two things follow, and both are the reason for the decision:
 
-1. **A strictly monotone map cannot move AUC within a window.** Verified to 1e-12. A bar that requires a calibrator to improve AUC is a bar no calibrator can pass, so it is not a test of anything.
+1. **A strictly monotone map cannot move the AUC of a within-window ranking.** Verified to 1e-12. What it *can* move is a pooled figure, because pooling re-orders games across windows — so the claim here is specifically about one window's ranking, and a bar that requires a calibrator to improve AUC is asking for something no calibrator can deliver inside a window.
 2. **The pooled movement is a cross-window artefact and goes both ways.** Each window is calibrated with its own Platt fit, so the same raw prediction maps to different calibrated values in different windows, and pooling re-orders games *across* windows. On this fixture it moved AUC **down** 0.0105. In the real 758-game run it moved **up** 0.0159. Same mechanism, opposite sign.
 
 A gate that can be passed or failed by a coin flip is not a gate.
@@ -63,7 +63,7 @@ Isotonic still does not ship either: 2/5 intervals, and log-loss *worse* than ba
 
 ## What would change this decision
 
-- **More holdout games.** At n=758 the AUC interval's half-width is about twice the effect. Everything above is a statement about what can be *detected*, and none of it is a statement that the effect is absent.
+- **More holdout games.** Platt's AUC interval is [−0.0021, +0.0339], a half-width of 0.018 against a +0.0159 effect — the effect is 0.9× the half-width, so it is *just* inside the noise rather than hopelessly underpowered. Arithmetic: resolving it needs about 1.3× the holdout, not the 4× this doc claimed before it was checked. Everything above is a statement about what can be *detected*, and none of it is a statement that the effect is absent.
 - **A calibrator that is not per-window.** If calibration were fitted on a fixed historical set and applied unchanged to every window, the cross-window artefact disappears and the pooled AUC move would be exactly zero — at which point the gate is measuring nothing at all and should be removed outright.
 - **A ranking-changing candidate.** For anything that is not a monotone re-expression, the old bar ("must improve") remains the right one, and nothing here relaxes it.
 

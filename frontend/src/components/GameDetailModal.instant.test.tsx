@@ -179,20 +179,6 @@ describe("GameDetailModal instant block", () => {
     vi.unstubAllGlobals();
   });
 
-  it("keeps the markets table", async () => {
-    // Decision 3: NBA's table is priced against the bookmaker, per market, and
-    // is not a second copy of the block. Asserted so a later de-duplication
-    // cannot quietly delete it.
-    await renderOffline(preTip);
-
-    const rows = screen.getAllByTestId("market-row");
-    expect(rows).toHaveLength(2);
-    expect(rows[0]).toHaveTextContent("h2h");
-    expect(rows[1]).toHaveTextContent("spread");
-    expect(screen.getByRole("columnheader", { name: "Bookmaker" })).toBeInTheDocument();
-    vi.unstubAllGlobals();
-  });
-
   it("keeps the box score's team split out of the block", async () => {
     // The other half of "do not touch": the split belongs to the box score, and
     // the block must not grow a second copy of it.

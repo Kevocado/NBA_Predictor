@@ -86,17 +86,6 @@ describe("GameDetailModal", () => {
     expect(screen.getByText(/loading/i)).toBeInTheDocument();
   });
 
-  it("renders markets sorted by edge descending", async () => {
-    vi.mocked(api.getGameDetail).mockResolvedValue(detail);
-    vi.mocked(api.getGamePlayers).mockResolvedValue(players);
-
-    render(<GameDetailModal gameId="g1" onClose={() => {}} />);
-
-    const rows = await screen.findAllByTestId("market-row");
-    expect(rows[0]).toHaveTextContent("h2h");
-    expect(rows[1]).toHaveTextContent("spread");
-  });
-
   it("renders player prop predictions as a box score split by team", async () => {
     vi.mocked(api.getGameDetail).mockResolvedValue(detail);
     vi.mocked(api.getGamePlayers).mockResolvedValue(players);
@@ -114,27 +103,18 @@ describe("GameDetailModal", () => {
     expect(screen.getAllByRole("columnheader", { name: "Pts" })).toHaveLength(2);
   });
 
-  it("renders bookmaker and american odds for each market row", async () => {
+  it("renders the model's projected margin and total, and no bookmaker table", async () => {
     vi.mocked(api.getGameDetail).mockResolvedValue(detail);
     vi.mocked(api.getGamePlayers).mockResolvedValue(players);
 
     render(<GameDetailModal gameId="g1" onClose={() => {}} />);
 
-    await screen.findAllByTestId("market-row");
-    const bookmakers = screen.getAllByText(/DraftKings|FanDuel/);
-    expect(bookmakers).toHaveLength(3);
-    expect(screen.getByText(/-130/)).toBeInTheDocument();
-  });
-
-  it("renders the spread and total lines", async () => {
-    vi.mocked(api.getGameDetail).mockResolvedValue(detail);
-    vi.mocked(api.getGamePlayers).mockResolvedValue(players);
-
-    render(<GameDetailModal gameId="g1" onClose={() => {}} />);
-
-    await screen.findAllByTestId("market-row");
-    expect(screen.getAllByText(/-4\.5/)).toHaveLength(1);
-    expect(screen.getAllByText(/224\.5/)).toHaveLength(2);
+    await screen.findByRole("heading", { name: "Heat at Celtics" });
+    expect(screen.getAllByText(/224\.5/).length).toBeGreaterThan(0);
+    expect(screen.getByText("Projected margin")).toBeInTheDocument();
+    // The odds-by-bookmaker table is gone: NBA stays independent of betting lines.
+    expect(screen.queryByTestId("market-row")).not.toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: "Bookmaker" })).not.toBeInTheDocument();
   });
 
   it("renders head-to-head history", async () => {
@@ -264,38 +244,6 @@ const settledDetail = {
   ],
 };
 
-it("marks an h2h selection that matches the actual winner as a hit", async () => {
-  vi.mocked(api.getGameDetail).mockResolvedValue(settledDetail);
-  vi.mocked(api.getGamePlayers).mockResolvedValue([]);
-
-  render(<GameDetailModal gameId="g2" onClose={() => {}} />);
-
-  const rows = await screen.findAllByTestId("market-row");
-  expect(rows[0]).toHaveTextContent("✓");
-});
-
-it("marks a spread selection that failed to cover as a miss", async () => {
-  vi.mocked(api.getGameDetail).mockResolvedValue(settledDetail);
-  vi.mocked(api.getGamePlayers).mockResolvedValue([]);
-
-  render(<GameDetailModal gameId="g2" onClose={() => {}} />);
-
-  const rows = await screen.findAllByTestId("market-row");
-  const spreadRow = rows.find((r) => r.textContent?.includes("spread"));
-  expect(spreadRow).toHaveTextContent("✗");
-});
-
-it("shows no verdict for a market row without a point value on an unsettled market", async () => {
-  const noOddsDetail = { ...completedDetail, markets: [] };
-  vi.mocked(api.getGameDetail).mockResolvedValue(noOddsDetail);
-  vi.mocked(api.getGamePlayers).mockResolvedValue([]);
-
-  render(<GameDetailModal gameId="g2" onClose={() => {}} />);
-
-  await screen.findByRole("heading", { name: /Celtics/ });
-  expect(screen.queryAllByTestId("market-row")).toHaveLength(0);
-});
-
 it("shows predicted vs actual and the error for a settled player prop", async () => {
   vi.mocked(api.getGameDetail).mockResolvedValue(completedDetail);
   vi.mocked(api.getGamePlayers).mockResolvedValue([
@@ -415,7 +363,7 @@ it("is a labelled dialog, and a failed load offers Try again", async () => {
   expect(dialog).toHaveAttribute("aria-modal", "true");
 });
 
-it("labels rebuilt player props and market rows, and never judges them", async () => {
+it("labels rebuilt player props and never judges them", async () => {
   vi.mocked(api.getGameDetail).mockResolvedValue({
     ...completedDetail,
     markets: [{ market: "h2h", selection: "BOS", model_probability: 0.6, market_probability: 0.5, edge: 0.1, bookmaker: "DraftKings", american_odds: -120, point: null, rebuilt: true }],
@@ -427,12 +375,8 @@ it("labels rebuilt player props and market rows, and never judges them", async (
 
   render(<GameDetailModal gameId="g2" onClose={() => {}} />);
 
-  const row = await screen.findByTestId("market-row");
-  expect(row).toHaveTextContent("Rebuilt");
-  expect(row).not.toHaveTextContent("✓");
-  // A rebuilt prop is shown with its actual, but never judged -- so no error
-  // delta, the same rule the market rows follow.
-  const prop = screen.getByRole("rowheader", { name: /Jayson Tatum/ }).closest("tr")!;
+  // A rebuilt prop is shown with its actual, but never judged -- so no error delta.
+  const prop = (await screen.findByRole("rowheader", { name: /Jayson Tatum/ })).closest("tr")!;
   expect(prop).toHaveTextContent("27.5");
   expect(prop).toHaveTextContent("31");
   // The label travels with the name, so a screen reader hears it too.

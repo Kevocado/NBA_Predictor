@@ -37,7 +37,7 @@ def _walk(value, path="bundle"):
 def offline(monkeypatch):
     """Duels off, schedule doubled, store unreadable."""
     path = __import__("pathlib").Path("/nonexistent/x.sqlite")
-    monkeypatch.setattr(facts_mod, "_box_score_history", lambda: pd.DataFrame())
+    monkeypatch.setattr(facts_mod, "_box_score_history", lambda as_of: pd.DataFrame())
     monkeypatch.setattr(facts_mod, "_db_path", lambda: path)
     # `_market_line` reads the odds feed through the store; an NBA game with no
     # quoted line is exactly the case under test, so the odds rows are empty.

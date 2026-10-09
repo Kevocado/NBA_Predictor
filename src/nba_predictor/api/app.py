@@ -9,7 +9,7 @@ from starlette.types import Scope
 from nba_predictor import config
 from nba_predictor.api.deps import get_models_dir, get_schedule_path
 from nba_predictor.api.explain import router as explain_router
-from nba_predictor.api.facts import router as facts_router
+from nba_predictor.api.facts import router as facts_router, start_box_history_warmer
 from nba_predictor.api.signals import router as signals_router
 from nba_predictor.api.routes import router, start_mae_warmer, _market_stds_from_manifest
 from nba_predictor.services.hub_service import warm_player_props_cache
@@ -71,6 +71,15 @@ async def lifespan(app: FastAPI):
         start_mae_warmer(config.TRACKING_DB_PATH, get_schedule_path())
     except Exception:  # noqa: BLE001 - a warm that cannot start must not stop the app
         logging.getLogger(__name__).exception("MAE cache warmer could not start")
+    try:
+        # The four-factors duels rank box scores, and the schedule repository
+        # keeps only scores -- so the box fields have to be re-read. A daemon
+        # thread does that off the request path: without it the first visitor to
+        # a game page pays for a window of ESPN calls, and a long-lived process
+        # would rank duels off whatever it happened to build first.
+        start_box_history_warmer(get_schedule_path())
+    except Exception:  # noqa: BLE001 - a warm that cannot start must not stop the app
+        logging.getLogger(__name__).exception("box-history warmer could not start")
     try:
         margin_std, total_std = _market_stds_from_manifest(get_models_dir())
         start_odds_refresher(

@@ -18,6 +18,9 @@ rules cheap to honour, and they are the same rules the other sports follow:
 from __future__ import annotations
 
 import logging
+import os
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -44,7 +47,21 @@ def _schedule() -> list[dict]:
     return deps.get_schedule(deps.get_schedule_path())
 
 
-def _box_score_history() -> pd.DataFrame:
+#: How far back the duels' history reaches. A team plays ~3 games a week and a
+#: duel reads its last 15, so five weeks covers a full window with room for a
+#: team that has played less. Ranking further back than that reads a form the
+#: team has since moved on from.
+BOX_LOOKBACK_DAYS = 120
+
+_BOX_HISTORY: dict = {"key": None, "frame": None}
+
+#: How often the warmer checks the schedule cache. Same reasoning as the odds
+#: refresher's tick: a faster one spends no requests when nothing has changed,
+#: because both readers are cached files.
+BOX_WARM_POLL_SECONDS = float(os.getenv("BOX_WARM_POLL_SECONDS", "30"))
+
+
+def _box_score_history(as_of: str) -> pd.DataFrame:
     """Completed games with their box scores, shaped for the duel ranker.
 
     `enrich_with_boxscores` is the pipeline's own step that adds the flat
@@ -52,19 +69,102 @@ def _box_score_history() -> pd.DataFrame:
     shaping step -- so the duels rank exactly the figures the features are built
     from, rather than a second, separately-fetched copy that could disagree.
 
-    Cached per-process: the schedule repository keeps only scores, so the box
-    fields have to be re-fetched, and this is read once per upcoming game.
+    **Bounded, and read off the request thread.** The ranker needs each team's
+    last `window` games, so only completed games in a lookback window ending at
+    `as_of` are enriched: reading every completed game in the schedule would put
+    a full season of ESPN calls on the first visitor's request. `warm_box_history`
+    fills the cache from a daemon thread instead, and a request that arrives cold
+    builds the bounded window itself rather than showing nothing.
+
+    Cached on ``(schedule state, as_of)``. The schedule cache is what gains rows
+    as games complete, so its (mtime, size) is the honest invalidation signal --
+    the same shape `routes._db_state` uses for the MAE cache, and an unchanged
+    file costs one stat().
     """
     global _BOX_HISTORY
-    if _BOX_HISTORY is None:
-        from ..pipeline.ingest import enrich_with_boxscores, to_training_frame
+    state = _schedule_state(deps.get_schedule_path())
+    key = (state, str(as_of))
+    cached = _BOX_HISTORY.get("key")
+    if cached == key and _BOX_HISTORY.get("frame") is not None:
+        return _BOX_HISTORY["frame"]
 
-        schedule = _schedule()
-        _BOX_HISTORY = to_training_frame(enrich_with_boxscores(schedule))
-    return _BOX_HISTORY
+    from ..pipeline.ingest import enrich_with_boxscores, to_training_frame
+
+    start = (pd.Timestamp(as_of) - pd.Timedelta(days=BOX_LOOKBACK_DAYS)).date().isoformat()
+    window = [
+        g for g in _schedule()
+        if start <= str(g.get("game_date", "")) < str(as_of) and g.get("completed")
+    ]
+    frame = to_training_frame(enrich_with_boxscores(window))
+    _BOX_HISTORY = {"key": key, "frame": frame}
+    return frame
 
 
-_BOX_HISTORY: pd.DataFrame | None = None
+def _schedule_state(path: Path) -> tuple[int, int]:
+    """(mtime_ns, size) of the schedule cache, or (-1, -1) when unreadable."""
+    try:
+        st = Path(path).stat()
+        return (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return (-1, -1)
+
+
+def warm_box_history(as_of: str) -> bool:
+    """Fill the box-score history cache, off the request path. Never raises.
+
+    Same contract as `routes.warm_mae_cache`: a warm that fails must not take the
+    API down, and must not leave a previous window's frame behind looking current
+    for a game it does not cover. It logs instead, because a warm that silently
+    never succeeds is a cold path nobody is told about.
+    """
+    try:
+        _box_score_history(as_of)
+    except Exception as exc:  # noqa: BLE001 - reported, not raised: see docstring
+        logger.error("box-score history warm failed for %s: %s: %s", as_of, type(exc).__name__, exc)
+        return False
+    return True
+
+
+def start_box_history_warmer(
+    schedule_path: Path,
+    *,
+    clock=time.monotonic,
+    sleep=time.sleep,
+    should_stop=None,
+) -> threading.Thread:
+    """Warm the box-score history for the next upcoming game, then re-warm when
+    the schedule cache changes.
+
+    A daemon thread started from the app's lifespan: serving begins whether or
+    not the warm finishes, and a warm that hangs cannot hold shutdown either.
+    ``clock``, ``sleep`` and ``should_stop`` are injected so the loop is testable
+    without waiting on a real tick.
+
+    The invalidation signal is the schedule cache's (mtime, size) -- the file that
+    gains a row each time a game completes, which is the moment the duels' answer
+    changes. An unchanged file costs one stat() per tick and nothing else.
+    """
+    schedule_path = Path(schedule_path)
+
+    def _run() -> None:
+        last_state: tuple[int, int] | None = None
+        while should_stop is None or not should_stop():
+            state = _schedule_state(schedule_path)
+            if state != last_state:
+                schedule = _schedule()
+                upcoming = [
+                    str(g.get("game_date")) for g in schedule
+                    if not g.get("completed") and g.get("game_date")
+                ]
+                warm_box_history(min(upcoming)) if upcoming else warm_box_history(
+                    max((str(g.get("game_date")) for g in schedule if g.get("game_date")), default="")
+                )
+                last_state = state
+            sleep(BOX_WARM_POLL_SECONDS)
+
+    thread = threading.Thread(target=_run, name="box-history-warmer", daemon=True)
+    thread.start()
+    return thread
 
 
 def _matchup_rows(home: str, away: str, as_of, pick_side: str | None) -> list[dict]:

@@ -207,3 +207,73 @@ Race: `src/nba_predictor/models/candidate_race.py` — a candidate that raises
 **fails the race** rather than being scored `inf` and losing silently, which is
 what produced a fake "XGBoost wins" result in a rejected draft.
 Probabilities: `src/nba_predictor/models/probability.py`.
+---
+
+# Task 4 candidates (2026-10-09)
+
+Audit followup `2026-10-06-nba-audit-followup.md` Task 4: one PR per candidate,
+each shipped only if walk-forward beats the current winner, and a candidate that
+does not win is documented here rather than shipped. This section is that record.
+
+## 4(d) — average Ridge and XGBoost margins instead of winner-take-all — **does not ship**
+
+The race is winner-take-all (`_pick_winner` takes the single best per target).
+This asks whether the plain mean of the two margin models does better than either
+alone, on the identical held-out games.
+
+Reproduced by `tools/compare_margin_average.py` (deterministic — verified
+identical across consecutive runs). The average is built the way a real candidate
+would be: both regressors fitted inside the walk-forward on the training slice
+only, then averaged. 4 expanding windows over the **multi-season frame (4,149
+games, pooled out-of-fold n=2,432)** — which is the frame the race itself runs on,
+so this is the comparison the race would actually make, not the 758-game Phase A
+window. An earlier draft of this section said n=758; that was wrong and has been
+corrected.
+
+| arm | margin MAE |
+|---|---|
+| Ridge (race winner) | 12.3170 |
+| XGBoost | 12.4346 |
+| **average** | **12.2937** |
+
+The average is **better on the point estimate by 0.0233**. That is not the ship
+rule. Paired bootstrap, 2,000 resamples, seed 20261009, one draw applied to both:
+
+| comparison | diff | 95% interval | verdict |
+|---|---|---|---|
+| average vs the best single model | −0.0233 | **[−0.0994, +0.0483]** | **NOT distinguishable** |
+
+The interval crosses zero by a wide margin — its half-width is 0.0738 against a
+0.0233 effect, about 3.2× it. **4(d) does not ship.**
+
+Worth noting *how* it fails: this is the multi-season frame, so n=2,432 — more
+than three times the Phase A holdout, and the interval still crosses zero. A
+0.023 MAE move is not a small-data problem; it is a move this race cannot resolve
+at any holdout it is likely to get soon.
+
+The direction is worth noting because it is the *expected* one: averaging two
+regressors with decorrelated errors usually helps a little, and it did here on the
+point estimate. It is also unmeasurable at n=758, which is the same finding as
+every AUC question on this holdout. The honest conclusion is that this holdout
+cannot resolve a 0.023 MAE move, not that averaging is worthless.
+
+**A note on where these numbers live.** The measurement is a *tool*, not a test,
+and deliberately so. It reads `data/cache/training/games.json`, which is gitignored
+— the box scores are not committed. The first attempt wrote it as a test, which
+passed locally and **errored in CI**, so the suite went red on a run I had reported
+as green. `tests/test_margin_average_candidate.py` now pins only the part that
+needs no cache: that the averaged factory really is the arithmetic mean of the two
+regressors, fitted on the training slice it is handed.
+
+**Not relaxed.** The ship rule is "beats the current winner" and this does not
+demonstrably beat it, so it is documented and left out.
+
+## Still open
+
+| item | status |
+|---|---|
+| 4(a) star/minutes-weighted availability | not started — `features/availability.py` does not exist |
+| 4(b) rest/back-to-back/travel interactions | rest and back-to-back are live; **travel, congestion and fatigue are dead columns** — `_OPTIONAL_COLUMNS_DEFAULT_ZERO` fills them with 0.0 and nothing computes them |
+| 4(c) calibration fitted out-of-fold | done (PR #52); the **probability ceiling near 0.85** is not implemented |
+| 4(d) Ridge/XGBoost margin average | **evaluated above — does not ship** |
+| 4(e) total model from pace × opponent-adjusted efficiency | not started — needs the pace and adjusted blocks, which the feature-pipeline plan builds |

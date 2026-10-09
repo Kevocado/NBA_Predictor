@@ -48,14 +48,44 @@ def test_build_training_frame_drops_rows_with_no_rolling_history():
 
 
 def test_build_training_frame_fills_missing_optional_columns_with_zero():
+    """Columns the caller cannot supply are zero-filled — and ONLY those.
+
+    `home_fatigue_index` used to be in this list while also being in
+    `FEATURE_COLUMNS`, which is how it stayed a constant zero for so long: the
+    zero-fill made the column exist and nothing checked that it moved. It is
+    computed now, so it is not zero-filled and this test must not claim it is.
+    """
     from nba_predictor.features.build import build_training_frame
 
     games = _sample_games()
     result_df, _ = build_training_frame(games)
 
     assert (result_df["home_power_rating"] == 0.0).all()
-    assert (result_df["home_fatigue_index"] == 0.0).all()
     assert (result_df["home_missing_value"] == 0.0).all()
+
+    # The fatigue index is computed, not filled, so it must actually move.
+    assert not (result_df["home_fatigue_index"] == 0.0).all(), (
+        "home_fatigue_index is still a constant zero; it is being zero-filled "
+        "rather than computed"
+    )
+
+
+def test_fatigue_index_is_computed_rather_than_zero_filled():
+    """The defect this replaces: a column can be in FEATURE_COLUMNS, be absent from
+    the incoming frame, and be filled with 0.0 — which makes it exist without
+    making it a measurement."""
+    from nba_predictor.features.build import build_training_frame, _OPTIONAL_COLUMNS_DEFAULT_ZERO
+
+    assert "home_fatigue_index" not in _OPTIONAL_COLUMNS_DEFAULT_ZERO, (
+        "home_fatigue_index is zero-filled; it should be computed"
+    )
+    games = _sample_games()
+    assert "home_fatigue_index" not in games.columns, "fixture must not pre-supply it"
+    result_df, feature_cols = build_training_frame(games)
+    assert "home_fatigue_index" in feature_cols
+    assert len(set(result_df["home_fatigue_index"])) > 1, (
+        "the computed fatigue index has only one value; it is not reading anything"
+    )
 
 
 def test_build_training_frame_respects_precomputed_optional_columns():

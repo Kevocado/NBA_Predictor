@@ -221,22 +221,23 @@ The race is winner-take-all (`_pick_winner` takes the single best per target).
 This asks whether the plain mean of the two margin models does better than either
 alone, on the identical held-out games.
 
-Reproduced by `tests/test_margin_average_candidate.py`. The average is built the
-way a real candidate would be: both regressors fitted inside the walk-forward on
-the training slice only, then averaged. 4 windows, pooled n=758.
+Reproduced by `tools/compare_margin_average.py` (deterministic — verified
+identical across consecutive runs). The average is built the way a real candidate
+would be: both regressors fitted inside the walk-forward on the training slice
+only, then averaged. 4 windows, pooled n=758.
 
 | arm | margin MAE |
 |---|---|
 | Ridge (race winner) | 12.3170 |
-| XGBoost | 12.4391 |
-| **average** | **12.2959** |
+| XGBoost | 12.4346 |
+| **average** | **12.2937** |
 
-The average is **better on the point estimate by 0.0211**. That is not the ship
+The average is **better on the point estimate by 0.0233**. That is not the ship
 rule. Paired bootstrap, 2,000 resamples, seed 20261009, one draw applied to both:
 
 | comparison | diff | 95% interval | verdict |
 |---|---|---|---|
-| average vs the best single model | −0.0211 | **[−0.0954, +0.0475]** | **NOT distinguishable** |
+| average vs the best single model | −0.0233 | **[−0.0994, +0.0483]** | **NOT distinguishable** |
 
 The interval crosses zero by a wide margin — its half-width is roughly five times
 the effect. **4(d) does not ship.**
@@ -245,7 +246,15 @@ The direction is worth noting because it is the *expected* one: averaging two
 regressors with decorrelated errors usually helps a little, and it did here on the
 point estimate. It is also unmeasurable at n=758, which is the same finding as
 every AUC question on this holdout. The honest conclusion is that this holdout
-cannot resolve a 0.02 MAE move, not that averaging is worthless.
+cannot resolve a 0.023 MAE move, not that averaging is worthless.
+
+**A note on where these numbers live.** The measurement is a *tool*, not a test,
+and deliberately so. It reads `data/cache/training/games.json`, which is gitignored
+— the box scores are not committed. The first attempt wrote it as a test, which
+passed locally and **errored in CI**, so the suite went red on a run I had reported
+as green. `tests/test_margin_average_candidate.py` now pins only the part that
+needs no cache: that the averaged factory really is the arithmetic mean of the two
+regressors, fitted on the training slice it is handed.
 
 **Not relaxed.** The ship rule is "beats the current winner" and this does not
 demonstrably beat it, so it is documented and left out.

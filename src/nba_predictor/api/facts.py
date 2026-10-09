@@ -53,7 +53,12 @@ def _schedule() -> list[dict]:
 #: team has since moved on from.
 BOX_LOOKBACK_DAYS = 120
 
-_BOX_HISTORY: dict = {"key": None, "frame": None}
+_BOX_HISTORY: dict = {}
+
+#: How many `as_of` windows to keep. A game page asks for one and the explainer's
+#: pre-generation walks the week's games, so a handful covers a full pass; more
+#: than that and the oldest entries have gone cold anyway.
+BOX_HISTORY_KEEP = 8
 
 #: How often the warmer checks the schedule cache. Same reasoning as the odds
 #: refresher's tick: a faster one spends no requests when nothing has changed,
@@ -84,9 +89,9 @@ def _box_score_history(as_of: str) -> pd.DataFrame:
     global _BOX_HISTORY
     state = _schedule_state(deps.get_schedule_path())
     key = (state, str(as_of))
-    cached = _BOX_HISTORY.get("key")
-    if cached == key and _BOX_HISTORY.get("frame") is not None:
-        return _BOX_HISTORY["frame"]
+    frame = _BOX_HISTORY.get(key)
+    if frame is not None:
+        return frame
 
     from ..pipeline.ingest import enrich_with_boxscores, to_training_frame
 
@@ -96,7 +101,10 @@ def _box_score_history(as_of: str) -> pd.DataFrame:
         if start <= str(g.get("game_date", "")) < str(as_of) and g.get("completed")
     ]
     frame = to_training_frame(enrich_with_boxscores(window))
-    _BOX_HISTORY = {"key": key, "frame": frame}
+    _BOX_HISTORY[key] = frame
+    # dicts keep insertion order, so the first key is the coldest one.
+    while len(_BOX_HISTORY) > BOX_HISTORY_KEEP:
+        del _BOX_HISTORY[next(iter(_BOX_HISTORY))]
     return frame
 
 
@@ -177,7 +185,7 @@ def _matchup_rows(home: str, away: str, as_of, pick_side: str | None) -> list[di
     """
     from ..signals.four_factors_duel import four_factors_duel, to_context
 
-    history = _box_score_history()
+    history = _box_score_history(as_of)
     if not len(history):
         return []
     duels = four_factors_duel(home, away, history, as_of)

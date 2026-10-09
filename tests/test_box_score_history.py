@@ -34,7 +34,7 @@ def offline(monkeypatch):
     """Duels and box-score enrichment stubbed: no ESPN, no store."""
     monkeypatch.setattr(facts_mod, "_db_path", lambda: __import__("pathlib").Path("/nonexistent/x.sqlite"))
     monkeypatch.setattr(facts_mod, "_market_rows", lambda game_id: [])
-    monkeypatch.setattr(facts_mod, "_BOX_HISTORY", {"key": None, "frame": None})
+    monkeypatch.setattr(facts_mod, "_BOX_HISTORY", {})
     return monkeypatch
 
 
@@ -103,6 +103,71 @@ def test_a_cached_window_is_not_rebuilt(offline, monkeypatch):
 
     assert calls["n"] == 1, f"the window was rebuilt {calls['n']} times for one as_of"
     assert first is second, "the cached frame was not reused"
+
+
+def test_two_game_dates_are_cached_side_by_side(offline, monkeypatch):
+    """A week of upcoming games must not thrash the cache.
+
+    One entry keyed on a single `as_of` rebuilt for every date in a pass, so a
+    page-load across the week paid for a window per game and reused nothing.
+    """
+    calls = {"n": 0}
+
+    def counting_enrich(games):
+        calls["n"] += 1
+        return list(games)
+
+    monkeypatch.setattr("nba_predictor.pipeline.ingest.enrich_with_boxscores", counting_enrich)
+    monkeypatch.setattr(
+        "nba_predictor.pipeline.ingest.to_training_frame",
+        lambda games: pd.DataFrame(games),
+    )
+    _schedule_with_history(monkeypatch, [f"2026-03-{d:02d}" for d in range(1, 18)])
+    monkeypatch.setattr(
+        facts_mod.deps, "get_schedule_path",
+        lambda: __import__("pathlib").Path("/nonexistent/schedule.json"),
+    )
+
+    dates = ["2026-03-18", "2026-03-19", "2026-03-20"]
+
+    for date in dates:                       # first pass: one build per date
+        facts_mod._box_score_history(date)
+    assert calls["n"] == len(dates), (
+        f"expected one build per distinct as_of, got {calls['n']}"
+    )
+
+    for date in dates:                       # second pass: every one reused
+        facts_mod._box_score_history(date)
+    assert calls["n"] == len(dates), (
+        f"the second pass rebuilt {calls['n'] - len(dates)} windows: the cache does "
+        "not hold more than one as_of"
+    )
+
+
+def test_the_cache_is_bounded(offline, monkeypatch):
+    """Bounded, so a month of dates cannot grow it without limit."""
+    monkeypatch.setattr(
+        "nba_predictor.pipeline.ingest.enrich_with_boxscores", lambda games: list(games)
+    )
+    monkeypatch.setattr(
+        "nba_predictor.pipeline.ingest.to_training_frame",
+        lambda games: pd.DataFrame(games),
+    )
+    _schedule_with_history(monkeypatch, [f"2026-03-{d:02d}" for d in range(1, 18)])
+    monkeypatch.setattr(
+        facts_mod.deps, "get_schedule_path",
+        lambda: __import__("pathlib").Path("/nonexistent/schedule.json"),
+    )
+
+    for i in range(facts_mod.BOX_HISTORY_KEEP + 6):
+        facts_mod._box_score_history(f"2026-04-{i + 1:02d}")
+
+    assert len(facts_mod._BOX_HISTORY) == facts_mod.BOX_HISTORY_KEEP, (
+        f"the cache grew to {len(facts_mod._BOX_HISTORY)} entries; it is unbounded"
+    )
+    # The coldest entries are the ones evicted, not the newest.
+    newest = (facts_mod._schedule_state(facts_mod.deps.get_schedule_path()), f"2026-04-{facts_mod.BOX_HISTORY_KEEP + 6:02d}")
+    assert newest in facts_mod._BOX_HISTORY, "the newest window was evicted"
 
 
 def test_a_changed_schedule_rebuilds_the_window(offline, monkeypatch):

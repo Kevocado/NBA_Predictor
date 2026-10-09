@@ -65,17 +65,17 @@ def _run(cols, current, history, label):
     out_win = walk_forward_metrics(
         current.sort_values("game_date").reset_index(drop=True),
         model_factory=lambda tr: default_candidates(cols)["logistic"]["win"](tr),
-        windows=4,
+        windows=4, history_df=history,
     )
     out_margin = walk_forward_regression(
         current.sort_values("game_date").reset_index(drop=True),
         model_factory=lambda tr: default_candidates(cols)["ridge"]["margin"](tr),
-        target="home_margin", windows=4,
+        target="home_margin", windows=4, history_df=history,
     )
     out_total = walk_forward_regression(
         current.sort_values("game_date").reset_index(drop=True),
         model_factory=lambda tr: default_candidates(cols)["ridge"]["total"](tr),
-        target="home_total", windows=4, fixed_baseline=230.174,
+        target="home_total", windows=4, fixed_baseline=230.174, history_df=history,
     )
     return {
         "label": label, "n": out_win["pooled"]["n"],
@@ -94,25 +94,25 @@ def main() -> int:
     current = raw[(raw.game_date >= PHASE_A_START) & (raw.game_date <= PHASE_A_END)].copy()
     history = raw[raw.game_date < PHASE_A_START].copy()
 
-    base_cols = None
+    # Build each arm from the CHRONOLOGICAL history + holdout together and split the Phase A rows out AFTER feature
+    # construction. Building from the holdout alone started every team's game history at PHASE_A_START (a team's first
+    # holdout game read 99 rest days) and dropped the first games without rolling factors; and the pre-holdout rows
+    # are passed to the walk-forward evaluators as history_df so each model trains on everything before its window.
+    full = pd.concat([history, current], ignore_index=True).sort_values("game_date").reset_index(drop=True)
     arms = {}
-    for label, drop_new in (("baseline", True), ("+ travel/fatigue", False)):
-        # The candidate columns are opt-in now (they are not in the default contract): the baseline arm is the
-        # default, the candidate arm opts in.
-        frame, cols = build_training_frame(current, include_travel_fatigue=not drop_new)
-        if drop_new:
-            frame = frame.drop(columns=[c for c in NEW_COLUMNS if c in frame.columns])
-            cols = [c for c in cols if c not in NEW_COLUMNS]
-        base_cols = base_cols or cols
-        arms[label] = {"frame": frame, "cols": cols}
+    for label, candidate in (("baseline", False), ("+ travel/fatigue", True)):
+        frame_all, cols = build_training_frame(full, include_travel_fatigue=candidate)
+        frame_all = frame_all.assign(home_margin=frame_all.home_pts - frame_all.away_pts,
+                                     home_total=frame_all.home_pts + frame_all.away_pts)
+        in_holdout = (frame_all.game_date >= PHASE_A_START) & (frame_all.game_date <= PHASE_A_END)
+        arms[label] = {"frame": frame_all[in_holdout].reset_index(drop=True),
+                       "history": frame_all[frame_all.game_date < PHASE_A_START].reset_index(drop=True), "cols": cols}
 
     rows = {}
     for label, arm in arms.items():
-        frame = arm["frame"].assign(
-            home_margin=arm["frame"].home_pts - arm["frame"].away_pts,
-            home_total=arm["frame"].home_pts + arm["frame"].away_pts,
-        )
-        rows[label] = _run(arm["cols"], frame, history, label)
+        frame = arm["frame"]
+        rows[label] = _run(arm["cols"], frame, arm["history"], label)
+
 
     a, b = rows["baseline"], rows["+ travel/fatigue"]
     print(f"\nframe: holdout {len(current)} games, pooled out-of-fold n={a['n']}")
@@ -161,19 +161,20 @@ def main() -> int:
         gaps[label] = calibration_gap(y, p, n_buckets=N_BUCKETS)
         print(f"\n  {label}: max |gap| = {gaps[label]:.4f}")
 
-    gap = gaps["+ travel/fatigue"]
-    missing = [n for n, o in boot.items() if not o["improved"]]
-    gap_ok = gap <= MAX_GAP_BAR
-    ships = n_ok == 5 and gap_ok
+    from nba_predictor.models.evaluate.ship_rule import MAX_GAP_BAR, ship_decision
 
-    print(f"\n=== SHIP RULE: 5/5 intervals improve AND max gap <= {MAX_GAP_BAR}")
-    print(f"  Task 4(b)    {'SHIPS' if ships else 'does NOT ship'}")
-    print(f"      - {n_ok}/5 improve; {n_worse}/5 are measurably WORSE, not noise")
-    if not gap_ok:
-        print(f"      - max gap {gap:.4f} > {MAX_GAP_BAR}")
+    gap = gaps["+ travel/fatigue"]
+    decision = ship_decision(boot, gap=gap, baseline_gap=gaps["baseline"])
+    print(f"\n=== SHIP RULE: AUC interval excludes a decline; the other four metrics each improve; "
+          f"max gap <= {MAX_GAP_BAR} and not wider than the baseline's {gaps['baseline']:.4f}")
+    print(f"  {'SHIPS' if decision['ships'] else 'does NOT ship'}")
+    print(f"      - AUC non-decline: {'yes' if decision['auc_ok'] else 'NO (interval includes a decline)'}")
+    if decision["missing"]:
+        print(f"      - not improved: {', '.join(decision['missing'])}")
+    if not decision["gap_ok"]:
+        print(f"      - calibration gap {gap:.4f} (bar {MAX_GAP_BAR}, baseline {gaps['baseline']:.4f})")
     if n_worse:
-        print(f"      - a feature that measurably degrades the model is a defect to "
-              "remove, not a candidate to tune")
+        print(f"      - {n_worse}/5 metrics are measurably WORSE, not noise")
     return 0
 
 

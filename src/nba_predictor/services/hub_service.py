@@ -220,7 +220,9 @@ def player_name_map(db_path: Path, hub_path: Path) -> dict[str, str]:
     (last resort) when the id is in neither."""
     from ..tracking import store
 
-    return {**store.load_player_names(db_path), **load_player_name_map(hub_path)}
+    # A blank hub name must not shadow a name we do know: only non-blank hub names take precedence.
+    hub = {k: v for k, v in load_player_name_map(hub_path).items() if isinstance(v, str) and v.strip()}
+    return {**store.load_player_names(db_path), **hub}
 
 
 def counted_picks(db_path: Path, schedule: list[dict]) -> list[tuple[dict, list]]:

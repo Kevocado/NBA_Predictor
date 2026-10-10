@@ -574,3 +574,24 @@ def test_track_record_h2h_settles_one_model_pick_per_game(tmp_path):
     h2h = next(r for r in compute_track_record(db_path, schedule) if r.market == "h2h")
 
     assert (h2h.total_predictions, h2h.correct_predictions) == (1, 1)
+
+
+def test_player_name_map_keeps_a_known_name_when_the_hub_name_is_blank(tmp_path):
+    """A blank player_name in players.json must not replace a name the box scores gave us."""
+    import json
+    from nba_predictor.services.hub_service import player_name_map
+    from nba_predictor.tracking import store
+
+    db = tmp_path / "tracking.db"
+    store.init_db(db)
+    store.record_player_names(db, [{"player_id": "3137259", "player_name": "Gabe Vincent"}, {"player_id": "99", "player_name": "Known Player"}])
+    hub = tmp_path / "players.json"
+    hub.write_text(json.dumps([
+        {"player_id": "3137259", "player_name": "   "},      # blank: must NOT win
+        {"player_id": "99", "player_name": "Hub Name"},       # non-blank: hub still wins
+        {"player_id": "7", "player_name": ""},                # blank and unknown elsewhere: stays absent
+    ]))
+    names = player_name_map(db, hub)
+    assert names["3137259"] == "Gabe Vincent"
+    assert names["99"] == "Hub Name"
+    assert "7" not in names

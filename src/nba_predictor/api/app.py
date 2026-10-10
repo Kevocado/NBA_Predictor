@@ -14,6 +14,7 @@ from nba_predictor.api.signals import router as signals_router
 from nba_predictor.api.routes import router, start_mae_warmer, _market_stds_from_manifest
 from nba_predictor.services.hub_service import warm_player_props_cache
 from nba_predictor.pipeline.odds_refresher import start_odds_refresher
+from nba_predictor.pipeline.player_props_refresher import start_player_props_refresher
 from nba_predictor.tracking.store import init_db
 
 
@@ -90,6 +91,10 @@ async def lifespan(app: FastAPI):
         )
     except Exception:  # noqa: BLE001 - odds that cannot refresh must not stop the app
         logging.getLogger(__name__).exception("odds refresher could not start")
+    try:
+        start_player_props_refresher(config.TRACKING_DB_PATH, get_schedule_path(), get_models_dir())
+    except Exception:  # noqa: BLE001 - a refresher that cannot start must not stop the app
+        logging.getLogger(__name__).exception("player-props refresher could not start")
     yield
 
 

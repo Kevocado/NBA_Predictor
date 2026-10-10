@@ -36,4 +36,6 @@ def _no_box_history_warmer(monkeypatch):
         return threading.Thread(target=lambda: None)
 
     monkeypatch.setattr(app_module, "start_box_history_warmer", _noop)
+    # Same reason: the player-props refresher fetches box scores from ESPN.
+    monkeypatch.setattr(app_module, "start_player_props_refresher", _noop)
     return _noop

@@ -25,6 +25,9 @@ from nba_predictor.pipeline.retrain import run_retrain_pipeline
 from nba_predictor.tracking import store
 
 BOX_FIELDS = ["fgm", "fga", "fg3m", "tov", "oreb", "dreb", "fta"]
+# Carried when ESPN's team box has it (3P% needs attempts); never required, so a game
+# without it still trains and the 3P% matchup is simply skipped.
+OPTIONAL_BOX_FIELDS = ["fg3a"]
 
 
 def default_window_start(today: date | None = None) -> str:
@@ -295,6 +298,10 @@ def enrich_with_boxscores(games: list[dict]) -> list[dict]:
                 for field in BOX_FIELDS:
                     game[f"home_{field}"] = home_box[field]
                     game[f"away_{field}"] = away_box[field]
+                for field in OPTIONAL_BOX_FIELDS:
+                    if field in home_box and field in away_box:
+                        game[f"home_{field}"] = home_box[field]
+                        game[f"away_{field}"] = away_box[field]
         enriched.append(game)
     return enriched
 
@@ -337,6 +344,10 @@ def to_training_frame(games: list[dict]) -> pd.DataFrame:
         for field in BOX_FIELDS:
             row[f"home_{field}"] = g[f"home_{field}"]
             row[f"away_{field}"] = g[f"away_{field}"]
+        for field in OPTIONAL_BOX_FIELDS:
+            if f"home_{field}" in g:
+                row[f"home_{field}"] = g[f"home_{field}"]
+                row[f"away_{field}"] = g[f"away_{field}"]
         rows.append(row)
     return pd.DataFrame(rows)
 

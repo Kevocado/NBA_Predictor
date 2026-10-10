@@ -234,8 +234,10 @@ def _matchup_rows(home: str, away: str, as_of, pick_side: str | None) -> list[di
     history = _box_score_history(as_of)
     if not len(history):
         return []
+    from ..signals.team_matchups import team_matchups
+
     duels = four_factors_duel(home, away, history, as_of)
-    return to_context(duels, pick_side)
+    return to_context(duels, pick_side) + team_matchups(home, away, history, as_of)
 
 
 def _db_path() -> Path:

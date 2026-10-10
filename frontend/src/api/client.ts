@@ -1,7 +1,8 @@
 
-import type { Explanation, Signal } from "../predictor-ui";
+import { createContextLoader, type Explanation, type Signal } from "../predictor-ui";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
+const EXPLAIN_BASE = `${API_BASE}/api/explain/nba`;
 
 export interface Team {
   abbreviation: string;
@@ -370,6 +371,8 @@ export const api = {
    *  is the game's own id — the only value the route needs, and the only one
    *  the site has. */
   explainGame: (gameId: string) => fetchJson<Explanation>(`/api/explain/nba/${gameId}`),
+  /** The Matchup section's data, `<explain base>/<id>/context`; same base as `explainGame`. */
+  loadContext: createContextLoader(EXPLAIN_BASE),
   getSeasonFirstWeek: () => fetchJson<SeasonBounds>("/season/first-week"),
   getHubTeams: () => fetchJson<TeamHubRow[]>("/hub/teams"),
   getHubPlayers: () => fetchJson<PlayerHubRow[]>("/hub/players"),

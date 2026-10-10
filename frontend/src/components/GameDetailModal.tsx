@@ -528,6 +528,8 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
               state={flowState}
               bundle={flowBundle}
               request={() => api.explainGame(gameId)}
+              loadContext={api.loadContext}
+              fixtureId={gameId}
               extras={{ tiles: panel.tiles, segments: panel.segments, record: winnerRecord ?? undefined, moment: "tip-off" }}
             />
           </div>

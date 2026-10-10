@@ -643,26 +643,6 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
           </div>
         )}
 
-        {players && players.length > 0 && (
-          <section aria-labelledby={`${titleId}-box`}>
-            <h3 id={`${titleId}-box`} className="mb-2 text-sm text-[var(--color-net-faint)]">
-              Projected box score
-            </h3>
-            {players.some((p) => p.rebuilt) && (
-              <p className="mb-2 text-xs text-pr-text-dim">
-                Rows marked Rebuilt were built after tip-off, by a later retrain. They are shown for reference and never
-                judged.
-              </p>
-            )}
-            <PlayerBoxScore
-              playerProps={players}
-              hubPlayers={hubPlayers}
-              homeTeam={detail?.home_team ?? ""}
-              awayTeam={detail?.away_team ?? ""}
-            />
-          </section>
-        )}
-
         {/* The signal rows (spec §4), ABOVE the projections -- the same position
             Sports' `GameDetailModal` and PL's `FixtureModal` put them, so a fixture
             page reads the same way in all three.
@@ -697,6 +677,7 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
           </section>
         )}
 
+
         {/* The ranked calls, as a block of their own rather than another column
             of the box score: a ranking that a reader could mistake for the full
             roster is the thing this must not be, and one list per category with
@@ -718,6 +699,27 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
             confirm who is fit to be ranked.
           </p>
         )}
+
+        {players && players.length > 0 && (
+          <section aria-labelledby={`${titleId}-box`} className="mt-4">
+            <h3 id={`${titleId}-box`} className="mb-2 text-sm text-[var(--color-net-faint)]">
+              Projected box score
+            </h3>
+            {players.some((p) => p.rebuilt) && (
+              <p className="mb-2 text-xs text-pr-text-dim">
+                Rows marked Rebuilt were built after tip-off, by a later retrain. They are shown for reference and never
+                judged.
+              </p>
+            )}
+            <PlayerBoxScore
+              playerProps={players}
+              hubPlayers={hubPlayers}
+              homeTeam={detail?.home_team ?? ""}
+              awayTeam={detail?.away_team ?? ""}
+            />
+          </section>
+        )}
+
       </div>
     </div>
   );

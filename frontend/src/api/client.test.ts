@@ -112,3 +112,11 @@ describe("request timeout", () => {
     }
   });
 });
+
+describe("matchup context loader", () => {
+  it("is built on the same base as explainGame", async () => {
+    mockFetchOnce({ matchups: [] });
+    await api.loadContext("g1");
+    expect(fetch).toHaveBeenCalledWith("/api/explain/nba/g1/context", expect.anything());
+  });
+});

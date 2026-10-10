@@ -25,6 +25,7 @@ vi.mock("../api/client", () => ({
     // GameDetailModal.instant.test.tsx.
     getTrackRecord: vi.fn().mockResolvedValue([]),
     explainGame: vi.fn(),
+    loadContext: vi.fn(async () => ({ matchups: [] })),
   },
 }));
 
@@ -447,6 +448,13 @@ describe("GameDetailModal and the plain-English panel", () => {
     await userEvent.click(screen.getByRole("button", { name: /ai summary/i }));
     expect(await screen.findByText("Boston is the pick at home.")).toBeInTheDocument();
     expect(explain).toHaveBeenCalledTimes(1);
+  });
+
+  it("hands the context loader this game's id as the fixtureId", async () => {
+    openPregame();
+    render(<GameDetailModal gameId="g1" onClose={() => {}} />);
+    await screen.findByTestId("fixture-flow");
+    await waitFor(() => expect(api.loadContext).toHaveBeenCalledWith("g1"));
   });
 
   it("leaves every figure to the block once the summary is in", async () => {

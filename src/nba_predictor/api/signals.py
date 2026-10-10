@@ -42,7 +42,7 @@ from . import deps
 from .availability import resolve_out_players
 from .facts import _now, _status
 from ..config import DATA_DIR
-from ..services.hub_service import load_player_name_map
+from ..services.hub_service import player_name_map
 from ..services.schedule_repository import get_game
 from ..signals import absence
 from ..tracking.player_props import picks_by_player_stat
@@ -87,7 +87,7 @@ def signals_for_game(
             game_id,
             picks,
             resolve_out_players(injuries, {pid for pid, _ in picks}),
-            load_player_name_map(DATA_DIR / "cache" / "hub" / "players.json"),
+            player_name_map(db_path, DATA_DIR / "cache" / "hub" / "players.json"),
         )
     except Exception:
         logger.exception("absence signal unavailable for %s", game_id)

@@ -76,6 +76,11 @@ CREATE TABLE IF NOT EXISTS player_prediction_snapshots (
     position TEXT
 );
 
+CREATE TABLE IF NOT EXISTS player_names (
+    player_id TEXT PRIMARY KEY,
+    player_name TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS game_player_outcomes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     game_id TEXT NOT NULL,
@@ -391,6 +396,37 @@ def insert_player_prediction(
         )
         conn.commit()
         return cur.lastrowid
+
+
+def record_player_names(db_path: Path, box_rows) -> int:
+    """Remember player_id -> displayName from every ESPN box row seen.
+
+    Merge-only: a row with an empty id or name is skipped, so a blank
+    displayName never overwrites a known name; nothing is ever deleted.
+    Lives in the tracking DB so it persists exactly as long as the picks do.
+    """
+    pairs = [
+        (str(r["player_id"]), r["player_name"].strip())
+        for r in box_rows
+        if r.get("player_id") and (r.get("player_name") or "").strip()
+    ]
+    if not pairs:
+        return 0
+    with _DB_LOCK, _connect(db_path) as conn:
+        conn.executemany(
+            "INSERT INTO player_names (player_id, player_name) VALUES (?, ?) "
+            "ON CONFLICT(player_id) DO UPDATE SET player_name = excluded.player_name",
+            pairs,
+        )
+    return len(pairs)
+
+
+def load_player_names(db_path: Path) -> dict[str, str]:
+    try:
+        with get_connection(db_path) as conn:
+            return {r["player_id"]: r["player_name"] for r in conn.execute("SELECT player_id, player_name FROM player_names")}
+    except sqlite3.OperationalError:  # table not created yet on an old DB
+        return {}
 
 
 def get_player_predictions_for_game(db_path: Path, game_id: str) -> list[sqlite3.Row]:

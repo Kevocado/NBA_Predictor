@@ -722,3 +722,66 @@ def test_the_live_shaped_report_renders_52_doubtful_notes_over_52_ranked_rows(cl
     assert {r["player_id"] for r in rows} == {d["player_id"] for d in doubtful}
     assert not {r["player_id"] for r in rows} & {o["player_id"] for o in out}
     assert {d["status"] for d in doubtful} == {"Day-To-Day"}
+
+
+# --- names: a player outside the hub file still gets a name -----------------
+
+def _box_row(pid, name):
+    # shaped like data/espn.py::get_player_boxscore rows
+    return {"player_id": pid, "player_name": name, "team": "BOS", "position": "G", "minutes": 20.0,
+            "points": 5.0, "rebounds": 1.0, "assists": 1.0}
+
+
+def test_a_player_missing_from_the_hub_is_named_from_the_persisted_map(client, tmp_path):
+    db_path = tmp_path / "tracking.db"
+    store.record_player_names(db_path, [_box_row("3137259", "Some Bench Guy")])
+    for pid in ("3137259", "9999999"):
+        _predict(db_path, pid, "points")
+
+    names = {r["player_id"]: r["player_name"] for r in client.get("/games/g2/players").json()}
+
+    assert names["3137259"] == "Some Bench Guy"  # not in hub players.json
+    assert names["9999999"] == "9999999"  # unknown everywhere: the id, last resort
+
+
+def test_the_hub_name_wins_over_the_persisted_one(client, tmp_path):
+    db_path = tmp_path / "tracking.db"
+    store.record_player_names(db_path, [_box_row("5105571", "J. Tatum")])
+    _predict(db_path, "5105571", "points")
+
+    assert client.get("/games/g2/players").json()[0]["player_name"] == "Jayson Tatum"
+
+
+def test_an_empty_display_name_never_overwrites_a_known_name(tmp_path):
+    db_path = tmp_path / "tracking.db"
+    store.init_db(db_path)
+    store.record_player_names(db_path, [_box_row("1", "Known Name")])
+    store.record_player_names(db_path, [_box_row("1", ""), _box_row("1", "  "), _box_row("2", "")])
+
+    assert store.load_player_names(db_path) == {"1": "Known Name"}
+
+
+def test_the_refresher_rebuilds_names_on_a_fresh_disk(tmp_path):
+    from nba_predictor.pipeline.player_props_refresher import rebuild_player_names
+
+    db_path = tmp_path / "fresh.db"
+    store.init_db(db_path)
+    sched = [{"game_id": "x", "game_date": "2026-10-01", "completed": True}]
+    n = rebuild_player_names(sched, db_path, fetch=lambda gs: {"x": [_box_row("42", "Rebuilt Name")]},
+                             now=__import__("pandas").Timestamp("2026-10-10T00:00Z"))
+
+    assert n == 1
+    assert store.load_player_names(db_path) == {"42": "Rebuilt Name"}
+
+
+def test_backfill_reads_cached_espn_box_files(tmp_path):
+    from nba_predictor.pipeline.ingest import backfill_names_from_espn_cache
+
+    cache = tmp_path / "espn"
+    cache.mkdir()
+    (cache / "player_boxscore_1.json").write_text(json.dumps({"rows": [_box_row("7", "Cached Guy"), _box_row("8", "")]}))
+    db_path = tmp_path / "bf.db"
+
+    backfill_names_from_espn_cache(db_path, cache)
+
+    assert store.load_player_names(db_path) == {"7": "Cached Guy"}

@@ -1,7 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import PlayerBoxScore from "./PlayerBoxScore";
 import {
   STAT_KEYS,
@@ -15,28 +13,6 @@ import {
 import type { PlayerHubRow, PlayerProp } from "../api/client";
 
 const STATS = ["points", "rebounds", "assists", "threes"] as const;
-
-/** vitest runs with cwd at frontend/, and import.meta.url is not a file URL here. */
-function readCss(): string {
-  return readFileSync(resolve(process.cwd(), "src/index.css"), "utf8");
-}
-
-/**
- * The body of a CSS rule, by selector.
- *
- * Throws when the selector is not found. An earlier version of these tests used
- * `css.slice(css.indexOf(sel))` and indexOf returns -1 on a miss, so a renamed
- * selector made `slice(-1)` return the last character, `.indexOf("}")` return
- * -1, and the body come out as "" -- which satisfies every "not.toMatch" in
- * the test. Renaming a class disarmed the guard and the suite stayed green.
- */
-function ruleBody(css: string, selector: string): string {
-  const at = css.indexOf(selector);
-  expect(at, `CSS rule not found: ${selector}`).toBeGreaterThan(-1);
-  const body = css.slice(at + selector.length, css.indexOf("}", at));
-  expect(body, `CSS rule is unterminated: ${selector}`).not.toBe("");
-  return body;
-}
 
 function propsFor(playerId: string, name: string, values: number[], actual: number[] | null = null): PlayerProp[] {
   return STATS.map((stat, i) => ({
@@ -181,72 +157,54 @@ describe("PlayerBoxScore", () => {
       />,
     );
   }
+  const pick = (name: string) => fireEvent.click(screen.getByRole("button", { name }));
 
-  it("renders one row per player per side, not one row per prop", () => {
+  it("shows one team at a time: home by default, away after the switch", () => {
     renderBox();
-    // 6 players, 3 per side, so 3 body rows -- down from 24 prop rows.
+    expect(screen.getAllByRole("table")).toHaveLength(1);
     expect(screen.getAllByTestId("box-score-row")).toHaveLength(3);
-  });
-
-  it("names both teams as real column headers", () => {
-    renderBox();
-    // teamName gives the short nickname: "Heat", "Celtics".
-    expect(screen.getByRole("columnheader", { name: "Heat" })).toBeTruthy();
-    expect(screen.getByRole("columnheader", { name: "Celtics" })).toBeTruthy();
-  });
-
-  it("uses real table semantics with scopes", () => {
-    renderBox();
-    const table = screen.getByRole("table");
-    expect(table.tagName).toBe("TABLE");
-    // col headers for the stat columns, on both sides.
-    for (const label of ["Pts", "Reb", "Ast", "3PM"]) {
-      expect(screen.getAllByRole("columnheader", { name: label })).toHaveLength(2);
-    }
-    // row headers are the player names: two per row, one per side.
-    expect(screen.getByRole("rowheader", { name: "A One" })).toBeTruthy();
     expect(screen.getByRole("rowheader", { name: "H One" })).toBeTruthy();
+    expect(screen.queryByRole("rowheader", { name: "A One" })).toBeNull();
+    const group = screen.getByRole("group", { name: "Box score team" });
+    const [home, away] = within(group).getAllByRole("button");
+    expect([home.textContent, away.textContent]).toEqual(["BOS", "MIA"]);
+    expect(home.getAttribute("aria-pressed")).toBe("true");
+
+    pick("MIA");
+    expect(screen.getByRole("rowheader", { name: "A One" })).toBeTruthy();
+    expect(screen.queryByRole("rowheader", { name: "H One" })).toBeNull();
+  });
+
+  it("pins the full player name in a sticky first column and scrolls the stats", () => {
+    const props = propsFor("g", "Giannis Antetokounmpo", [31, 11, 5, 1]);
+    renderBox({ props, hub: [hubRow("g", "Giannis Antetokounmpo", "BOS", "F")] });
+    const name = screen.getByRole("rowheader", { name: "Giannis Antetokounmpo" });
+    expect(name.textContent).toBe("Giannis Antetokounmpo");
+    expect(name.className).toMatch(/sticky/);
+    const scroller = screen.getByRole("region", { name: /scroll sideways/i });
+    expect(scroller.contains(name)).toBe(true);
+    for (const label of ["Pts", "Reb", "Ast", "3PM"]) {
+      expect(within(scroller).getByRole("columnheader", { name: label })).toBeTruthy();
+    }
   });
 
   it("shows the predicted value, which is the whole point of the page", () => {
     renderBox();
     const row = screen.getAllByTestId("box-score-row")[0];
-    expect(within(row).getByRole("rowheader", { name: "A One" })).toBeTruthy();
-    expect(within(row).getByText("20.0")).toBeTruthy();
+    expect(within(row).getByRole("rowheader", { name: "H One" })).toBeTruthy();
+    expect(within(row).getByText("30.0")).toBeTruthy();
   });
 
-  it("keeps both sides of a row in the same table row, so they cannot drift apart", () => {
+  it("totals the selected team from its own players only", () => {
     renderBox();
-    const rows = screen.getAllByTestId("box-score-row");
-    rows.forEach((row) => {
-      // Two row headers per body row: the away name and the home name.
-      expect(within(row).getAllByRole("rowheader")).toHaveLength(2);
-    });
-  });
-
-  it("pads a short side so the tall side keeps its place and totals sit under both", () => {
-    // Drop one player from the home side only, so the home side is one short
-    // and the last row is padding on one side and a real player on the other.
-    const hub = allHub.filter((p) => p.player_id !== "h3");
-    renderBox({ hub });
-    const rows = screen.getAllByTestId("box-score-row");
-    expect(rows).toHaveLength(3);
-    const last = within(rows[2]).getAllByRole("rowheader");
-    expect(last.map((cell) => cell.textContent?.replace(/\s+/g, ""))).toEqual(["AThree", ""]);
-  });
-
-  it("totals each side from its own players only", () => {
-    renderBox();
-    const totals = screen.getByTestId("box-score-totals");
-    // MIA 20+10+5 = 35 points, BOS 30+15+8 = 53. Neither side gets the
-    // other's players, which is the failure a shared total would hide.
-    expect(within(totals).getByText("35.0")).toBeTruthy();
-    expect(within(totals).getByText("53.0")).toBeTruthy();
+    // BOS 30+15+8 = 53. The other team's players never leak in.
+    expect(within(screen.getByTestId("box-score-totals")).getByText("53.0")).toBeTruthy();
+    pick("MIA");
+    expect(within(screen.getByTestId("box-score-totals")).getByText("35.0")).toBeTruthy();
   });
 
   it("says so when a player cannot be matched to either team", () => {
-    const hub = allHub.filter((p) => p.player_id !== "a2");
-    renderBox({ hub });
+    renderBox({ hub: allHub.filter((p) => p.player_id !== "a2") });
     expect(screen.getByText(/could not be matched/i)).toBeTruthy();
   });
 
@@ -256,143 +214,52 @@ describe("PlayerBoxScore", () => {
       ...HOME.flatMap((p) => propsFor(p.id, p.name, [...p.vals], [28, 9, 11, 5])),
     ];
     renderBox({ props: played });
+    pick("MIA");
     const row = screen.getAllByTestId("box-score-row")[0];
-    expect(within(row).getByText("20.0")).toBeTruthy(); // predicted
-    // Actual with the miss against the prediction -- the accuracy signal the
-    // old flat list carried as "off by 2.0".
+    expect(within(row).getByText("20.0")).toBeTruthy();
     expect(within(row).getByText("22 (+2.0)")).toBeTruthy();
-    // and an actual totals row appears, because a team total is the number a
-    // reader wants and it would be wrong to leave them adding it up.
     expect(screen.getByTestId("box-score-actual-totals")).toBeTruthy();
   });
 
   it("scores a rebuilt projection never: no delta, even when it is wrong", () => {
     const rebuilt: PlayerProp[] = [
-      ...AWAY.flatMap((p) =>
-        propsFor(p.id, p.name, [...p.vals], [22, 4, 5, 3]).map((prop) => ({ ...prop, rebuilt: true })),
-      ),
+      ...AWAY.flatMap((p) => propsFor(p.id, p.name, [...p.vals], [22, 4, 5, 3]).map((prop) => ({ ...prop, rebuilt: true }))),
       ...HOME.flatMap((p) => propsFor(p.id, p.name, [...p.vals], [28, 9, 11, 5])),
     ];
     renderBox({ props: rebuilt });
-    const row = screen.getAllByTestId("box-score-row")[0];
-    // Away cells are predicted-then-actual, no delta. A One predicted
-    // 20/5/6/2 and the actuals were 22/4/5/3.
-    const awayCells = within(row).getAllByRole("cell").slice(0, 4);
-    expect(awayCells.map((c) => c.textContent?.replace(/\s+/g, ""))).toEqual(["20.022", "5.04", "6.05", "2.03"]);
-    // The home side of this same row is NOT rebuilt, so its delta is still
-    // there. That is the control: it proves the absence above is the rebuilt
-    // rule and not a missing feature.
-    const homeCells = within(row).getAllByRole("cell").slice(4);
-    expect(homeCells[0].textContent?.replace(/\s+/g, "")).toBe("30.028(-2.0)");
+    const norm = (el: HTMLElement) => within(el).getAllByRole("cell").map((c) => c.textContent?.replace(/\s+/g, ""));
+    // Home is not rebuilt: its delta is the control proving the absence below is the rule.
+    expect(norm(screen.getAllByTestId("box-score-row")[0])[0]).toBe("30.028(-2.0)");
+    pick("MIA");
+    expect(norm(screen.getAllByTestId("box-score-row")[0])).toEqual(["20.022", "5.04", "6.05", "2.03"]);
+    expect(screen.getAllByText("Rebuilt").length).toBeGreaterThan(0);
   });
 
-  it("does not scroll: the whole roster fits the card", () => {
-    renderBox();
-    // Kevin asked for the scrollability gone, the box already being compact.
-    // A cap plus overflow is exactly what made a normal game cut off
-    // mid-table, so the container must declare neither.
-    const scroller = screen.getByTestId("box-score-scroll");
-    expect(scroller.className).toBe("box-score-scroll");
-    const css = readCss();
-    const body = ruleBody(css, ".box-score-scroll {");
-    expect(body).not.toMatch(/max-height/);
-    expect(body).not.toMatch(/overflow/);
-    // And the table must not carry a min-width that would force a scrollbar.
-    expect(ruleBody(css, ".box-score-table {")).not.toMatch(/min-width/);
-    expect(ruleBody(css, ".box-score-table {")).toMatch(/table-layout:\s*fixed/);
+  it("a stat with no projection is an em dash", () => {
+    const props = propsFor("h1", "H One", [30, 10, 12, 4]).filter((p) => p.stat !== "assists");
+    renderBox({ props, hub: [hubRow("h1", "H One", "BOS", "F")] });
+    expect(within(screen.getAllByTestId("box-score-row")[0]).getAllByRole("cell").map((c) => c.textContent)).toEqual(["30.0", "10.0", "—", "4.0"]);
   });
 
-  it("sets the team names like the modal heading: centred, display face, bold", () => {
-    const css = readCss();
-    const body = ruleBody(css, ".box-score-table thead .box-score-team-head {");
-    expect(body).toMatch(/text-align:\s*center/);
-    expect(body).toMatch(/font-family:\s*var\(--font-pr-display\)/);
-    expect(body).toMatch(/font-weight:\s*700/);
-    expect(body).toMatch(/text-transform:\s*uppercase/);
-    expect(body).toMatch(/animation:/);
-    expect(css).toMatch(/@keyframes box-score-team-in/);
+  it("a team with no players gets a one-line message, not an empty table", () => {
+    renderBox({ hub: allHub.filter((p) => p.team !== "MIA") });
+    pick("MIA");
+    expect(screen.getByText("No box score for Heat yet")).toBeTruthy();
+    expect(screen.queryByRole("table")).toBeNull();
   });
 
-  it("balances the column widths, both wide and on a phone", () => {
-    const css = readCss();
-    const widthOf = (selector: string) => Number(ruleBody(css, selector).match(/width:\s*([\d.]+)%/)?.[1]);
-    const name = widthOf(".box-score-col-name {");
-    const stat = widthOf(".box-score-col-stat {");
-    const divider = widthOf(".box-score-col-divider {");
-
-    // 11 columns: name, 4 stats, divider, 4 stats, name -- so TWO name columns
-    // and EIGHT stat columns, which is where an off-by-one here would hide.
-    const awayHalf = name + stat * 4;
-    const homeHalf = stat * 4 + name;
-    expect(awayHalf).toBeCloseTo(homeHalf, 5);
-    expect(name * 2 + stat * 8 + divider).toBeCloseTo(100, 5);
-
-    // The phone case narrows the stat columns and widens the names, so the
-    // ratio has to be re-checked inside the media query.
-    const at = css.indexOf("@media (max-width: 30rem)");
-    expect(at).toBeGreaterThan(-1);
-    const phone = css.slice(at);
-    const phoneWidthOf = (selector: string) =>
-      Number(ruleBody(phone, selector).match(/width:\s*([\d.]+)%/)?.[1]);
-    const pName = phoneWidthOf(".box-score-col-name {");
-    const pStat = phoneWidthOf(".box-score-col-stat {");
-    expect(pName + pStat * 4).toBeCloseTo(pStat * 4 + pName, 5);
-    // The whole point of the rebalance: names gain the width the stats give up.
-    expect(pName).toBeGreaterThan(name);
-    expect(pStat).toBeLessThan(stat);
-  });
-
-  it("holds the wide settled-game cell inside its column on a phone", () => {
-    const css = readCss();
-    // A settled cell reads "24.0" over "24 (-3.5)" -- about 40px of glyphs in
-    // a stat column that is only ~23px on a phone. Without clipping, that
-    // paints over the neighbouring column. Measured, not assumed: the first
-    // version only checked the predicted-only cell, "17.9".
-    const cell = ruleBody(css, ".box-score-cell {");
-    expect(cell).toMatch(/overflow:\s*hidden/);
-    expect(cell).toMatch(/text-overflow:\s*ellipsis/);
-  });
-
-  it("renders one row per player on the tall side, padding the short one", () => {
-    // This test used to be called "does not grow its row count with the player
-    // count", which asserted the opposite of what it checked and referred to a
-    // max-height the scroll removal had already deleted. What it actually
-    // verifies is that a full 22-player game produces one row per player on the
-    // taller side, with the shorter side padded to match.
-    const big: PlayerProp[] = [];
-    const bigHub: PlayerHubRow[] = [];
-    for (let i = 0; i < 11; i++) {
-      big.push(...propsFor(`m${i}`, `Mia ${i}`, [10 + i, 2, 2, 1]));
-      bigHub.push(hubRow(`m${i}`, `Mia ${i}`, "MIA", "G"));
-      big.push(...propsFor(`b${i}`, `Bos ${i}`, [10 + i, 2, 2, 1]));
-      bigHub.push(hubRow(`b${i}`, `Bos ${i}`, "BOS", "G"));
-    }
-    // 44 props per side, 88 props, so 22 players, 11 rows of 11 columns.
-    expect(big).toHaveLength(88);
-    renderBox({ props: big, hub: bigHub });
-    const rows = screen.getAllByTestId("box-score-row");
-    expect(rows).toHaveLength(11);
-    // Every body row is the same shape, so the split stays aligned all the way
-    // down -- this is what the fixed layout plus the symmetric colgroup buys.
-    rows.forEach((row) => {
-      expect(within(row).getAllByRole("cell").length).toBe(8);
-      expect(within(row).getAllByRole("rowheader").length).toBe(2);
-    });
+  it("opens on the away team when only the away team has players", () => {
+    renderBox({ hub: allHub.filter((p) => p.team !== "BOS") });
+    expect(screen.getByRole("rowheader", { name: "A One" })).toBeTruthy();
   });
 
   it("renders no table when there are no props, and says so", () => {
-    // This used to assert the element was null. That was the bug, not the
-    // contract: a caller that asked for a box score got silence with no hint
-    // that anything had failed.
     const { container } = renderBox({ props: [] });
     expect(container.querySelector("table")).toBeNull();
     expect(screen.getByTestId("player-box-score")).toBeInTheDocument();
   });
 
   it("covers exactly the four stats the live feed carries", () => {
-    // Asserted against a fixture holding a fifth, unknown stat rather than
-    // against the literal next to it -- comparing a constant to itself cannot
-    // fail and protects nothing.
     const withUnknown = [
       ...propsFor("x", "X", [10, 5, 5, 1]),
       { player_id: "x", player_name: "X", stat: "fantasy_points", predicted_value: 99, actual_value: null, rebuilt: false },
@@ -400,32 +267,25 @@ describe("PlayerBoxScore", () => {
     const rows = pivotProps(withUnknown);
     expect(Object.keys(rows[0].predicted).sort()).toEqual(["assists", "points", "rebounds", "threes"]);
     expect(rows[0].predicted).not.toHaveProperty("fantasy_points");
-    // And STAT_KEYS is the source of the rendered columns, not a parallel list.
     expect(STAT_KEYS).toHaveLength(4);
   });
 
   it("says so when the team feed is empty, rather than rendering nothing", () => {
-    // A failed hub fetch used to leave hubPlayers as [], which put every player
-    // in "unattributed", which made depth 0, which returned null before the
-    // explainer paragraph. The caller got silence and no hint anything failed.
     renderBox({ hub: [] });
     expect(screen.queryByRole("table")).toBeNull();
     expect(screen.getByText(/team feed did not load/i)).toBeInTheDocument();
   });
 
   it("keeps the actual-totals row well formed when only one side has actuals", () => {
-    // hasActuals(away) alone gated the row while ActualTotals returned null
-    // for a side with no actuals, so the row rendered 7 cells instead of 11 and
-    // the home header landed in the wrong column. A settled game with outcomes
-    // for one team only is reachable.
     const halfPlayed: PlayerProp[] = [
       ...AWAY.flatMap((p) => propsFor(p.id, p.name, [...p.vals], [22, 4, 5, 3])),
       ...HOME.flatMap((p) => propsFor(p.id, p.name, [...p.vals])),
     ];
     renderBox({ props: halfPlayed });
-    const foot = screen.getByTestId("box-score-actual-totals");
-    expect(within(foot).getAllByRole("cell").length).toBe(8);
-    // The side with no actuals says so with a dash rather than vanishing.
-    expect(within(foot).getAllByText("—").length).toBe(4);
+    pick("MIA");
+    expect(within(screen.getByTestId("box-score-actual-totals")).getAllByRole("cell")).toHaveLength(4);
+    pick("BOS");
+    // Home has no actuals at all, so no actual row is drawn for it.
+    expect(screen.queryByTestId("box-score-actual-totals")).toBeNull();
   });
 });

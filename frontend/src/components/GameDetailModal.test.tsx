@@ -100,8 +100,10 @@ describe("GameDetailModal", () => {
     // ambiguous query.
     const head = await screen.findByRole("rowheader", { name: "Nikola Jokic" });
     expect(within(head.closest("tr")!).getByText("27.5")).toBeInTheDocument();
-    // The stat names are column headers now, not per-row text.
-    expect(screen.getAllByRole("columnheader", { name: "Pts" })).toHaveLength(2);
+    // The stat names are column headers now, not per-row text, and the table is
+    // one team at a time: a single Pts column, with a switch for the other team.
+    expect(screen.getAllByRole("columnheader", { name: "Pts" })).toHaveLength(1);
+    expect(screen.getByRole("group", { name: "Box score team" })).toBeInTheDocument();
   });
 
   it("renders the model's projected margin and total, and no bookmaker table", async () => {

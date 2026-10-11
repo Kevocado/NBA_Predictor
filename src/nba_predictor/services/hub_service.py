@@ -214,6 +214,17 @@ def load_player_name_map(path: Path) -> dict[str, str]:
     return {row["player_id"]: row["player_name"] for row in rows}
 
 
+def player_name_map(db_path: Path, hub_path: Path) -> dict[str, str]:
+    """The ONE id -> name resolver: hub players first, then every player the
+    pipeline has seen in a box score. Callers fall back to the id themselves
+    (last resort) when the id is in neither."""
+    from ..tracking import store
+
+    # A blank hub name must not shadow a name we do know: only non-blank hub names take precedence.
+    hub = {k: v for k, v in load_player_name_map(hub_path).items() if isinstance(v, str) and v.strip()}
+    return {**store.load_player_names(db_path), **hub}
+
+
 def counted_picks(db_path: Path, schedule: list[dict]) -> list[tuple[dict, list]]:
     """(game, [COUNTED pick, *reruns]) for every completed game.
 

@@ -699,6 +699,19 @@ def fetch_player_boxscores(games: list[dict]) -> dict[str, list[dict]]:
     return result
 
 
+def record_names_from_boxscores(player_boxscores: dict[str, list[dict]], db_path: Path) -> int:
+    """Persist every (player_id, displayName) in the box scores, hub player or not."""
+    return store.record_player_names(db_path, [r for rows in player_boxscores.values() for r in rows])
+
+
+def backfill_names_from_espn_cache(db_path: Path, cache_dir: Path | None = None) -> int:
+    """One-off backfill: names from every cached player_boxscore_*.json on disk."""
+    cache_dir = cache_dir or espn.ESPN_CACHE_DIR
+    store.init_db(db_path)
+    rows = [r for f in cache_dir.glob("player_boxscore_*.json") for r in json.loads(f.read_text()).get("rows", [])]
+    return store.record_player_names(db_path, rows)
+
+
 def to_player_training_frame(games: list[dict], player_boxscores: dict[str, list[dict]]) -> pd.DataFrame:
     """One row per (player, completed game) with real box-score stats,
     shaped for features.player_stats.build_player_feature_frame."""
@@ -929,6 +942,8 @@ def run_ingest(
         recent_games = [g for g in games if g["game_date"] >= cutoff]
         log(f"Fetching player box scores for {len(recent_games)} games since {cutoff}...")
         player_boxscores = fetch_player_boxscores(recent_games)
+        store.init_db(db_path)
+        record_names_from_boxscores(player_boxscores, db_path)
         (hub_dir / "players.json").write_text(json.dumps(compute_player_hub(recent_games, player_boxscores)))
     else:
         recent_games = []

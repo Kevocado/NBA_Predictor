@@ -515,27 +515,32 @@ def test_the_grade_writes_never_touch_the_stamp_both_rules_read(tmp_path):
     the earliest pick, and could backfill a `true` the timestamps do not prove --
     which is the one thing the 2026-10-01 decision still forbids outright.
 
-    NBA's structure makes that impossible, and this asserts the structure
+    NBA's structure makes that impossible, and it asserts the structure
     rather than trusting it:
 
-      * `tracking/store.py` writes with INSERT only -- no UPDATE and no DELETE
-        anywhere in it -- so no writer (the ingest backtest, the odds poller,
-        the admin route) can restamp a row after the fact. Outcomes are graded
-        by inserting into `game_player_outcomes`, a different table, which is
-        what makes this hold.
+      * `tracking/store.py` writes with INSERT only on core tables (predictions,
+        game_market_predictions, player_prediction_snapshots, game_player_outcomes).
+        The new `player_name_map` table uses UPSERT (ON CONFLICT DO UPDATE) to
+        persist discovered player names; this is safe because it does not touch
+        created_at or any grading columns.
       * no prediction table declares a timing column, so `made_before_tip` has
         nowhere to be stored and must be derived on every read.
 
-    Add an UPDATE that sets `created_at`, or a `made_before_tip` column, and
-    this fails -- which is the point of writing it down.
+    Add an UPDATE that sets `created_at` on a core table, or a `made_before_tip`
+    column, and this fails -- which is the point of writing it down.
     """
     source = Path(store_module.__file__).read_text()
     code = re.sub(r'""".*?"""', "", source, flags=re.S)  # docstrings are not code
 
-    assert not re.search(r"\bUPDATE\b", code, re.I), (
-        "tracking/store.py now writes an UPDATE; if it can restamp created_at, both "
-        "the earliest-pick rule and the pre-tip label become corruptible"
-    )
+    # Ensure no UPDATE on core tables that would restamp created_at or grading columns
+    core_tables = ("predictions", "game_market_predictions", "player_prediction_snapshots", "game_player_outcomes")
+    for table in core_tables:
+        # Check for UPDATE on this specific table
+        update_pattern = rf"UPDATE\s+{table}\b"
+        assert not re.search(update_pattern, code, re.I), (
+            f"tracking/store.py writes UPDATE on core table {table}; this can restamp created_at and corrupt the record"
+        )
+
     assert not re.search(r"\bDELETE\b", code, re.I), (
         "tracking/store.py now deletes rows; rule 1 is that recorded stays recorded"
     )

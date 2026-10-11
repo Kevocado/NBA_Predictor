@@ -50,7 +50,7 @@ from nba_predictor.services.hub_service import (
     compute_track_record,
     compute_vs_market,
     load_hub_cache,
-    load_player_name_map,
+    player_name_map,
     warm_player_props_cache,
 )
 from nba_predictor.services.schedule_repository import (
@@ -442,7 +442,7 @@ def get_game_players(
     if game is None:
         raise HTTPException(status_code=404, detail=f"Unknown game: {game_id}")
 
-    name_by_id = load_player_name_map(config.DATA_DIR / "cache" / "hub" / "players.json")
+    name_by_id = player_name_map(db_path, config.DATA_DIR / "cache" / "hub" / "players.json")
     picks = picks_by_player_stat(db_path, game_id, game)
     actual_by_key = actuals_by_player_stat(db_path, game_id)
 
@@ -498,7 +498,7 @@ def get_game_out_players(
 
     # Prefer the roster's own name for the id, the same source the ranking
     # uses, so the out line and the ranking never disagree on who this is.
-    name_by_id = load_player_name_map(config.DATA_DIR / "cache" / "hub" / "players.json")
+    name_by_id = player_name_map(db_path, config.DATA_DIR / "cache" / "hub" / "players.json")
     return [
         OutPlayerOut(**{**entry, "player_name": name_by_id.get(entry["player_id"], entry["player_name"])})
         for entry in entries
@@ -536,7 +536,7 @@ def get_game_doubtful_players(
 
     # The roster's own name for the id, the same source the ranking uses, so
     # the note and the row it attaches to never disagree on who this is.
-    name_by_id = load_player_name_map(config.DATA_DIR / "cache" / "hub" / "players.json")
+    name_by_id = player_name_map(db_path, config.DATA_DIR / "cache" / "hub" / "players.json")
     return [
         DoubtfulPlayerOut(**{**entry, "player_name": name_by_id.get(entry["player_id"], entry["player_name"])})
         for entry in entries

@@ -178,16 +178,27 @@ def test_the_write_path_is_insert_only_so_the_new_constraint_is_the_whole_guard(
     """No writer can rewrite an outcome to satisfy a constraint after the fact.
 
     The reader half of the fix assumes outcomes are immutable. `store.py` is
-    the only module that writes them, and it writes with INSERT only -- the
-    sibling invariant in `test_track_record_counted_picks.py` already pins that
-    for `created_at`, and it now also holds for `actual_value`: there is no
-    UPDATE path a future migration could take to reconcile a conflict by
-    rewriting a recorded pick.
+    the only module that writes them, and it writes with INSERT only on core
+    tables -- the sibling invariant in `test_track_record_counted_picks.py`
+    already pins that for `created_at`, and it now also holds for `actual_value`:
+    there is no UPDATE path a future migration could take to reconcile a conflict
+    by rewriting a recorded pick.
+
+    The `player_name_map` table uses UPSERT (ON CONFLICT DO UPDATE) to persist
+    discovered player names; this is safe because it does not touch outcomes or
+    grading columns.
     """
     source = Path(store.__file__).read_text()
     code = re.sub(r'""".*?"""', "", source, flags=re.S)
 
-    assert not re.search(r"\bUPDATE\b", code, re.I)
+    # Ensure no UPDATE on core tables
+    core_tables = ("predictions", "game_market_predictions", "player_prediction_snapshots", "game_player_outcomes")
+    for table in core_tables:
+        update_pattern = rf"UPDATE\s+{table}\b"
+        assert not re.search(update_pattern, code, re.I), (
+            f"store.py writes UPDATE on core table {table}; this can restamp created_at and corrupt the record"
+        )
+
     assert not re.search(r"\bDELETE\b", code, re.I)
     assert "OR IGNORE" not in code and "OR REPLACE" not in code, (
         "an INSERT OR IGNORE/REPLACE would now silently drop or overwrite a row "

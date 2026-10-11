@@ -79,7 +79,7 @@ def refresh_stale_player_props(
     schedule: list[dict], db_path: Path, models_dir: Path, *, fetch=None, score=None, now=None
 ) -> int:
     """Re-score the stale upcoming games. Returns rows stored (0 when nothing was stale)."""
-    from nba_predictor.pipeline.ingest import fetch_player_boxscores, score_upcoming_player_props
+    from nba_predictor.pipeline.ingest import fetch_player_boxscores, record_names_from_boxscores, score_upcoming_player_props
 
     fetch = fetch or fetch_player_boxscores
     score = score or score_upcoming_player_props
@@ -89,13 +89,33 @@ def refresh_stale_player_props(
         return 0
     since = (now - timedelta(days=HISTORY_DAYS)).date().isoformat()
     completed = [g for g in schedule if g.get("completed") and g["game_date"] >= since]
-    return score(completed + stale, fetch(completed), models_dir, db_path, model_version="roster-refresh")
+    boxes = fetch(completed)
+    record_names_from_boxscores(boxes, db_path)
+    return score(completed + stale, boxes, models_dir, db_path, model_version="roster-refresh")
+
+
+def rebuild_player_names(schedule: list[dict], db_path: Path, *, fetch=None, now=None) -> int:
+    """Re-learn names from the recent box scores. Run on every boot: the
+    container disk (ESPN cache, and the DB if not on a volume) may be fresh."""
+    from nba_predictor.pipeline.ingest import fetch_player_boxscores
+
+    from nba_predictor.pipeline.ingest import record_names_from_boxscores
+
+    fetch = fetch or fetch_player_boxscores
+    now = now if now is not None else pd.Timestamp.now(tz="UTC")
+    since = (now - timedelta(days=HISTORY_DAYS)).date().isoformat()
+    completed = [g for g in schedule if g.get("completed") and g["game_date"] >= since]
+    return record_names_from_boxscores(fetch(completed), db_path)
 
 
 def start_player_props_refresher(db_path: Path, schedule_path: Path, models_dir: Path, *, tick=TICK_SECONDS) -> threading.Thread:
     from nba_predictor.services.schedule_repository import load_schedule
 
     def _run() -> None:
+        try:
+            rebuild_player_names(load_schedule(schedule_path), db_path)
+        except Exception:  # noqa: BLE001 - names fall back to the id; never stop the refresher
+            logger.exception("player-name rebuild failed")
         while True:
             try:
                 n = refresh_stale_player_props(load_schedule(schedule_path), db_path, models_dir)

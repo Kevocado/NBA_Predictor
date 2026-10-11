@@ -63,7 +63,7 @@ def wired(monkeypatch):
     # status-blind fake is what made the doubtful-player test below pass for the
     # wrong reason on its first run -- the fake returned an OUT entry for a
     # day-to-day one and the real filter never got a say.
-    monkeypatch.setattr(signals_module, "load_player_name_map", lambda path: state["names"])
+    monkeypatch.setattr(signals_module, "player_name_map", lambda db_path, hub_path: state["names"])
     # A future tip-off, so the started rule is not what is under test unless a test
     # says so.
     monkeypatch.setattr(signals_module, "_status", lambda game, now: "scheduled")

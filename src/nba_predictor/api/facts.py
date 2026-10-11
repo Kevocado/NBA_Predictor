@@ -258,12 +258,12 @@ def _player_rows(game_id: str) -> list:
     """The same per-player/stat pick the site's /games/{id}/players uses:
     the newest row before tip-off, else the latest (a rebuilt backtest),
     flagged so a rebuilt projection is never presented as a real one."""
-    from ..services.hub_service import load_player_name_map
+    from ..services.hub_service import player_name_map
 
     game = get_game(_schedule(), game_id)
     if game is None:
         return []
-    name_by_id = load_player_name_map(config.DATA_DIR / "cache" / "hub" / "players.json")
+    name_by_id = player_name_map(_db_path(), config.DATA_DIR / "cache" / "hub" / "players.json")
     by_key: dict[tuple[str, str], list] = {}
     for row in store.get_player_predictions_for_game(_db_path(), game_id):
         by_key.setdefault((row["player_id"], row["stat"]), []).append(row)

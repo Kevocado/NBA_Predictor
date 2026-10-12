@@ -44,7 +44,7 @@ SPORTSBOOK_API_BASE_URL = f"https://{SPORTSBOOK_API_HOST}/v0"
 SPORTSBOOK_NBA_COMPETITION_KEY = "d791-wddv-30fU"
 
 CACHE_DIR = config.CACHE_DIR / "sportsbook"
-CACHE_TTL_SECONDS = 6 * 60 * 60
+CACHE_TTL_SECONDS = 12 * 60 * 60  # was 6h; shared RapidAPI BASIC key (150/day) kept exhausting Oct 11-12 2026
 
 MARKET_TYPE_TO_NAME = {
     "MONEYLINE": "h2h",

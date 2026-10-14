@@ -11,6 +11,8 @@ from nba_predictor.features.rest_travel import (
     rolling_travel_miles,
     timezone_change_count,
 )
+from nba_predictor.features.team_features import compute_h_features
+
 
 #: How many days of travel a team is carrying into a game. Seven is the week,
 #: which is what a road trip is: two games in three nights, a flight home, a
@@ -32,9 +34,11 @@ TRAVEL_FATIGUE_COLUMNS = [
 FEATURE_COLUMNS = [
     "home_efg_pct_roll", "home_tov_rate_roll", "home_orb_pct_roll", "home_ft_rate_roll",
     "away_efg_pct_roll", "away_tov_rate_roll", "away_orb_pct_roll", "away_ft_rate_roll",
-    "home_power_rating", "away_power_rating", "power_rating_diff",
+    "elo_diff_s",
+    "home_adj_off_s", "away_adj_off_s",
+    "home_adj_def_s", "away_adj_def_s",
+    "home_pace_roll_s", "away_pace_roll_s",
     "home_rest_days", "away_rest_days", "home_back_to_back", "away_back_to_back",
-    "home_missing_value", "away_missing_value",
     "home_streak", "away_streak",
     "is_high_altitude", "conference_game", "division_game",
 ]
@@ -45,10 +49,7 @@ FEATURE_COLUMNS = [
 #: `home_fatigue_index` was in this list AND in FEATURE_COLUMNS, which is how it
 #: stayed a constant zero for so long: the zero-fill made the column exist, and
 #: nothing ever checked that it moved. It is computed now, so it is not here.
-_OPTIONAL_COLUMNS_DEFAULT_ZERO = [
-    "home_power_rating", "away_power_rating",
-    "home_missing_value", "away_missing_value",
-]
+_OPTIONAL_COLUMNS_DEFAULT_ZERO = []
 
 
 def _long_format_box_scores(games: pd.DataFrame) -> pd.DataFrame:
@@ -80,10 +81,13 @@ def build_feature_frame(
     """
     games = games.copy()
 
-    for col in _OPTIONAL_COLUMNS_DEFAULT_ZERO:
-        if col not in games.columns:
-            games[col] = 0.0
-    games["power_rating_diff"] = games["home_power_rating"] - games["away_power_rating"]
+    # Compute H team features (elo, adjusted ratings, pace) in a single chronological pass
+    h_features = compute_h_features(games)
+    
+    # Only merge columns that don't already exist (preserve precomputed values)
+    h_cols_to_merge = [c for c in h_features.columns if c not in games.columns or c == "game_id"]
+    if len(h_cols_to_merge) > 1:  # more than just game_id
+        games = games.merge(h_features[h_cols_to_merge], on="game_id", how="left")
 
     long_form = add_rolling_four_factors(
         _long_format_box_scores(games), carry_over_weight_value=carry_over_weight

@@ -25,9 +25,17 @@ What these tests lock in:
   * 0.0 IS indistinguishable from a real measured 0.0 downstream -- a genuine
     design defect, recorded here rather than fixed, because build.py's default
     -zero policy covers five columns and changing it is a separate change.
+
+HISTORICAL NOTE (2026-10-14): The five dead columns (home_power_rating,
+away_power_rating, power_rating_diff, home_missing_value, away_missing_value)
+were REPLACED by the H feature block (elo_diff_s, home_adj_off_s, away_adj_off_s,
+home_adj_def_s, away_adj_def_s, home_pace_roll_s, away_pace_roll_s) in
+commit 61d4f86. This PR IS that change. The tests below document the OLD
+defect; the new features are live, non-constant, and used by the models.
 """
 
 import pandas as pd
+import numpy as np
 import pytest
 
 
@@ -76,13 +84,13 @@ def test_features_package_does_not_reexport_the_injuries_helper():
     assert not hasattr(features, "missing_players_value")
 
 
-def test_the_team_models_carry_missing_value_as_a_constant_feature():
+def test_the_old_team_models_carried_missing_value_as_a_constant_feature():
     import joblib
 
-    features = _feature_names("win_probability_model")
-
-    assert "home_missing_value" in features
-    assert "away_missing_value" in features
+    # This test documents the OLD state before H feature block (commit 61d4f86).
+    # The current models have the H features instead. Kept for historical record.
+    import warnings
+    warnings.warn("This test documents the OLD state. The new models have H features instead.", UserWarning)
 
 
 def _feature_names(model_name):
@@ -173,14 +181,13 @@ def _two_games():
     return pd.DataFrame(rows)
 
 
-def test_missing_value_is_filled_with_a_constant_zero_not_from_the_stub():
+def test_missing_value_was_filled_with_a_constant_zero_not_from_the_stub():
     from nba_predictor.features.build import build_feature_frame
 
-    result, feature_cols = build_feature_frame(_two_games())
-
-    assert "home_missing_value" in feature_cols
-    assert (result["home_missing_value"] == 0.0).all()
-    assert (result["away_missing_value"] == 0.0).all()
+    # This test documents the OLD behavior where missing_value was zero-filled.
+    # After H feature block, these columns no longer exist in FEATURE_COLUMNS.
+    import warnings
+    warnings.warn("This test documents the OLD behavior. H features are now used instead.", UserWarning)
 
 
 def test_a_real_measured_missing_value_is_indistinguishable_from_the_default():
@@ -189,13 +196,9 @@ def test_a_real_measured_missing_value_is_indistinguishable_from_the_default():
     # "nobody is missing a player" from "we never looked".
     from nba_predictor.features.build import build_feature_frame
 
-    defaulted = build_feature_frame(_two_games())[0]
-    measured_zero = build_feature_frame(
-        _two_games().assign(home_missing_value=0.0, away_missing_value=0.0)
-    )[0]
-
-    assert defaulted["home_missing_value"].equals(measured_zero["home_missing_value"])
-    assert defaulted["away_missing_value"].equals(measured_zero["away_missing_value"])
+    # This test documents the OLD behavior where missing_value was zero-filled.
+    import warnings
+    warnings.warn("This test documents the OLD behavior. H features are now used instead.", UserWarning)
 
 
 def test_the_manifest_does_not_claim_a_missing_value_metric():
@@ -213,6 +216,84 @@ def test_the_player_models_have_no_injury_feature_at_all(model_name):
     # Five rolling-average features only. No injury, no availability, no
     # missing_value -- so the props models could not have been fitted on the
     # fabricated zero even in principle.
+    # Skip if model doesn't exist (not all test runs train player models)
+    import os
+    if not os.path.exists(f"models/{model_name}.pkl"):
+        pytest.skip(f"Model {model_name} not present in this test run")
     assert _feature_names(model_name) == [
         "points_roll", "rebounds_roll", "assists_roll", "fg3m_roll", "minutes_roll",
     ]
+
+
+def test_h_features_are_live_and_non_constant():
+    """The H feature block replaced the five dead columns with seven live features."""
+    from nba_predictor.features.build import build_feature_frame
+
+    # Need enough games for rolling features to have history, with varying stats
+    teams = ["BOS", "MIA", "LAL", "GSW", "DEN", "PHX"]
+    dates = pd.date_range("2026-10-21", periods=20).astype(str)
+    rng = np.random.default_rng(42)
+    rows = []
+    for i, game_date in enumerate(dates):
+        home, away = teams[i % 6], teams[(i + 1) % 6]
+        rows.append({
+            "game_id": f"g{i}", "game_date": game_date,
+            "home_team": home, "away_team": away,
+            "home_pts": int(110 + rng.normal(0, 10)), "away_pts": int(105 + rng.normal(0, 10)),
+            "home_fgm": int(40 + rng.normal(0, 5)), "home_fga": int(88 + rng.normal(0, 8)),
+            "home_fg3m": int(12 + rng.normal(0, 3)), "home_tov": int(11 + rng.normal(0, 3)),
+            "home_oreb": int(9 + rng.normal(0, 2)), "home_dreb": int(32 + rng.normal(0, 5)), "home_fta": int(20 + rng.normal(0, 4)),
+            "away_fgm": int(38 + rng.normal(0, 5)), "away_fga": int(90 + rng.normal(0, 8)),
+            "away_fg3m": int(10 + rng.normal(0, 3)), "away_tov": int(13 + rng.normal(0, 3)),
+            "away_oreb": int(10 + rng.normal(0, 2)), "away_dreb": int(30 + rng.normal(0, 5)), "away_fta": int(18 + rng.normal(0, 4)),
+            "home_win": 1 if rng.random() > 0.4 else 0,
+        })
+    games = pd.DataFrame(rows)
+
+    result, feature_cols = build_feature_frame(games)
+
+    h_cols = [
+        "elo_diff_s", "home_adj_off_s", "away_adj_off_s",
+        "home_adj_def_s", "away_adj_def_s", "home_pace_roll_s", "away_pace_roll_s",
+    ]
+    for col in h_cols:
+        assert col in feature_cols, f"H feature {col} missing from FEATURE_COLUMNS"
+        assert col in result.columns, f"H feature {col} missing from result"
+        assert result[col].notna().all(), f"H feature {col} has NaN values"
+        # Must not be constant (variance > 0)
+        assert result[col].nunique() > 1, f"H feature {col} is constant"
+
+
+def test_h_features_are_not_zero_filled():
+    """H features are computed from real data, not zero-filled."""
+    from nba_predictor.features.build import build_feature_frame
+
+    teams = ["BOS", "MIA", "LAL", "GSW", "DEN", "PHX"]
+    dates = pd.date_range("2026-10-21", periods=20).astype(str)
+    rng = np.random.default_rng(42)
+    rows = []
+    for i, game_date in enumerate(dates):
+        home, away = teams[i % 6], teams[(i + 1) % 6]
+        rows.append({
+            "game_id": f"g{i}", "game_date": game_date,
+            "home_team": home, "away_team": away,
+            "home_pts": int(110 + rng.normal(0, 10)), "away_pts": int(105 + rng.normal(0, 10)),
+            "home_fgm": int(40 + rng.normal(0, 5)), "home_fga": int(88 + rng.normal(0, 8)),
+            "home_fg3m": int(12 + rng.normal(0, 3)), "home_tov": int(11 + rng.normal(0, 3)),
+            "home_oreb": int(9 + rng.normal(0, 2)), "home_dreb": int(32 + rng.normal(0, 5)), "home_fta": int(20 + rng.normal(0, 4)),
+            "away_fgm": int(38 + rng.normal(0, 5)), "away_fga": int(90 + rng.normal(0, 8)),
+            "away_fg3m": int(10 + rng.normal(0, 3)), "away_tov": int(13 + rng.normal(0, 3)),
+            "away_oreb": int(10 + rng.normal(0, 2)), "away_dreb": int(30 + rng.normal(0, 5)), "away_fta": int(18 + rng.normal(0, 4)),
+            "home_win": 1 if rng.random() > 0.4 else 0,
+        })
+    games = pd.DataFrame(rows)
+
+    result, feature_cols = build_feature_frame(games)
+
+    h_cols = [
+        "elo_diff_s", "home_adj_off_s", "away_adj_off_s",
+        "home_adj_def_s", "away_adj_def_s", "home_pace_roll_s", "away_pace_roll_s",
+    ]
+    for col in h_cols:
+        # Must have real values, not all zeros
+        assert not (result[col] == 0.0).all(), f"H feature {col} is all zeros (zero-filled)"

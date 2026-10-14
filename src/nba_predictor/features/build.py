@@ -3,22 +3,23 @@ import pandas as pd
 from nba_predictor.features.context import current_streak, game_flags, is_high_altitude
 from nba_predictor.features.four_factors import add_rolling_four_factors
 from nba_predictor.features.rest_travel import compute_rest_days, is_back_to_back
+from nba_predictor.features.team_features import compute_team_blocks
 
 FEATURE_COLUMNS = [
     "home_efg_pct_roll", "home_tov_rate_roll", "home_orb_pct_roll", "home_ft_rate_roll",
     "away_efg_pct_roll", "away_tov_rate_roll", "away_orb_pct_roll", "away_ft_rate_roll",
-    "home_power_rating", "away_power_rating", "power_rating_diff",
+    "elo_diff_s",
+    "home_adj_off_s", "away_adj_off_s",
+    "home_adj_def_s", "away_adj_def_s",
+    "home_pace_roll_s", "away_pace_roll_s",
     "home_rest_days", "away_rest_days", "home_back_to_back", "away_back_to_back",
     "home_fatigue_index", "away_fatigue_index",
-    "home_missing_value", "away_missing_value",
     "home_streak", "away_streak",
     "is_high_altitude", "conference_game", "division_game",
 ]
 
 _OPTIONAL_COLUMNS_DEFAULT_ZERO = [
-    "home_power_rating", "away_power_rating",
     "home_fatigue_index", "away_fatigue_index",
-    "home_missing_value", "away_missing_value",
 ]
 
 
@@ -46,7 +47,10 @@ def build_feature_frame(games: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     for col in _OPTIONAL_COLUMNS_DEFAULT_ZERO:
         if col not in games.columns:
             games[col] = 0.0
-    games["power_rating_diff"] = games["home_power_rating"] - games["away_power_rating"]
+
+    # Compute H team features (elo, adjusted ratings, pace) in a single chronological pass
+    h_features = compute_team_blocks(games)
+    games = games.merge(h_features, on="game_id", how="left")
 
     long_form = add_rolling_four_factors(_long_format_box_scores(games))
     rolled = long_form.set_index(["game_id", "team"])[

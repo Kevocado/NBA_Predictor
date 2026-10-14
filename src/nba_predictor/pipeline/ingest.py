@@ -1,11 +1,14 @@
 import argparse
 import json
+import logging
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import joblib
 import numpy as np
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 from nba_predictor import config
 from nba_predictor.data import espn
@@ -95,6 +98,7 @@ def to_player_scoring_frame(games: list[dict], player_boxscores: dict[str, list[
                                     "assists": None,
                                     "fg3m": None,
                                     "minutes": None,
+                                    "position": box_row.get("position"),
                                 })
     # Also include completed player's real rows so feature frame can compute
     completed_rows = to_player_training_frame(games, player_boxscores)
@@ -112,13 +116,19 @@ def score_upcoming_player_props(games: list[dict], player_boxscores: dict[str, l
     if len(upcoming_frame) == 0:
         return 0
 
-    models = {stat: joblib.load(models_dir / f"player_{stat}_model.pkl") for stat in PLAYER_STAT_TARGET_COLUMNS}
+    models: dict[str, object] = {}
+    for stat in PLAYER_STAT_TARGET_COLUMNS:
+        path = models_dir / f"player_{stat}_model.pkl"
+        try:
+            models[stat] = joblib.load(path)
+        except FileNotFoundError:
+            logger.warning("player model missing, skipping market: %s", path)
     predictions = {stat: predict_player_stat(model, upcoming_frame[feature_cols]) for stat, model in models.items()}
 
     created_at = datetime.now(timezone.utc).isoformat()
     stored = 0
     for i, row in upcoming_frame.iterrows():
-        for stat in PLAYER_STAT_TARGET_COLUMNS:
+        for stat in models:
             store.insert_player_prediction(
                 db_path,
                 game_id=row["game_id"],
@@ -126,6 +136,7 @@ def score_upcoming_player_props(games: list[dict], player_boxscores: dict[str, l
                 stat=stat,
                 predicted_value=float(predictions[stat][i]),
                 created_at=created_at,
+                position=row.get("position"),
             )
             stored += 1
     return stored
@@ -155,6 +166,7 @@ def train_player_prop_models(training_df: pd.DataFrame, models_dir: Path, model_
         metrics=metrics,
         model_version=model_version,
         trained_at=trained_at,
+        training={"n_train_player_games": int(len(frame)), "in_sample_metrics": True},
     )
     write_manifest(manifest, models_dir / "player_props_manifest.json")
     return manifest
@@ -168,13 +180,19 @@ def score_and_store_player_predictions(training_df: pd.DataFrame, models_dir: Pa
     if len(frame) == 0:
         return 0
 
-    models = {stat: joblib.load(models_dir / f"player_{stat}_model.pkl") for stat in PLAYER_STAT_TARGET_COLUMNS}
+    models: dict[str, object] = {}
+    for stat in PLAYER_STAT_TARGET_COLUMNS:
+        path = models_dir / f"player_{stat}_model.pkl"
+        try:
+            models[stat] = joblib.load(path)
+        except FileNotFoundError:
+            logger.warning("player model missing, skipping market: %s", path)
     predictions = {stat: predict_player_stat(model, frame[feature_cols]) for stat, model in models.items()}
 
     created_at = datetime.now(timezone.utc).isoformat()
     stored = 0
     for i, row in frame.iterrows():
-        for stat in PLAYER_STAT_TARGET_COLUMNS:
+        for stat in models:
             store.insert_player_prediction(
                 db_path,
                 game_id=row["game_id"],
@@ -182,6 +200,7 @@ def score_and_store_player_predictions(training_df: pd.DataFrame, models_dir: Pa
                 stat=stat,
                 predicted_value=float(predictions[stat][i]),
                 created_at=created_at,
+                position=row.get("position"),
             )
             stored += 1
     return stored
@@ -267,11 +286,15 @@ def to_scoring_frame(games: list[dict]) -> pd.DataFrame:
         }
         if g.get("completed") and f"home_{BOX_FIELDS[0]}" in g:
             row["home_win"] = int(g["home_pts"] > g["away_pts"])
+            row["home_pts"] = g["home_pts"]
+            row["away_pts"] = g["away_pts"]
             for field in BOX_FIELDS:
                 row[f"home_{field}"] = g[f"home_{field}"]
                 row[f"away_{field}"] = g[f"away_{field}"]
         else:
             row["home_win"] = None
+            row["home_pts"] = None
+            row["away_pts"] = None
             for field in BOX_FIELDS:
                 row[f"home_{field}"] = None
                 row[f"away_{field}"] = None
@@ -295,9 +318,13 @@ def score_upcoming_games(games: list[dict], models_dir: Path, db_path: Path, mod
     # Trusted artifacts: these .pkl files are written by run_retrain_pipeline
     # (via joblib.dump) in this same pipeline run — not from an external or
     # user-uploaded source (same trust boundary as score_and_store_predictions).
-    win_model = joblib.load(models_dir / "win_probability_model.pkl")
-    margin_model = joblib.load(models_dir / "margin_model.pkl")
-    total_model = joblib.load(models_dir / "total_model.pkl")
+    try:
+        win_model = joblib.load(models_dir / "win_probability_model.pkl")
+        margin_model = joblib.load(models_dir / "margin_model.pkl")
+        total_model = joblib.load(models_dir / "total_model.pkl")
+    except FileNotFoundError as exc:
+        logger.warning("game model missing, skipping game scoring: %s", exc.filename)
+        return 0
 
     win_probs = predict_win_probability(win_model, upcoming_frame[feature_cols])
     margins = margin_model.predict(upcoming_frame[feature_cols])
@@ -460,6 +487,7 @@ def to_player_training_frame(games: list[dict], player_boxscores: dict[str, list
                     "assists": row["assists"],
                     "fg3m": fg3m,
                     "minutes": row["minutes"],
+                    "position": row.get("position"),
                 }
             )
     return pd.DataFrame(rows)
@@ -566,9 +594,13 @@ def score_and_store_predictions(games_df: pd.DataFrame, models_dir: Path, db_pat
     # Trusted artifacts: these .pkl files are written by run_retrain_pipeline
     # (via joblib.dump) in this same pipeline run — not from an external or
     # user-uploaded source.
-    win_model = joblib.load(models_dir / "win_probability_model.pkl")
-    margin_model = joblib.load(models_dir / "margin_model.pkl")
-    total_model = joblib.load(models_dir / "total_model.pkl")
+    try:
+        win_model = joblib.load(models_dir / "win_probability_model.pkl")
+        margin_model = joblib.load(models_dir / "margin_model.pkl")
+        total_model = joblib.load(models_dir / "total_model.pkl")
+    except FileNotFoundError as exc:
+        logger.warning("game model missing, skipping game scoring: %s", exc.filename)
+        return 0
 
     frame, feature_cols = build_training_frame(games_df)
     if len(frame) == 0:

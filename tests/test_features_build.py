@@ -53,19 +53,17 @@ def test_build_training_frame_fills_missing_optional_columns_with_zero():
     games = _sample_games()
     result_df, _ = build_training_frame(games)
 
-    assert (result_df["home_power_rating"] == 0.0).all()
     assert (result_df["home_fatigue_index"] == 0.0).all()
-    assert (result_df["home_missing_value"] == 0.0).all()
 
 
 def test_build_training_frame_respects_precomputed_optional_columns():
     from nba_predictor.features.build import build_training_frame
 
     games = _sample_games()
-    games["home_power_rating"] = 1550.0
+    games["home_fatigue_index"] = 5.0
     result_df, _ = build_training_frame(games)
 
-    assert (result_df["home_power_rating"] == 1550.0).all()
+    assert (result_df["home_fatigue_index"] == 5.0).all()
 
 
 def test_build_feature_frame_computes_rolling_features_for_upcoming_game():

@@ -753,3 +753,28 @@ def test_missing_game_model_skips_scoring(tmp_path, caplog):
         n = ingest.score_upcoming_games(games, models_dir, db_path, "v1")
     assert n == 0
     assert any("win_probability_model.pkl" in r.message for r in caplog.records)
+
+
+def _http_error(status):
+    import requests
+    resp = requests.Response(); resp.status_code = status
+    return requests.HTTPError(f"{status}", response=resp)
+
+
+def test_a_404_box_score_skips_that_game_but_other_errors_still_raise(monkeypatch):
+    import pytest
+    from nba_predictor.pipeline import ingest
+    games = [{"game_id": "dead", "completed": True, "home_team": "BOS", "away_team": "MIA"}]
+
+    def boom(status):
+        def _get(_gid):
+            raise _http_error(status)
+        return _get
+
+    monkeypatch.setattr(ingest.espn, "get_boxscore", boom(404))
+    assert ingest.enrich_with_boxscores(games) == games  # un-enriched, not dropped, not raised
+    monkeypatch.setattr(ingest.espn, "get_player_boxscore", boom(404))
+    assert ingest.fetch_player_boxscores(games) == {}
+    monkeypatch.setattr(ingest.espn, "get_boxscore", boom(500))
+    with pytest.raises(Exception):
+        ingest.enrich_with_boxscores(games)

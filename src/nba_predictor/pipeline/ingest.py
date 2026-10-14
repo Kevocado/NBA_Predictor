@@ -7,6 +7,7 @@ from pathlib import Path
 import joblib
 import numpy as np
 import pandas as pd
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -286,13 +287,26 @@ def fetch_schedule_range(start_date: str, end_date: str) -> list[dict]:
     return games
 
 
+def _is_missing_event(err: requests.HTTPError) -> bool:
+    return err.response is not None and err.response.status_code == 404
+
+
 def enrich_with_boxscores(games: list[dict]) -> list[dict]:
     """Adds flat home_*/away_* box-score fields to completed games with a full box score."""
     enriched = []
     for game in games:
         game = dict(game)
         if game["completed"]:
-            box = espn.get_boxscore(game["game_id"])
+            try:
+                box = espn.get_boxscore(game["game_id"])
+            except requests.HTTPError as err:
+                if not _is_missing_event(err):
+                    raise
+                # ESPN has no summary for this event (postponed/voided): leave it un-enriched. to_training_frame
+                # already skips completed games without box fields, so one dead event must not stop the refresh.
+                logging.getLogger(__name__).warning("no box score for event %s (404); skipping", game["game_id"])
+                enriched.append(game)
+                continue
             home_box, away_box = box.get(game["home_team"]), box.get(game["away_team"])
             if home_box and away_box and all(k in home_box for k in BOX_FIELDS) and all(k in away_box for k in BOX_FIELDS):
                 for field in BOX_FIELDS:
@@ -695,7 +709,12 @@ def fetch_player_boxscores(games: list[dict]) -> dict[str, list[dict]]:
     result = {}
     for game in games:
         if game.get("completed"):
-            result[game["game_id"]] = espn.get_player_boxscore(game["game_id"])
+            try:
+                result[game["game_id"]] = espn.get_player_boxscore(game["game_id"])
+            except requests.HTTPError as err:
+                if not _is_missing_event(err):
+                    raise
+                logging.getLogger(__name__).warning("no player box score for event %s (404); skipping", game["game_id"])
     return result
 
 

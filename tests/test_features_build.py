@@ -55,13 +55,17 @@ def test_build_training_frame_fills_missing_optional_columns_with_zero():
     zero-fill made the column exist and nothing checked that it moved. It is
     computed now, so it is not zero-filled and this test must not claim it is.
     """
-    from nba_predictor.features.build import build_training_frame
+    from nba_predictor.features.build import build_training_frame, _OPTIONAL_COLUMNS_DEFAULT_ZERO
 
     games = _sample_games()
     result_df, _ = build_training_frame(games)
 
-    assert (result_df["home_power_rating"] == 0.0).all()
-    assert (result_df["home_missing_value"] == 0.0).all()
+    # _OPTIONAL_COLUMNS_DEFAULT_ZERO is now empty (no columns are zero-filled by default)
+    # but the H features should have valid computed values, not NaN
+    assert len(_OPTIONAL_COLUMNS_DEFAULT_ZERO) == 0
+    for col in ["elo_diff_s", "home_adj_off_s", "away_adj_off_s", "home_adj_def_s", "away_adj_def_s", "home_pace_roll_s", "away_pace_roll_s"]:
+        assert col in result_df.columns
+        assert not result_df[col].isna().all(), f"{col} should be computed, not NaN"
 
     # The fatigue index is computed, not filled, so it must actually move.
     assert not (result_df["home_fatigue_index"] == 0.0).all(), (
@@ -92,10 +96,13 @@ def test_build_training_frame_respects_precomputed_optional_columns():
     from nba_predictor.features.build import build_training_frame
 
     games = _sample_games()
-    games["home_power_rating"] = 1550.0
+    # Add required fg3a columns for H features computation
+    games["home_fg3a"] = 30
+    games["away_fg3a"] = 32
+    games["elo_diff_s"] = 5.0
     result_df, _ = build_training_frame(games)
 
-    assert (result_df["home_power_rating"] == 1550.0).all()
+    assert (result_df["elo_diff_s"] == 5.0).all()
 
 
 def test_build_feature_frame_computes_rolling_features_for_upcoming_game():

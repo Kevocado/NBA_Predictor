@@ -382,11 +382,15 @@ def to_scoring_frame(games: list[dict]) -> pd.DataFrame:
         }
         if g.get("completed") and f"home_{BOX_FIELDS[0]}" in g:
             row["home_win"] = int(g["home_pts"] > g["away_pts"])
+            row["home_pts"] = g["home_pts"]
+            row["away_pts"] = g["away_pts"]
             for field in BOX_FIELDS:
                 row[f"home_{field}"] = g[f"home_{field}"]
                 row[f"away_{field}"] = g[f"away_{field}"]
         else:
             row["home_win"] = None
+            row["home_pts"] = None
+            row["away_pts"] = None
             for field in BOX_FIELDS:
                 row[f"home_{field}"] = None
                 row[f"away_{field}"] = None

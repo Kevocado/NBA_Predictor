@@ -62,10 +62,14 @@ def compute_h_features(games: pd.DataFrame) -> pd.DataFrame:
         row = {"game_id": r.game_id}
 
         # Check if this game has box scores (completed game)
+        # Use getattr with np.nan default to handle missing attributes from itertuples
+        def g(name):
+            return getattr(r, name, np.nan)
+
         has_box = (
-            pd.notna(r.home_fga) and pd.notna(r.home_oreb) and pd.notna(r.home_tov) and pd.notna(r.home_fta) and
-            pd.notna(r.away_fga) and pd.notna(r.away_oreb) and pd.notna(r.away_tov) and pd.notna(r.away_fta) and
-            pd.notna(r.home_pts) and pd.notna(r.away_pts)
+            pd.notna(g("home_fga")) and pd.notna(g("home_oreb")) and pd.notna(g("home_tov")) and pd.notna(g("home_fta")) and
+            pd.notna(g("away_fga")) and pd.notna(g("away_oreb")) and pd.notna(g("away_tov")) and pd.notna(g("away_fta")) and
+            pd.notna(g("home_pts")) and pd.notna(g("away_pts"))
         )
 
         for side, t, o in (("home", h, a), ("away", a, h)):
@@ -81,14 +85,14 @@ def compute_h_features(games: pd.DataFrame) -> pd.DataFrame:
 
         # ---- fold this game's result into state AFTER the row is recorded
         if has_box:
-            ph = _poss(r.home_fga, r.home_oreb, r.home_tov, r.home_fta)
-            pa = _poss(r.away_fga, r.away_oreb, r.away_tov, r.away_fta)
+            ph = _poss(g("home_fga"), g("home_oreb"), g("home_tov"), g("home_fta"))
+            pa = _poss(g("away_fga"), g("away_oreb"), g("away_tov"), g("away_fta"))
             poss = (ph + pa) / 2
 
             res = {}
             for side, t, o, pts, opp_pts, fga, fg3m, fg3a in (
-                ("home", h, a, r.home_pts, r.away_pts, r.home_fga, r.home_fg3m, getattr(r, "home_fg3a", np.nan)),
-                ("away", a, h, r.away_pts, r.home_pts, r.away_fga, r.away_fg3m, getattr(r, "away_fg3a", np.nan)),
+                ("home", h, a, g("home_pts"), g("away_pts"), g("home_fga"), g("home_fg3m"), g("home_fg3a")),
+                ("away", a, h, g("away_pts"), g("home_pts"), g("away_fga"), g("away_fg3m"), g("away_fg3a")),
             ):
                 ortg, drtg = pts / poss * 100, opp_pts / poss * 100
                 o_alld = cum[o]["drtg"] / ngames[o] if ngames[o] else (lg_ortg if lg_n else ortg)
@@ -121,11 +125,11 @@ def compute_h_features(games: pd.DataFrame) -> pd.DataFrame:
 
             # Elo (repo constants) and a margin-of-victory variant
             exp = 1.0 / (1.0 + 10 ** (-(elo[h] - elo[a]) / ELO_SCALE))
-            win = 1.0 if r.home_pts > r.away_pts else 0.0
+            win = 1.0 if g("home_pts") > g("away_pts") else 0.0
             elo[h] += ELO_K * (win - exp)
             elo[a] -= ELO_K * (win - exp)
             expm = 1.0 / (1.0 + 10 ** (-(elo_mov[h] - elo_mov[a] + HOME_COURT) / ELO_SCALE))
-            mult = np.log(abs(r.home_pts - r.away_pts) + 1.0) * 0.7 + 0.5
+            mult = np.log(abs(g("home_pts") - g("away_pts")) + 1.0) * 0.7 + 0.5
             elo_mov[h] += ELO_K * mult * (win - expm)
             elo_mov[a] -= ELO_K * mult * (win - expm)
 

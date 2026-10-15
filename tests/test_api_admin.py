@@ -54,6 +54,18 @@ def test_retrain_succeeds_when_training_cache_present(tmp_path, monkeypatch):
         )
     (tmp_path / "training_games.json").write_text(json.dumps(rows))
 
+    # Refuses to train the availability features as zeros when the player box scores are not there.
+    refused = client.post("/retrain")
+    assert refused.status_code == 409 and "players.json" in refused.json()["detail"]
+
+    player_rows = []
+    for i, game_date in enumerate(dates):
+        for team in (teams[i % 4], teams[(i + 1) % 4]):
+            for k in range(9):
+                player_rows.append({"game_id": f"g{i}", "game_date": str(game_date), "team": team, "player_id": f"{team}{k}",
+                                    "minutes": 30 - k, "points": 10, "rebounds": 4, "assists": 3})
+    (tmp_path / "players.json").write_text(json.dumps(player_rows))
+
     response = client.post("/retrain")
     assert response.status_code == 200
     assert response.json()["models"] == ["win_probability", "margin", "total"]

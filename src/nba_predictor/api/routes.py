@@ -731,7 +731,15 @@ def retrain(
 
     # The availability features need player box scores; ingest writes them next to games.json.
     players_path = training_games_path.with_name("players.json")
-    players = pd.DataFrame(json.loads(players_path.read_text())) if players_path.exists() else None
+    if not players_path.exists():
+        # Without it the four availability columns would be trained as constant zeros and then served with real values:
+        # the fitted-on-a-constant defect this repo has already paid for once (power_rating / missing_value).
+        raise HTTPException(
+            status_code=409,
+            detail="No player box-score cache (players.json) next to the training games; run the ingest first. "
+                   "Refusing to train the availability features as zeros.",
+        )
+    players = pd.DataFrame(json.loads(players_path.read_text()))
     return run_retrain_pipeline(games, models_dir, model_version=model_version, trained_at=trained_at, players=players)
 
 

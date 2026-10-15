@@ -777,7 +777,15 @@ def to_player_training_frame(games: list[dict], player_boxscores: dict[str, list
                                  else game.get("home_team")),
                 }
             )
-    return pd.DataFrame(rows)
+    # With no rows (an off-season 21-day window) a bare DataFrame has no columns and the next stage died with
+    # KeyError: 'player_id'. Keep the schema so an empty window is an empty frame, not a crash.
+    return pd.DataFrame(rows, columns=None if rows else PLAYER_TRAINING_COLUMNS)
+
+
+PLAYER_TRAINING_COLUMNS = [
+    "player_id", "player_name", "team", "game_id", "game_date", "points", "rebounds", "assists", "fg3m", "minutes",
+    "position", "fgm", "fga", "home_team", "away_team", "opponent",
+]
 
 
 def compute_player_hub(games: list[dict], player_boxscores: dict[str, list[dict]]) -> list[dict]:

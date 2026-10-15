@@ -778,3 +778,13 @@ def test_a_404_box_score_skips_that_game_but_other_errors_still_raise(monkeypatc
     monkeypatch.setattr(ingest.espn, "get_boxscore", boom(500))
     with pytest.raises(Exception):
         ingest.enrich_with_boxscores(games)
+
+
+def test_an_empty_player_window_keeps_its_schema_instead_of_crashing_the_next_stage():
+    """Off-season: no completed game in the 21-day window -> no player rows. A bare DataFrame([]) has no columns and
+    train_player_prop_models died with KeyError: 'player_id'."""
+    from nba_predictor.pipeline import ingest
+
+    frame = ingest.to_player_training_frame([], {})
+    assert frame.empty and "player_id" in frame.columns
+    assert list(frame.columns) == ingest.PLAYER_TRAINING_COLUMNS

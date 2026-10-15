@@ -213,6 +213,8 @@ export interface TrackRecord {
   per_pick?: TrackRecordPick[];
   /** False when the backend has no rule for judging this market: never render a rate. */
   settled?: boolean;
+  /** Player props only: how far the projections were off, per stat (no hit rate exists for them). */
+  per_stat?: { stat: string; n: number; mae: number; mean_signed_error: number }[];
   /** Every week since tracking began, through this week; gaps carried as tracked=false. */
   weekly?: TrackRecordWeek[];
 }

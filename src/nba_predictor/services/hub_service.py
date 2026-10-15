@@ -734,8 +734,11 @@ def _summarize_player_props(db_path: Path) -> TrackRecordOut | None:
     return TrackRecordOut(
         market="player_props",
         total_predictions=counted,
+        # Props are judged by how far off the projection was, not by a hit/miss rule, so there is NO hit rate. These
+        # used to be correct=0 / hit_rate=0.0 / settled=True, which a reader sees as "0% right on 121,148 picks".
         correct_predictions=0,
-        hit_rate=0.0,
+        hit_rate=None,
+        settled=False,
         per_stat=per_stat,
         per_position_mae=per_position_mae,
     )

@@ -21,6 +21,7 @@ const MARKETS: Record<string, string> = {
   player_props: "Player props",
 };
 const ORDER = Object.keys(MARKETS);
+const STAT_LABEL: Record<string, string> = { points: "Points", rebounds: "Rebounds", assists: "Assists", threes: "Threes", steals: "Steals", blocks: "Blocks" };
 const rank = (market: string) => (ORDER.includes(market) ? ORDER.indexOf(market) : ORDER.length);
 const labelFor = (market: string) => MARKETS[market] ?? market;
 
@@ -57,7 +58,9 @@ export default function TrackRecordPanel() {
   if (rows.length === 0) return <EmptyState message="No tracked predictions yet. Picks are graded here once their games are final." />;
 
   const settled = [...rows].filter((r) => r.settled).sort((a, b) => rank(a.market) - rank(b.market));
-  const unsettled = rows.filter((r) => !r.settled);
+  const props = rows.find((r) => r.market === "player_props" && !r.settled && (r.per_stat?.length ?? 0) > 0);
+  // Props are judged by error, shown in their own block; "no results rule yet" would be the wrong thing to say about them.
+  const unsettled = rows.filter((r) => !r.settled && r !== props);
   const lead = settled.find((r) => r.market === "game_outcome") ?? settled[0];
 
   const tally: TallyRow[] = settled
@@ -129,6 +132,28 @@ export default function TrackRecordPanel() {
           <RecentPicks picks={allPicks} labelFor={labelFor} />
         </Block>
       </div>
+
+      {props && (
+        <Block id="tr-props" title="Player projections: how far off">
+          <p className="max-w-prose text-sm text-pr-text-dim">
+            Props have no win/lose result, so they are judged by the average miss between the projection and what the player
+            did, over {n0(props.total_predictions)} projections that have since been played.
+          </p>
+          <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {props.per_stat!.map((s) => (
+              <li key={s.stat} data-testid={`prop-stat-${s.stat}`} className="rounded-pr border border-pr-rule bg-pr-panel px-4 py-3">
+                <p className="text-xs text-pr-text-dim">{STAT_LABEL[s.stat] ?? s.stat}</p>
+                <p className="font-pr-display text-lg font-semibold tabular-nums text-pr-text">
+                  off by {s.mae.toFixed(1)} <span className="text-pr-text-faint">on average</span>
+                </p>
+                <p className="text-xs text-pr-text-faint">
+                  {s.mean_signed_error > 0.05 ? `runs high by ${s.mean_signed_error.toFixed(1)}` : s.mean_signed_error < -0.05 ? `runs low by ${Math.abs(s.mean_signed_error).toFixed(1)}` : "no lean"} · {n0(s.n)} games
+                </p>
+              </li>
+            ))}
+          </ul>
+        </Block>
+      )}
 
       {backtest.length > 0 && (
         <Block id="tr-backtest" title="Backtest, not counted">

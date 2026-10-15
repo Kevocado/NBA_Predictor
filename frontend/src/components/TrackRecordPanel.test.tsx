@@ -41,7 +41,8 @@ const LIVE: Row[] = [
       { bucket: "70%+", total_predictions: 3, correct_predictions: 1, hit_rate: 0.333 },
     ],
   }),
-  row({ market: "player_props", settled: false, total_predictions: 121148 }),
+  row({ market: "player_props", settled: false, total_predictions: 121148,
+        per_stat: [{ stat: "points", n: 20000, mae: 4.8, mean_signed_error: 0.31 }, { stat: "rebounds", n: 20000, mae: 1.9, mean_signed_error: -0.02 }] } as Parameters<typeof row>[0]),
 ];
 
 beforeEach(() => {
@@ -93,6 +94,14 @@ describe("TrackRecordPanel", () => {
     render(<TrackRecordPanel />);
     const rows = await screen.findAllByTestId("recent-pick");
     expect(rows).toHaveLength(2);
+  });
+
+  it("shows props by how far off they are, never as a hit rate", async () => {
+    render(<TrackRecordPanel />);
+    expect(await screen.findByTestId("prop-stat-points")).toHaveTextContent("off by 4.8");
+    expect(screen.getByTestId("prop-stat-points")).toHaveTextContent("runs high by 0.3");
+    expect(screen.getByTestId("prop-stat-rebounds")).toHaveTextContent("no lean");
+    expect(screen.queryByText(/no results rule yet/i)).toBeNull();
   });
 
   it("never prints a rate for a market the backend cannot judge", async () => {

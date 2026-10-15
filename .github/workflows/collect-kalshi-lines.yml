@@ -1,0 +1,40 @@
+name: Collect Kalshi NBA lines
+
+# Free, public, no key: snapshots Kalshi's per-game moneyline / spread / total and player-stat markets (the market's own lines) and the
+# outcomes of recently settled ones into data/lines/*.jsonl.gz. Twice a day is enough to capture the opening line and
+# the late line; the files are gzip and one per UTC day. Not a deploy trigger (data/** is NBA has no push-triggered deploy).
+
+on:
+  schedule:
+    - cron: "30 15 * * *"
+    - cron: "15 23 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: collect-kalshi-lines
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install requests
+        run: pip install requests
+      - name: Collect
+        run: python src/nba_predictor/data/kalshi_lines.py
+      - name: Commit and push if changed
+        run: |
+          if [ -z "$(git status --porcelain data/lines)" ]; then echo "nothing new"; exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/lines
+          git commit -m "Collect Kalshi NBA lines [automated]"
+          git pull --rebase -q
+          git push

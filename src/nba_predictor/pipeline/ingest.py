@@ -398,7 +398,9 @@ def to_scoring_frame(games: list[dict]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def score_upcoming_games(games: list[dict], models_dir: Path, db_path: Path, model_version: str) -> int:
+def score_upcoming_games(
+    games: list[dict], models_dir: Path, db_path: Path, model_version: str, players: pd.DataFrame | None = None,
+) -> int:
     """Scores every not-yet-completed game using real prior-game rolling
     features (via to_scoring_frame + build_feature_frame) and stores the
     result in the same predictions table score_and_store_predictions
@@ -411,7 +413,7 @@ def score_upcoming_games(games: list[dict], models_dir: Path, db_path: Path, mod
     not used; if the manifest lacks margin_sigma, we fail loudly rather than
     silently falling back."""
     scoring_df = to_scoring_frame(games)
-    frame, feature_cols = build_feature_frame(scoring_df)
+    frame, feature_cols = build_feature_frame(scoring_df, players=players)
     upcoming_frame = frame[frame["home_win"].isna()].reset_index(drop=True)
     if len(upcoming_frame) == 0:
         return 0
@@ -867,7 +869,9 @@ def compute_player_hub(games: list[dict], player_boxscores: dict[str, list[dict]
     return rows
 
 
-def score_and_store_predictions(games_df: pd.DataFrame, models_dir: Path, db_path: Path, model_version: str) -> int:
+def score_and_store_predictions(
+    games_df: pd.DataFrame, models_dir: Path, db_path: Path, model_version: str, players: pd.DataFrame | None = None,
+) -> int:
     """Scores every game that survives feature assembly with the trained model
     and stores the result as a tracked prediction. Returns the number stored.
 
@@ -899,7 +903,7 @@ def score_and_store_predictions(games_df: pd.DataFrame, models_dir: Path, db_pat
     if margin_sigma is None or not np.isfinite(margin_sigma) or margin_sigma <= 0:
         raise ValueError(f"manifest missing positive finite margin_sigma; cannot serve win-from-margin. Got: {margin_sigma!r}")
 
-    frame, feature_cols = build_training_frame(games_df)
+    frame, feature_cols = build_training_frame(games_df, players=players)
     if len(frame) == 0:
         return 0
 
@@ -960,11 +964,17 @@ def run_ingest(
     (hub_dir / "rankings.json").write_text(json.dumps(compute_power_rankings(games)))
     (hub_dir / "standings.json").write_text(json.dumps(compute_standings(games)))
 
+    # Player box scores for EVERY completed game in the window (not just the hub window): the availability
+    # features fold cumulative minutes from the first game of the window, so a bounded recent fetch would
+    # rebuild them from ~3 weeks of history. The ESPN cache is gitignored, so on a CI runner this is one extra
+    # request per game (~0.2s throttle each) -- the same count as the team box scores fetched above.
+    all_player_boxscores = fetch_player_boxscores(games)
     if player_hub_days > 0:
         cutoff = (date.fromisoformat(end) - timedelta(days=player_hub_days)).isoformat()
         recent_games = [g for g in games if g["game_date"] >= cutoff]
-        log(f"Fetching player box scores for {len(recent_games)} games since {cutoff}...")
-        player_boxscores = fetch_player_boxscores(recent_games)
+        recent_ids = {g["game_id"] for g in recent_games}
+        player_boxscores = {gid: rows for gid, rows in all_player_boxscores.items() if gid in recent_ids}
+        log(f"Player box scores: {len(all_player_boxscores)} games in window, {len(player_boxscores)} since {cutoff} for the hub/props...")
         store.init_db(db_path)
         record_names_from_boxscores(player_boxscores, db_path)
         (hub_dir / "players.json").write_text(json.dumps(compute_player_hub(recent_games, player_boxscores)))
@@ -972,6 +982,7 @@ def run_ingest(
         recent_games = []
         player_boxscores = {}
         (hub_dir / "players.json").write_text(json.dumps([]))
+    availability_players = to_player_training_frame(games, all_player_boxscores)
     log(f"  wrote hub caches to {hub_dir}")
 
     training_df = to_training_frame(games)
@@ -985,11 +996,18 @@ def run_ingest(
     training_path.write_text(json.dumps(training_df.to_dict(orient="records")))
     summary["training_games_written"] = len(training_df)
     log(f"  wrote {training_path}")
+    # Slim player rows for the admin /retrain endpoint (same untracked cache dir as games.json).
+    slim = ["game_id", "game_date", "team", "player_id", "minutes", "points", "rebounds", "assists"]
+    (training_path.parent / "players.json").write_text(
+        json.dumps(availability_players[slim].to_dict(orient="records") if len(availability_players) else [])
+    )
 
     models_dir = config.PROJECT_ROOT / "models"
     model_version = datetime.now(timezone.utc).strftime("v%Y%m%d%H%M%S")
     trained_at = datetime.now(timezone.utc).isoformat()
-    manifest = run_retrain_pipeline(training_df, models_dir, model_version=model_version, trained_at=trained_at)
+    manifest = run_retrain_pipeline(
+        training_df, models_dir, model_version=model_version, trained_at=trained_at, players=availability_players,
+    )
     summary["team_model_metrics"] = manifest["metrics"]
     log(f"  trained {model_version}: {manifest['metrics']}")
 
@@ -1004,11 +1022,11 @@ def run_ingest(
     else:
         store.init_db(db_path)
 
-        stored = score_and_store_predictions(training_df, models_dir, db_path, model_version)
+        stored = score_and_store_predictions(training_df, models_dir, db_path, model_version, players=availability_players)
         summary["completed_predictions_stored"] = stored
         log(f"  stored {stored} real predictions for browsing in the UI")
 
-        stored_upcoming = score_upcoming_games(games, models_dir, db_path, model_version)
+        stored_upcoming = score_upcoming_games(games, models_dir, db_path, model_version, players=availability_players)
         summary["upcoming_predictions_stored"] = stored_upcoming
         log(f"  stored {stored_upcoming} predictions for upcoming games")
 

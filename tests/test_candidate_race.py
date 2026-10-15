@@ -27,7 +27,7 @@ from nba_predictor.models.candidate_race import (
 
 
 def make_real_games(n: int = 200) -> pd.DataFrame:
-    """A frame shaped like the real one: the 24 FEATURE_COLUMNS plus the target
+    """A frame shaped like the real one: the FEATURE_COLUMNS plus the target
     columns. Built from the real column set on purpose -- the rejected attempts
     grew `strength` branches that only ever fire for a synthetic fixture."""
     rng = np.random.default_rng(0)

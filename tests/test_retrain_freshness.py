@@ -160,8 +160,10 @@ def test_ingest_writes_the_training_cache_the_admin_endpoint_reads(tmp_path, mon
     # run_ingest leaves behind for POST /retrain, and training is covered above.
     monkeypatch.setattr(
         ingest, "run_retrain_pipeline",
-        lambda games, models_dir, model_version, trained_at: {"metrics": {}},
+        lambda games, models_dir, model_version, trained_at, players=None: {"metrics": {}},
     )
+    # Player boxes (availability features) are fetched for the whole window; none here, so no network.
+    monkeypatch.setattr(ingest, "fetch_player_boxscores", lambda gs: {})
     monkeypatch.setattr(
         ingest, "train_player_prop_models",
         lambda *a, **k: {"metrics": {}},
@@ -186,3 +188,5 @@ def test_ingest_writes_the_training_cache_the_admin_endpoint_reads(tmp_path, mon
     # The box fields are the whole point -- to_schedule_cache drops them.
     assert "home_fgm" in rows[0], "training cache has no box-score fields"
     assert rows[0]["home_fgm"] == 40
+    # ...and the player cache the availability features read, empty here because the stub fetched none.
+    assert json.loads((training_path.parent / "players.json").read_text()) == []

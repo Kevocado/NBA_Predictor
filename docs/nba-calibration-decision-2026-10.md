@@ -85,3 +85,11 @@ metric in the rule. The clause now fails only when the interval of `candidate - 
 Unchanged: the absolute bar (0.0591) still applies in every case; AUC must still exclude a decline; the other four metrics must
 still each improve with an interval excluding zero; and a caller that does not pass `gap_widened` gets the old strict comparison.
 Per-target scoping is deliberately NOT changed: win, margin and total are still judged together by one rule.
+
+## Addendum 2026-10-15 (2): promotion needs one clear improvement and no clear decline
+
+Kevin's call: do not hold back a candidate that clearly improves one target because another stays level. `ship_decision` now
+defaults to `any_improves_none_worse`: at least one metric (win log-loss, Brier or AUC, margin MAE, total MAE) improves with an
+interval excluding zero, and NO metric is significantly worse (interval wholly on the worse side). AUC must still exclude a decline
+and the calibration clause (absolute bar + the paired-interval "must not widen") is unchanged. `mode="all_improve"` is the previous
+rule. Margin, total and win are still scored on the same games in one decision; there is no separate per-target gate.

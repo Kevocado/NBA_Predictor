@@ -258,3 +258,16 @@ def test_a_rerun_does_not_replace_the_counted_player_prop(tmp_path):
     assert prop.total_predictions == 1, "the rerun was counted a second time"
     assert [s.stat for s in prop.per_stat] == ["points"]
     assert prop.per_stat[0].mae == 5.0, prop.per_stat
+
+
+def test_player_props_are_unsettled_and_carry_no_hit_rate(tmp_path):
+    """Props are judged by error. They used to ship correct=0 / hit_rate=0.0 / settled=True, which the page read as
+    '0% right on N picks'; the real figures are per_stat / per_position_mae."""
+    db_path = _db(tmp_path)
+    store.insert_player_prediction(db_path, player_id="p1", game_id="g1", stat="points", predicted_value=20.0,
+                                   created_at="2026-01-01T00:00:00+00:00", position="G")
+    store.insert_player_outcome(db_path, player_id="p1", game_id="g1", stat="points", actual_value=25.0,
+                                recorded_at="2026-01-02T00:00:00+00:00")
+    prop = {r.market: r for r in hub_service.compute_track_record(db_path, [])}["player_props"]
+    assert prop.settled is False and prop.hit_rate is None
+    assert prop.per_stat and prop.per_stat[0].mae == 5.0

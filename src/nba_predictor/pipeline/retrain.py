@@ -78,7 +78,10 @@ def _nba_season_start_year(game_date: str) -> int:
     return dt.year if dt.month >= 10 else dt.year - 1
 
 
-def run_retrain_pipeline(games: pd.DataFrame, models_dir: Path, model_version: str, trained_at: str) -> dict:
+def run_retrain_pipeline(
+    games: pd.DataFrame, models_dir: Path, model_version: str, trained_at: str, players: pd.DataFrame | None = None,
+) -> dict:
+    """`players`: per-player box scores behind the availability features (None = documented no-history default)."""
     models_dir.mkdir(parents=True, exist_ok=True)
 
     train_games, holdout_games = chronological_split(games, date_col="game_date", holdout_fraction=0.2)
@@ -88,8 +91,8 @@ def run_retrain_pipeline(games: pd.DataFrame, models_dir: Path, model_version: s
         (train_games["game_date"].apply(_nba_season_start_year) == latest_season).sum()
     )
 
-    train_df, feature_cols = build_training_frame(train_games)
-    holdout_df, _ = build_training_frame(pd.concat([train_games, holdout_games], ignore_index=True))
+    train_df, feature_cols = build_training_frame(train_games, players=players)
+    holdout_df, _ = build_training_frame(pd.concat([train_games, holdout_games], ignore_index=True), players=players)
     holdout_df = holdout_df[holdout_df["game_id"].isin(holdout_games["game_id"])]
 
     logger = logging.getLogger(__name__)

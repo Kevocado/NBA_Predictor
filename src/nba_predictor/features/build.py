@@ -1,3 +1,5 @@
+import logging
+
 import pandas as pd
 from datetime import date
 
@@ -11,7 +13,10 @@ from nba_predictor.features.rest_travel import (
     rolling_travel_miles,
     timezone_change_count,
 )
+from nba_predictor.features.availability import AVAILABILITY_COLUMNS, compute_availability_features
 from nba_predictor.features.team_features import compute_h_features
+
+logger = logging.getLogger(__name__)
 
 
 #: How many days of travel a team is carrying into a game. Seven is the week,
@@ -41,6 +46,8 @@ FEATURE_COLUMNS = [
     "home_rest_days", "away_rest_days", "home_back_to_back", "away_back_to_back",
     "home_streak", "away_streak",
     "is_high_altitude", "conference_game", "division_game",
+    # Lagged rotation availability (features/availability.py); needs player box scores.
+    *AVAILABILITY_COLUMNS,
 ]
 
 #: Columns that are absent from the incoming frame and are meant to be, filled
@@ -72,9 +79,13 @@ def _long_format_box_scores(games: pd.DataFrame) -> pd.DataFrame:
 
 def build_feature_frame(
     games: pd.DataFrame, carry_over_weight: float | None = None, include_travel_fatigue: bool = False,
-    rest_by_team: bool = False,
+    rest_by_team: bool = False, players: pd.DataFrame | None = None,
 ) -> tuple[pd.DataFrame, list[str]]:
     """Features for `games`.
+
+    `players` is the per-player box-score frame (`ingest.to_player_training_frame`) behind the
+    availability columns. None means no player history: those columns take the documented
+    no-history default (0.0), with a warning in the log, so a caller that forgets it is visible.
 
     `carry_over_weight` is passed to `add_rolling_four_factors`; None (the
     default, and every production caller) is today's behaviour exactly.
@@ -88,6 +99,11 @@ def build_feature_frame(
     h_cols_to_merge = [c for c in h_features.columns if c not in games.columns or c == "game_id"]
     if len(h_cols_to_merge) > 1:  # more than just game_id
         games = games.merge(h_features[h_cols_to_merge], on="game_id", how="left")
+
+    if not set(AVAILABILITY_COLUMNS) <= set(games.columns):
+        if players is None:
+            logger.warning("no player box scores supplied: availability features take their no-history default (0.0)")
+        games = games.merge(compute_availability_features(games, players), on="game_id", how="left")
 
     long_form = add_rolling_four_factors(
         _long_format_box_scores(games), carry_over_weight_value=carry_over_weight
@@ -223,7 +239,7 @@ def build_feature_frame(
 
 def build_training_frame(
     games: pd.DataFrame, carry_over_weight: float | None = None, include_travel_fatigue: bool = False,
-    rest_by_team: bool = False,
+    rest_by_team: bool = False, players: pd.DataFrame | None = None,
 ) -> tuple[pd.DataFrame, list[str]]:
     return build_feature_frame(games, carry_over_weight=carry_over_weight, include_travel_fatigue=include_travel_fatigue,
-                               rest_by_team=rest_by_team)
+                               rest_by_team=rest_by_team, players=players)

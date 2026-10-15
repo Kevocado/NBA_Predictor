@@ -729,7 +729,10 @@ def retrain(
     model_version = datetime.now(timezone.utc).strftime("v%Y%m%d%H%M%S")
     trained_at = datetime.now(timezone.utc).isoformat()
 
-    return run_retrain_pipeline(games, models_dir, model_version=model_version, trained_at=trained_at)
+    # The availability features need player box scores; ingest writes them next to games.json.
+    players_path = training_games_path.with_name("players.json")
+    players = pd.DataFrame(json.loads(players_path.read_text())) if players_path.exists() else None
+    return run_retrain_pipeline(games, models_dir, model_version=model_version, trained_at=trained_at, players=players)
 
 
 def _market_stds_from_manifest(models_dir: Path) -> tuple[float, float]:

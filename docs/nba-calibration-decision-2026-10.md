@@ -74,3 +74,14 @@ Isotonic still does not ship either: 2/5 intervals, and log-loss *worse* than ba
 - `test_one_platt_map_applied_to_all_games_preserves_auc` — asserts one Platt map preserves AUC to 1e-12. If this fails, the monotonicity premise the whole decision rests on is wrong and the decision must be revisited.
 - `test_per_window_maps_reorder_games_across_windows` — asserts the within-window order is preserved while the pooled value moves, which is what makes the movement cross-window. Also asserts the direction-independence by printing both, and the fixture is pinned so the −0.0105 is reproducible.
 - `test_isotonic_is_not_strictly_monotone_so_it_can_move_auc` — asserts isotonic actually flattens (758 → 15 values), which is the mechanism for its AUC move being a tie artefact.
+
+## Addendum 2026-10-15: "must not widen" is judged on the paired interval, not on two point estimates
+
+The calibration gap is a max over five buckets of a noisy bucket rate. On the ~1,500 games a season-sized comparison has, its
+sampling noise is the same order as the 0.0591 bar, so comparing two point estimates (`gap <= baseline_gap`) accepts and rejects
+candidates on noise. `paired_gap_bootstrap` resamples games once and scores both models on the same draw, like every other
+metric in the rule. The clause now fails only when the interval of `candidate - baseline` lies above zero (a REAL widening).
+
+Unchanged: the absolute bar (0.0591) still applies in every case; AUC must still exclude a decline; the other four metrics must
+still each improve with an interval excluding zero; and a caller that does not pass `gap_widened` gets the old strict comparison.
+Per-target scoping is deliberately NOT changed: win, margin and total are still judged together by one rule.

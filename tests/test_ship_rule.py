@@ -29,3 +29,22 @@ def test_a_gap_under_the_bar_that_widened_versus_the_baseline_does_not_ship():
 
 def test_a_gap_over_the_absolute_bar_does_not_ship_even_if_it_narrowed():
     assert not ship_decision(_boot(), gap=0.07, baseline_gap=0.09)["ships"]
+
+
+def test_a_noisy_widening_passes_when_the_paired_interval_says_it_is_not_real():
+    # the point estimate widened 0.02 -> 0.04, but the bootstrap interval of the difference includes zero
+    out = ship_decision(_boot(), gap=0.04, baseline_gap=0.02, gap_widened=False)
+    assert out["gap_ok"] and out["ships"]
+
+
+def test_a_real_widening_still_fails_even_under_the_bar():
+    out = ship_decision(_boot(), gap=0.04, baseline_gap=0.02, gap_widened=True)
+    assert not out["gap_ok"] and not out["ships"]
+
+
+def test_the_absolute_bar_is_never_waived_by_the_sample_size_aware_clause():
+    assert not ship_decision(_boot(), gap=0.07, baseline_gap=0.09, gap_widened=False)["ships"]
+
+
+def test_without_gap_widened_the_old_strict_comparison_is_unchanged():
+    assert not ship_decision(_boot(), gap=0.04, baseline_gap=0.02)["ships"]

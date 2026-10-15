@@ -134,3 +134,44 @@ def bootstrap_table(
         )
         for name in baseline_scores
     }
+
+
+def paired_gap_bootstrap(
+    y: np.ndarray,
+    baseline: np.ndarray,
+    candidate: np.ndarray,
+    *,
+    n_buckets: int = 5,
+    n_resamples: int = DEFAULT_RESAMPLES,
+    seed: int = DEFAULT_SEED,
+    alpha: float = 0.05,
+) -> dict:
+    """Bootstrap the calibration-gap difference `candidate - baseline` on the same games.
+
+    The gap is a max over buckets of a noisy bucket rate, so on ~1,500 games its point estimate wobbles by about
+    the size of the bar itself. Comparing two point estimates (the old "must not widen" clause) therefore rejects or
+    accepts models on noise. This gives the interval of the difference, the way every other ship-rule metric is judged.
+    `widened` is True only when the interval lies ABOVE zero (the candidate is reliably worse calibrated).
+    """
+    from nba_predictor.models.artifact_gate import calibration_gap
+
+    y, baseline, candidate = (np.asarray(a) for a in (y, baseline, candidate))
+    n = len(y)
+    rng = np.random.default_rng(seed)
+    diffs = []
+    for _ in range(n_resamples):
+        idx = rng.integers(0, n, n)
+        gb = calibration_gap(y[idx], baseline[idx], n_buckets)
+        gc = calibration_gap(y[idx], candidate[idx], n_buckets)
+        if not (np.isnan(gb) or np.isnan(gc)):
+            diffs.append(gc - gb)
+    lo, hi = np.percentile(diffs, [100 * alpha / 2, 100 * (1 - alpha / 2)])
+    return {
+        "baseline": float(calibration_gap(y, baseline, n_buckets)),
+        "candidate": float(calibration_gap(y, candidate, n_buckets)),
+        "difference": float(calibration_gap(y, candidate, n_buckets) - calibration_gap(y, baseline, n_buckets)),
+        "ci_low": float(lo),
+        "ci_high": float(hi),
+        "n": int(n),
+        "widened": bool(lo > 0),
+    }

@@ -1,39 +1,36 @@
 import { useEffect, useState } from "react";
 import { api, type TrackRecord, type VsMarket } from "../api/client";
-import { EmptyState, ErrorState, Skeleton, StatTable, kickoff } from "../predictor-ui";
 import {
-  Block,
   CalibrationChart,
-  Disagreements,
-  RecentPicks,
+  EmptyState,
+  ErrorState,
+  HowCounted,
+  RecordBlock,
   RecordHeadline,
+  RecentPicks,
+  Skeleton,
+  StatTable,
   WeekStrip,
-  type Bucket,
-  type TallyRow,
-} from "./trackRecordViews";
+  kickoff,
+  marketRank,
+  momentFor,
+} from "../predictor-ui";
+import { labelFor, toRecordModel } from "../lib/recordModel";
+import { Disagreements } from "./trackRecordViews";
 
-// Plain names for each tracked market, in the order they read best.
-const MARKETS: Record<string, string> = {
-  game_outcome: "Winner pick",
-  h2h: "Moneyline",
-  spread: "Spread",
-  total: "Total points",
-  player_props: "Player props",
-};
-const ORDER = Object.keys(MARKETS);
 const STAT_LABEL: Record<string, string> = { points: "Points", rebounds: "Rebounds", assists: "Assists", threes: "Threes", steals: "Steals", blocks: "Blocks" };
-const rank = (market: string) => (ORDER.includes(market) ? ORDER.indexOf(market) : ORDER.length);
-const labelFor = (market: string) => MARKETS[market] ?? market;
 
 const n0 = (x: number) => x.toLocaleString("en-US");
-
-type RowWithBuckets = TrackRecord & { confidence_buckets?: Bucket[] };
 
 /**
  * The track record, led by the only number that cannot flatter the model: picks
  * made before tip-off, counted once per game and market. Everything the model
  * "got right" after the game started is a rebuilt backtest, and lives in its own
  * block that never feeds the headline.
+ *
+ * The page is the shared Track Record kit over NBA's adapter (`toRecordModel`);
+ * only the player-projection block, the comparison-with-the-odds block and the
+ * every-pick table are NBA's own.
  */
 export default function TrackRecordPanel() {
   const [rows, setRows] = useState<TrackRecord[] | null>(null);
@@ -57,21 +54,17 @@ export default function TrackRecordPanel() {
   if (rows === null) return <Skeleton label="Loading track record…" />;
   if (rows.length === 0) return <EmptyState message="No tracked predictions yet. Picks are graded here once their games are final." />;
 
-  const settled = [...rows].filter((r) => r.settled).sort((a, b) => rank(a.market) - rank(b.market));
+  const model = toRecordModel(rows);
+  const moment = momentFor("nba");
+
   const props = rows.find((r) => r.market === "player_props" && !r.settled && (r.per_stat?.length ?? 0) > 0);
   // Props are judged by error, shown in their own block; "no results rule yet" would be the wrong thing to say about them.
   const unsettled = rows.filter((r) => !r.settled && r !== props);
-  const lead = settled.find((r) => r.market === "game_outcome") ?? settled[0];
-
-  const tally: TallyRow[] = settled
-    .filter((r) => r.pre_tip)
-    .map((r) => ({ key: r.market, label: labelFor(r.market), correct: r.pre_tip!.correct_predictions, n: r.pre_tip!.total_predictions }))
-    // The lead market first; the rest in reading order.
-    .sort((a, b) => (a.key === lead?.market ? -1 : b.key === lead?.market ? 1 : 0));
 
   // Backtest: everything counted but made at or after tip-off. Hit rate only: these rows carry no stated confidence.
-  const backtest = settled
+  const backtest = rows
     .filter((r) => (r.n_rebuilt ?? 0) > 0 && r.pre_tip)
+    .sort((a, b) => marketRank(a.market) - marketRank(b.market))
     .map((r) => ({
       key: r.market,
       label: labelFor(r.market),
@@ -79,35 +72,33 @@ export default function TrackRecordPanel() {
       correct: r.correct_predictions - r.pre_tip!.correct_predictions,
     }));
 
-  const weeks = lead?.pre_tip?.weekly ?? lead?.weekly ?? [];
-  const calibration = (settled as RowWithBuckets[])
-    .filter((r) => r.confidence_buckets?.length)
-    .map((r) => ({ key: r.market, label: labelFor(r.market), buckets: r.confidence_buckets! }));
+  // NBA's own blocks: the every-pick table (it also shows counted vs rebuilt,
+  // which the view model does not carry) and the pushes/unsettled disclosure.
   const allPicks = rows.flatMap((r) => (r.per_pick ?? []).map((p) => ({ ...p, market: r.market })));
   const h2hPicks = rows.find((r) => r.market === "h2h")?.per_pick ?? [];
   const pushes = rows.reduce((n, r) => n + (r.n_push ?? 0), 0);
 
   return (
     <div className="flex flex-col gap-8">
-      <Block id="tr-record" title="Counted record: picks made before tip-off">
-        {tally.length === 0 ? (
-          <p className="text-sm text-pr-text-dim">No pick made before tip-off has been graded yet.</p>
+      <RecordBlock id="tr-record" title="Picks made before tip-off">
+        {model.markets.some((m) => m.preKickoff) ? (
+          <RecordHeadline markets={model.markets} mode={model.headline} lead={model.lead} moment={moment} />
         ) : (
-          <RecordHeadline rows={tally} />
+          <p className="text-sm text-pr-text-dim">No pick made before tip-off has been graded yet.</p>
         )}
-      </Block>
+      </RecordBlock>
 
       <div className="grid gap-8 lg:grid-cols-2">
-        <Block id="tr-week" title="Week by week">
-          <WeekStrip weeks={weeks} />
-        </Block>
-        <Block id="tr-calibration" title="Does 70% mean 70%?">
-          <CalibrationChart series={calibration} />
-        </Block>
+        <RecordBlock id="tr-week" title="Week by week">
+          <WeekStrip weeks={model.weeks ?? []} />
+        </RecordBlock>
+        <RecordBlock id="tr-calibration" title="Does 70% mean 70%?">
+          <CalibrationChart series={model.calibration ?? []} />
+        </RecordBlock>
       </div>
 
       <div className="grid gap-8 lg:grid-cols-2">
-        <Block id="tr-market" title="Against the odds">
+        <RecordBlock id="tr-market" title="Against the odds">
           {vsError ? (
             <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-pr border border-pr-loss/50 bg-pr-panel px-4 py-3 text-sm text-pr-text">
               <span>We couldn&apos;t load the comparison with the odds.</span>
@@ -127,14 +118,14 @@ export default function TrackRecordPanel() {
               hitRate={vsMarket.disagreement_hit_rate}
             />
           )}
-        </Block>
-        <Block id="tr-recent" title="Latest counted picks">
-          <RecentPicks picks={allPicks} labelFor={labelFor} />
-        </Block>
+        </RecordBlock>
+        <RecordBlock id="tr-recent" title="Latest counted picks">
+          <RecentPicks picks={model.recent ?? []} moment={moment} />
+        </RecordBlock>
       </div>
 
       {props && (
-        <Block id="tr-props" title="Player projections: how far off">
+        <RecordBlock id="tr-props" title="Player projections: how far off">
           <p className="max-w-prose text-sm text-pr-text-dim">
             Props have no win/lose result, so they are judged by the average miss between the projection and what the player
             did, over {n0(props.total_predictions)} projections that have since been played.
@@ -152,14 +143,14 @@ export default function TrackRecordPanel() {
               </li>
             ))}
           </ul>
-        </Block>
+        </RecordBlock>
       )}
 
       {backtest.length > 0 && (
-        <Block id="tr-backtest" title="Backtest, not counted">
+        <RecordBlock id="tr-backtest" title="Backtest, not counted">
           <p className="max-w-prose text-sm text-pr-text-dim">
             Picks rebuilt at or after tip-off by a later run of the model. They show what the model would have said, not
-            what it called in time, so they never enter the record above.
+            what it called in time.
           </p>
           <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             {backtest.map((b) => (
@@ -171,7 +162,7 @@ export default function TrackRecordPanel() {
               </li>
             ))}
           </ul>
-        </Block>
+        </RecordBlock>
       )}
 
       <details className="rounded-pr border border-pr-rule bg-pr-panel px-4 py-3 text-sm">
@@ -207,31 +198,24 @@ export default function TrackRecordPanel() {
         </div>
       </details>
 
-      <details className="rounded-pr border border-pr-rule bg-pr-panel px-4 py-3 text-sm">
-        <summary className="cursor-pointer font-semibold text-pr-text">How this is counted</summary>
-        <div className="mt-3 flex max-w-prose flex-col gap-2 text-pr-text-dim">
+      <HowCounted moment={moment} headline={model.headline}>
+        {pushes > 0 && <p>{n0(pushes)} pick{pushes === 1 ? "" : "s"} landed on the line and {pushes === 1 ? "is" : "are"} left out of every rate, not scored as a miss.</p>}
+        {unsettled.length > 0 && (
           <p>
-            One counted pick per game and market: the earliest recorded. A re-run of the model never replaces it and is
-            never counted twice. The counted record above only includes picks made before tip-off.
+            {unsettled.map((r) => labelFor(r.market)).join(", ")} {unsettled.length === 1 ? "has" : "have"} no results rule yet, so no rate is shown.
           </p>
-          {pushes > 0 && <p>{n0(pushes)} pick{pushes === 1 ? "" : "s"} landed on the line and {pushes === 1 ? "is" : "are"} left out of every rate, not scored as a miss.</p>}
-          {unsettled.length > 0 && (
-            <p>
-              {unsettled.map((r) => labelFor(r.market)).join(", ")} {unsettled.length === 1 ? "has" : "have"} no results rule yet, so no rate is shown.
-            </p>
-          )}
-          {vsMarket && Object.keys(vsMarket.method).length > 0 && (
-            <dl className="mt-1 flex flex-col gap-2">
-              {Object.entries(vsMarket.method).map(([k, v]) => (
-                <div key={k}>
-                  <dt className="text-xs font-semibold uppercase tracking-wide text-pr-text-faint">{k.replace(/_/g, " ")}</dt>
-                  <dd className="text-xs leading-relaxed">{String(v)}</dd>
-                </div>
-              ))}
-            </dl>
-          )}
-        </div>
-      </details>
+        )}
+        {vsMarket && Object.keys(vsMarket.method).length > 0 && (
+          <dl className="mt-1 flex flex-col gap-2">
+            {Object.entries(vsMarket.method).map(([k, v]) => (
+              <div key={k}>
+                <dt className="text-xs font-semibold uppercase tracking-wide text-pr-text-faint">{k.replace(/_/g, " ")}</dt>
+                <dd className="text-xs leading-relaxed">{String(v)}</dd>
+              </div>
+            ))}
+          </dl>
+        )}
+      </HowCounted>
     </div>
   );
 }

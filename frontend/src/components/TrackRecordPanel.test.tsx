@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import TrackRecordPanel from "./TrackRecordPanel";
-import { wilson } from "./trackRecordViews";
+import { wilsonInterval } from "../predictor-ui";
 import { api, type TrackRecord, type TrackRecordPick, type TrackRecordWeek, type VsMarket } from "../api/client";
 
 vi.mock("../api/client", () => ({ api: { getTrackRecord: vi.fn(), getVsMarket: vi.fn() } }));
@@ -132,11 +132,52 @@ describe("TrackRecordPanel", () => {
 
 describe("wilson", () => {
   it("is a wide range for a small sample and null for none", () => {
-    const [lo, hi] = wilson(11, 24)!;
+    const [lo, hi] = wilsonInterval(11, 24)!;
     expect(lo).toBeGreaterThan(0.25);
     expect(lo).toBeLessThan(0.3);
     expect(hi).toBeGreaterThan(0.64);
     expect(hi).toBeLessThan(0.68);
-    expect(wilson(0, 0)).toBeNull();
+    expect(wilsonInterval(0, 0)).toBeNull();
+  });
+});
+
+describe("parity with the page before the kit", () => {
+  // The exact text the panel rendered before it moved onto the shared kit,
+  // captured from the fixture above. Every number, label and section must stay
+  // put; the only differences allowed are the corrections applied below.
+  const BEFORE = "Counted record: picks made before tip-offWinner pick11 of 2446%Could plausibly be 28%–65%Early sample: 24 counted picks is not enough to call this model good or bad. The bar shows the range the true rate could sit in; the thin line is 50%.Moneyline5 of 1050%Could plausibly be 24%–76%Week by weekMon 28 Sep: 2 of 3Mon 5 Oct: 9 of 2150% or betterunder 50%Taller = more picks that weekDoes 70% mean 70%?0%50%100%50%60%70%80%50-60% confidence: 2 of 4 right60-70% confidence: 2 of 3 right70%+ confidence: 1 of 3 rightAcross: how sure the model said it was. Up: how often it was right. On the dashed line is honest; bigger dots rest on more picks; faint dots rest on fewer than 5.Against the odds1 of 250%when the model backed the side the odds did not.Thu 8 OctBOS · was BOSRightThu 8 OctATL · was MEMWrongLatest counted picksThu 8 OctBOS · Moneyline · was BOSRightThu 8 OctATL · Moneyline · was MEMWrongPlayer projections: how far offProps have no win/lose result, so they are judged by the average miss between the projection and what the player did, over 121,148 projections that have since been played.Pointsoff by 4.8 on averageruns high by 0.3 · 20,000 gamesReboundsoff by 1.9 on averageno lean · 20,000 gamesBacktest, not countedPicks rebuilt at or after tip-off by a later run of the model. They show what the model would have said, not what it called in time, so they never enter the record above.Winner pick1,171 of 1,365Every recorded pickEvery recorded pickGameMarketPickActualResultMadeThu 8 OctMoneylineBOSBOSRightBefore tip-offThu 8 OctMoneylineATLMEMWrongBefore tip-offThu 8 OctMoneylineBOSBOSRightBefore tip-offHow this is countedOne counted pick per game and market: the earliest recorded. A re-run of the model never replaces it and is never counted twice. The counted record above only includes picks made before tip-off.";
+
+  // Each change, and why it is the only thing that may differ.
+  const CORRECTIONS: [string, string][] = [
+    // The headline no longer calls the pre-tip subset the whole "counted record".
+    ["Counted record: picks made before tip-off", "Picks made before tip-off"],
+    // Rebuilt picks do feed a count elsewhere; it is only the headline that excludes them.
+    [", so they never enter the record above", ""],
+    // The old sentence named the pre-tip subset "the counted record".
+    [
+      "The counted record above only includes picks made before tip-off.",
+      "The record above shows every pick made before tip-off. Picks rebuilt after tip-off are listed separately, below.",
+    ],
+    // The shared "How this is counted" states the counting rule and the meaning of
+    // the headline as two paragraphs, so the space that joined them in the old
+    // single paragraph is gone. Same words, one line break.
+    ["never counted twice. The record above", "never counted twice.The record above"],
+  ];
+
+  it("renders everything as before, except the corrections", async () => {
+    const { container } = render(<TrackRecordPanel />);
+    await screen.findByTestId("tally-game_outcome");
+    const after = CORRECTIONS.reduce((text, [from, to]) => text.split(from).join(to), BEFORE);
+    expect(container.textContent).toBe(after);
+    expect(container.textContent).not.toBe(BEFORE);
+  });
+
+  it("made every correction", async () => {
+    const { container } = render(<TrackRecordPanel />);
+    await screen.findByTestId("tally-game_outcome");
+    const text = container.textContent ?? "";
+    for (const [from] of CORRECTIONS) expect(text, from).not.toContain(from);
+    expect(text).toContain("not what it called in time.");
+    expect(text).toContain("Picks rebuilt after tip-off are listed separately, below.");
   });
 });

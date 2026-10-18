@@ -29,7 +29,7 @@ describe("App", () => {
 });
 
 describe("App routing", () => {
-  it("navigates to the Data Hub page when its nav link is clicked", async () => {
+  it("navigates to the Teams panel when its tab is clicked", async () => {
     mockFetchEmpty();
 
     render(
@@ -38,10 +38,11 @@ describe("App routing", () => {
       </MemoryRouter>
     );
 
-    await userEvent.click(screen.getByRole("button", { name: "Data Hub" }));
+    await userEvent.click(screen.getByRole("tab", { name: "Teams" }));
     expect(await screen.findByTestId("hub-tab-team-hub")).toBeInTheDocument();
   });
 });
+
 describe("App family frame", () => {
   function renderAt(path: string) {
     mockFetchEmpty();
@@ -60,19 +61,22 @@ describe("App family frame", () => {
     expect(within(sports).getByRole("link", { name: "NBA" })).toHaveAttribute("aria-current", "page");
     expect(within(sports).getByRole("link", { name: "NFL" }).getAttribute("href")).toMatch(/sports\..*\?sport=nfl$/);
     expect(within(sports).getByRole("link", { name: "PL" })).toBeInTheDocument();
+    expect(within(sports).getByRole("link", { name: "Paper Trading" })).toBeInTheDocument();
   });
 
   it("marks the page tab that matches the route, including on a deep link", () => {
     renderAt("/calibration-report");
-    const pages = screen.getByRole("navigation", { name: "Pages" });
-    expect(within(pages).getByRole("button", { name: "Calibration" })).toHaveAttribute("aria-current", "page");
-    expect(within(pages).getByRole("button", { name: "Games" })).not.toHaveAttribute("aria-current");
-    expect(within(pages).getAllByRole("button").map((b) => b.textContent)).toEqual(["Games", "Data Hub", "Calibration", "Model"]);
+    const pages = screen.getByRole("tablist", { name: "Pages" });
+    expect(within(pages).getByRole("tab", { name: "Calibration" })).toHaveAttribute("aria-selected", "true");
+    expect(within(pages).getByRole("tab", { name: "Games" })).not.toHaveAttribute("aria-selected", "true");
+    expect(
+      within(pages).getAllByRole("tab").map((b) => b.textContent),
+    ).toEqual(["Games", "Teams", "Players", "Power rankings", "Standings", "Track record", "Calibration", "Model"]);
   });
 
   it("navigates when a page tab is pressed", async () => {
     renderAt("/");
-    await userEvent.click(screen.getByRole("button", { name: "Calibration" }));
-    expect(screen.getByRole("button", { name: "Calibration" })).toHaveAttribute("aria-current", "page");
+    await userEvent.click(screen.getByRole("tab", { name: "Calibration" }));
+    expect(screen.getByRole("tab", { name: "Calibration" })).toHaveAttribute("aria-selected", "true");
   });
 });

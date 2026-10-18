@@ -13,8 +13,8 @@ const TABS = [
   { key: "track-record", label: "Track record", panel: TrackRecordPanel },
 ] as const;
 
-export default function DataHubPage() {
-  const [activeTab, setActiveTab] = useState<(typeof TABS)[number]["key"]>("team-hub");
+export default function DataHubPage({ initialTab }: { initialTab?: (typeof TABS)[number]["key"] }) {
+  const [activeTab, setActiveTab] = useState<(typeof TABS)[number]["key"]>(initialTab ?? "team-hub");
   const ActivePanel = TABS.find((tab) => tab.key === activeTab)!.panel;
 
   return (

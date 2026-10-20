@@ -62,6 +62,9 @@ MUST_NOT_DEPLOY = [
     # The Kalshi line collector appends a gzip file twice a day; it is data for analysis, not part of the image.
     "data/lines",
     "data/lines/*",
+    # The injury-report collector appends a gzip file four times a day; history for analysis, not part of the image.
+    "data/injuries",
+    "data/injuries/*",
 ]
 
 # Paths a scheduled job commits that this filter deliberately DOES watch, with

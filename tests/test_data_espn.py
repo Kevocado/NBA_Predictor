@@ -262,3 +262,29 @@ def test_get_injuries_retries_and_raises_on_persistent_failure(mock_fetch, clear
 
     with pytest.raises(Exception):
         espn.get_injuries()
+
+
+@patch("nba_predictor.data.espn._fetch_json")
+def test_get_scoreboard_carries_espns_season_type(mock_fetch, clear_cache):
+    """1 = preseason, 2 = regular season, 3 = postseason: a preseason minute is not a regular-season minute."""
+    from nba_predictor.data import espn
+
+    event = lambda eid, season_type: {
+        "id": eid, "date": "2026-10-10T23:00Z", "season": {"type": season_type},
+        "competitions": [{"status": {"type": {"completed": False}}, "competitors": [
+            {"homeAway": "home", "team": {"abbreviation": "BOS"}}, {"homeAway": "away", "team": {"abbreviation": "NYK"}}]}],
+    }
+    mock_fetch.return_value = {"events": [event("1", 1), event("2", 2)]}
+    assert [g["season_type"] for g in espn.get_scoreboard("2026-10-10")] == [1, 2]
+
+
+@patch("nba_predictor.data.espn._fetch_json")
+def test_a_cached_scoreboard_without_season_type_is_refetched(mock_fetch, clear_cache):
+    from nba_predictor.data import espn
+
+    espn._save_cache("scoreboard", "2026-10-10", {"games": [{"game_id": "1", "game_date": "2026-10-10", "home_team": "BOS", "away_team": "NYK", "completed": False}]})
+    mock_fetch.return_value = {"events": [{
+        "id": "1", "date": "2026-10-10T23:00Z", "season": {"type": 1},
+        "competitions": [{"status": {"type": {"completed": False}}, "competitors": [
+            {"homeAway": "home", "team": {"abbreviation": "BOS"}}, {"homeAway": "away", "team": {"abbreviation": "NYK"}}]}]}]}
+    assert espn.get_scoreboard("2026-10-10")[0]["season_type"] == 1

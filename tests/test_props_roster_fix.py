@@ -297,3 +297,25 @@ def test_a_few_clamps_still_publish_the_guarded_values(tmp_path, monkeypatch):
     by = {(r["player_id"], r["stat"]): r["predicted_value"] for r in store.get_player_predictions_for_game(db_path, "next")}
     assert by[("p0", "points")] == 2.5 * 2.0                      # 20 against a 2.0 average: clamped to the band's top
     assert by[("p1", "points")] == 20.0
+
+
+# ---------------------------------------------------------------------------
+# Preseason minutes are not regular-season minutes
+# ---------------------------------------------------------------------------
+
+def test_preseason_games_do_not_drag_a_stars_rolling_average_down():
+    from nba_predictor.features.player_stats import build_player_feature_frame
+    from nba_predictor.pipeline.ingest import to_player_scoring_frame
+
+    games, boxes = [], {}
+    for i, (day, stype, pts) in enumerate([("2026-04-01", 2, 30.0), ("2026-04-03", 2, 30.0), ("2026-04-05", 2, 30.0),
+                                           ("2026-10-02", 1, 4.0), ("2026-10-05", 1, 4.0), ("2026-10-08", 1, 4.0)]):
+        gid = f"c{i}"
+        games.append({**_game(gid, day, "DET", "MIA", True), "season_type": stype})
+        boxes[gid] = [_box("star", "Star", "DET", pts)]
+    games.append(_game("next", "2026-10-21", "DET", "CHI", False))
+
+    scoring = to_player_scoring_frame(games, boxes, rosters={"DET": _roster(("star", "Star", "")), "CHI": [], "MIA": []})
+    frame, _ = build_player_feature_frame(scoring)
+    upcoming = frame[frame["points"].isna()]
+    assert float(upcoming.iloc[0]["points_roll"]) == 30.0

@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
 import { api, type StandingsRow } from "../api/client";
+import HubRows from "./HubRows";
+import { standingsStatus } from "../lib/seasonCaption";
 import TeamLogo from "./TeamLogo";
 
 const STATUS: Record<NonNullable<StandingsRow["playoff_status"]>, string> = {
@@ -18,22 +19,20 @@ const OFFSEASON_NOTE: Record<Exclude<StandingsRow["season_state"], "regular" | "
 };
 
 export default function StandingsPanel() {
-  const [rows, setRows] = useState<StandingsRow[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  return (
+    <HubRows<StandingsRow> load={api.getHubStandings} noun="standings">
+      {(rows) => <StandingsTables rows={rows} />}
+    </HubRows>
+  );
+}
 
-  useEffect(() => {
-    api.getHubStandings().then(setRows).catch(() => setError("Couldn't load standings."));
-  }, []);
-
-  if (error) return <p className="text-[var(--color-shotclock)]">{error}</p>;
-  if (rows === null) return <p>Loading standings…</p>;
-  if (rows.length === 0) return <p>No standings data cached yet.</p>;
-
+function StandingsTables({ rows }: { rows: StandingsRow[] }) {
   const conferences: Array<"East" | "West"> = ["East", "West"];
 
   // Every row carries the same state, so any row will do -- and there has to be
   // a row, because `rows.length === 0` already returned above.
   const state = rows[0].season_state;
+  const mostGamesPlayed = Math.max(...rows.map((r) => r.wins + r.losses));
   const note = state === "regular" || state === "postseason" ? null : OFFSEASON_NOTE[state];
 
   return (
@@ -77,7 +76,7 @@ export default function StandingsPanel() {
                       <td>{row.games_back === 0 ? "—" : row.games_back.toFixed(1)}</td>
                       {/* No status outside a season. The backend sends null
                           rather than a label, so there is nothing to show. */}
-                      <td>{row.playoff_status ? STATUS[row.playoff_status] : "—"}</td>
+                      <td>{row.playoff_status ? standingsStatus(row.playoff_status, STATUS[row.playoff_status], mostGamesPlayed) : "—"}</td>
                     </tr>
                   ))}
               </tbody>

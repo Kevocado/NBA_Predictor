@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { api, type CalibrationBin } from "../api/client";
 
+const SMALL_BIN = 10;
+
 export default function CalibrationPage() {
   const [bins, setBins] = useState<CalibrationBin[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -32,6 +34,9 @@ export default function CalibrationPage() {
         well-calibrated model's predicted rate and actual rate should track closely. Uses only picks
         made before tip-off.
       </p>
+      {bins.some((b) => b.count < SMALL_BIN) && (
+        <p className="mb-4 max-w-prose text-sm text-pr-text-dim">Ranges with fewer than {SMALL_BIN} games are shaded: a handful of games is mostly luck, so read those rows as noise.</p>
+      )}
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
@@ -44,7 +49,7 @@ export default function CalibrationPage() {
           </thead>
           <tbody>
             {bins.map((bin) => (
-              <tr key={bin.bin_start} data-testid="calibration-row">
+              <tr key={bin.bin_start} data-testid="calibration-row" className={bin.count < SMALL_BIN ? "opacity-60" : undefined}>
                 <td>
                   {Math.round(bin.bin_start * 100)}–{Math.round(bin.bin_end * 100)}%
                 </td>

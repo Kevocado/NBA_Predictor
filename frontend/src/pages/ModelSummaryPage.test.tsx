@@ -63,7 +63,7 @@ describe("ModelSummaryPage training data", () => {
     expect(screen.getByText("1,000")).toBeInTheDocument();
     expect(screen.getByText("350")).toBeInTheDocument();
     expect(
-      screen.getByText(/current-season matches count only once their stats are final/i)
+      screen.getByText(/this season's games count only once their results are final/i)
     ).toBeInTheDocument();
     expect(screen.getByText("120,000")).toBeInTheDocument();
   });

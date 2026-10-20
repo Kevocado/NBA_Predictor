@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import DataHubPage from "./DataHubPage";
 
 vi.mock("../api/client", () => ({
@@ -39,17 +38,12 @@ describe("DataHubPage", () => {
     await waitFor(() => expect(screen.getByText(/no team data/i)).toBeInTheDocument());
   });
 
-  it("switches to the Player Hub panel when its tab is clicked", async () => {
-    render(<DataHubPage />);
-    await userEvent.click(screen.getByTestId("hub-tab-player-hub"));
+  it("shows the panel its route names, with no second tab row of its own", async () => {
+    const { rerender } = render(<DataHubPage initialTab="player-hub" />);
     await waitFor(() => expect(screen.getByText(/no player data/i)).toBeInTheDocument());
-    expect(screen.getByTestId("hub-tab-player-hub")).toHaveAttribute("aria-current", "true");
-    expect(screen.getByTestId("hub-tab-team-hub")).not.toHaveAttribute("aria-current");
-  });
-
-  it("switches to the Track Record panel when its tab is clicked", async () => {
-    render(<DataHubPage />);
-    await userEvent.click(screen.getByTestId("hub-tab-track-record"));
+    expect(screen.queryByRole("navigation")).toBeNull();
+    // Same instance, new route: the panel follows the prop instead of stale local state.
+    rerender(<DataHubPage initialTab="track-record" />);
     await waitFor(() => expect(screen.getByText(/no tracked predictions/i)).toBeInTheDocument());
   });
 });

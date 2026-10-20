@@ -8,10 +8,11 @@ import CalibrationPage from "./pages/CalibrationPage";
 
 // Page tabs map onto the existing routes, so deep links and refreshes keep working.
 // The aggregate "Data Hub" tab is dropped; its panels each have their own route.
-// Old /hub deep links keep working (they render Teams, the first promoted tab).
+// Teams lives at /hub (the old Data Hub URL): /teams is an API route, so a refresh or shared
+// link to it would return JSON instead of this app.
 const TABS = [
   { id: "/", label: "Games" },
-  { id: "/teams", label: "Teams" },
+  { id: "/hub", label: "Teams" },
   { id: "/players", label: "Players" },
   { id: "/power-rankings", label: "Power rankings" },
   { id: "/standings", label: "Standings" },
@@ -23,9 +24,7 @@ const TABS = [
 export default function App() {
   const { pathname } = useLocation();
   const navigate = useNavigate();
-  // Old /hub deep links land on Teams, the first promoted tab.
-  const normalized = pathname === "/hub" ? "/teams" : pathname;
-  const active = TABS.find((tab) => tab.id !== "/" && normalized.startsWith(tab.id))?.id ?? "/";
+  const active = TABS.find((tab) => tab.id !== "/" && pathname.startsWith(tab.id))?.id ?? "/";
 
   return (
     <AppFrame
@@ -40,7 +39,6 @@ export default function App() {
       <Routes>
         <Route path="/" element={<GamesPage />} />
         <Route path="/hub" element={<DataHubPage initialTab="team-hub" />} />
-        <Route path="/teams" element={<DataHubPage initialTab="team-hub" />} />
         <Route path="/players" element={<DataHubPage initialTab="player-hub" />} />
         <Route path="/power-rankings" element={<DataHubPage initialTab="power-rankings" />} />
         <Route path="/standings" element={<DataHubPage initialTab="standings" />} />

@@ -39,7 +39,9 @@ describe("App routing", () => {
     );
 
     await userEvent.click(screen.getByRole("tab", { name: "Teams" }));
-    expect(await screen.findByTestId("hub-tab-team-hub")).toBeInTheDocument();
+    expect(await screen.findByText(/no team data/i)).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Teams" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByRole("navigation", { name: "Data Hub sections" })).toBeNull();
   });
 });
 
@@ -60,7 +62,8 @@ describe("App family frame", () => {
     const sports = screen.getByRole("navigation", { name: "Sports" });
     expect(within(sports).getByRole("link", { name: "NBA" })).toHaveAttribute("aria-current", "page");
     expect(within(sports).getByRole("link", { name: "NFL" }).getAttribute("href")).toMatch(/sports\..*\?sport=nfl$/);
-    expect(within(sports).getByRole("link", { name: "PL" })).toBeInTheDocument();
+    expect(within(sports).getByRole("link", { name: "Premier League" })).toBeInTheDocument();
+    expect(within(sports).getByRole("link", { name: "College football" })).toBeInTheDocument();
     expect(within(sports).getByRole("link", { name: "Paper Trading" })).toBeInTheDocument();
   });
 

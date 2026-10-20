@@ -213,6 +213,9 @@ describe("GamesPage family layout", () => {
       vi.mocked(api.getManifest).mockResolvedValue({ model_version: "v", trained_at: "t", models: [], metrics: {}, training: { n_current_season_games: 0 } });
       render(<GamesPage />);
       expect(await screen.findByRole("note")).toHaveTextContent(/has not seen a game of this season/i);
+      // Let the page finish loading before the test ends: a late effect after the mocks are restored threw
+      // "reading 'then'" into whichever test ran next.
+      await screen.findByText(/no games this week/i);
     });
 
     it("stays quiet mid-season and when the manifest cannot be read", async () => {
@@ -220,11 +223,13 @@ describe("GamesPage family layout", () => {
       vi.mocked(api.getManifest).mockResolvedValue({ model_version: "v", trained_at: "t", models: [], metrics: {}, training: { n_current_season_games: 700 } });
       const { unmount } = render(<GamesPage />);
       await waitFor(() => expect(api.getManifest).toHaveBeenCalled());
+      await screen.findByText(/no games this week/i);
       expect(screen.queryByRole("note")).toBeNull();
       unmount();
       vi.mocked(api.getManifest).mockRejectedValue(new Error("down"));
       render(<GamesPage />);
       await waitFor(() => expect(api.getManifest).toHaveBeenCalledTimes(2));
+      await screen.findByText(/no games this week/i);
       expect(screen.queryByRole("note")).toBeNull();
     });
   });

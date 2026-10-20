@@ -1,5 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { api, type GameDetail, type OutPlayer, type PlayerProp, type PlayerHubRow, type MarketPrediction, type TrackRecord, type Prediction } from "../api/client";
+import { ModelRecordLine } from "./ModelRecordLine";
 import TeamLogo from "./TeamLogo";
 import TopCalls from "./TopCalls";
 import { favourite } from "../lib/pick";
@@ -311,60 +312,6 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
         : null,
     });
   }, [detail]);
-  // The record the block may quote, or null when there is nothing true to say.
-  //
-  // `game_outcome` is the only row in `/hub/track-record` that settles the pick
-  // the block just named: `hub_service._settle_game_outcome` grades
-  // `home_win_prob >= 0.5` against the real result over `pre_tip_picks`, so
-  // picks rebuilt after tip-off are already excluded and this row is a
-  // pre-tip-only record by construction — which is exactly the record the spec
-  // §F allows to be described as the record. `h2h` is a different claim (the
-  // same probability measured against the bookmaker's price), so quoting it
-  // here would state one pick two ways.
-  //
-  // No row, no record: the block is passed none and draws no strip, which is
-  // the truthful "we have no record for this yet". A row that exists but has
-  // graded nothing is a real record with no numbers in it, and `RecordStrip`
-  // reads that as the dash. Neither path can print a 0/0.
-  const winnerRecord = useMemo(() => {
-    const row = trackRecord?.find((r) => r.market === "game_outcome");
-    if (!row) return null;
-    const preTip = row.pre_tip;
-    const preTipTotal = preTip?.total_predictions ?? 0;
-    const preTipCorrect = preTip?.correct_predictions ?? 0;
-    const rebuilt = row.n_rebuilt ?? 0;
-    // The headline counts every recorded pick. The pre-tip subset is the honest
-    // read of what the model said on the night. Show both with accurate labels.
-    if (rebuilt > 0 && preTipTotal > 0) {
-      return {
-        label: "Every pick",
-        hits: row.correct_predictions,
-        settled: row.total_predictions,
-        rebuilt,
-        preTip: { hits: preTipCorrect, settled: preTipTotal },
-      };
-    }
-    if (rebuilt > 0) {
-      return {
-        label: "Every pick",
-        hits: row.correct_predictions,
-        settled: row.total_predictions,
-        rebuilt,
-        preTip: null,
-      };
-    }
-    if (preTipTotal > 0) {
-      return {
-        label: "Every pick",
-        hits: row.correct_predictions,
-        settled: row.total_predictions,
-        rebuilt: 0,
-        preTip: { hits: preTipCorrect, settled: preTipTotal },
-      };
-    }
-    // No graded picks yet
-    return { label: "Every pick", hits: 0, settled: 0, rebuilt: 0, preTip: null };
-  }, [trackRecord]);
   // The flow's state, derived ONCE and used for both the bundle and the prop,
   // because the bare-heading rule is a rule about the PAIR: the bundle withholds
   // `home_team` when the flow has nothing to say, and the prop has to be asking
@@ -530,8 +477,9 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
               request={() => api.explainGame(gameId)}
               loadContext={api.loadContext}
               fixtureId={gameId}
-              extras={{ tiles: panel.tiles, segments: panel.segments, record: winnerRecord ?? undefined, moment: "tip-off" }}
+              extras={{ tiles: panel.tiles, segments: panel.segments, moment: "tip-off" }}
             />
+            <ModelRecordLine rows={trackRecord} format="percent" className="mt-3" />
           </div>
         )}
 

@@ -38,6 +38,7 @@ const winnerPick = (total: number, correct: number, nRebuilt: number, preTipTota
   total_predictions: total,
   correct_predictions: correct,
   hit_rate: total ? Number((correct / total).toFixed(3)) : null,
+  settled: true,
   n_rebuilt: nRebuilt,
   n_pre_tip: preTipTotal,
   pre_tip: {
@@ -103,10 +104,9 @@ async function renderOffline(detail: unknown) {
   return fetchSpy;
 }
 
-/** The record strip, found by its label — the label is the strip's own, and it
- *  is what tells two records apart if this page ever grows a second one. */
-function recordStrip() {
-  return screen.getByText("Every pick").parentElement as HTMLElement;
+/** The one record line: the pre-tip winner record and its link. */
+function recordLine() {
+  return screen.getByText(/Model, picks made before tip-off:/);
 }
 
 /** A summary, shaped the way the service sends one. The prose is the only thing
@@ -145,16 +145,15 @@ function segmentFills() {
 
 describe("GameDetailModal instant block", () => {
   it("renders the block from the bundle with the network blocked", async () => {
-    vi.mocked(api.getTrackRecord).mockResolvedValue([winnerPick(40, 22, 3, 0, 0)]);
+    vi.mocked(api.getTrackRecord).mockResolvedValue([winnerPick(40, 22, 3, 8, 3)]);
     const fetchSpy = await renderOffline(preTip);
 
     // The tiles NBA already had, unchanged.
     expect(screen.getByTestId("tile-moneyline")).toBeInTheDocument();
     // The verdict, from the bundle's own pick.
     expect(screen.getByText("Celtics is the pick.")).toBeInTheDocument();
-    // The record, from the winner-pick row.
-    expect(screen.getByTestId("record-fill")).toBeInTheDocument();
-    expect(screen.getByText("22/40")).toBeInTheDocument();
+    // The record, one line, from the winner-pick row's pre-tip block.
+    expect(recordLine()).toHaveTextContent("Model, picks made before tip-off: 38%");
 
     // No request was made, and in particular not for the AI summary: the
     // button is still there to press.
@@ -223,21 +222,20 @@ describe("GameDetailModal instant block", () => {
     vi.unstubAllGlobals();
   });
 
-  it("carries the winner-pick record with true label and pre-tip beside it", async () => {
+  it("shows one pre-tip record line, not the headline's three numbers", async () => {
     await renderOffline(preTip);
 
-    const strip = recordStrip();
-    // The label must be accurate: the headline includes picks made after tip-off
-    expect(strip).toHaveTextContent("Every pick");
-    expect(strip).toHaveTextContent("1174/1373");
-    expect(strip).toHaveTextContent("1365 of them made after tip-off");
-    // The pre-tip record beside it
-    expect(strip).toHaveTextContent("Before tip-off");
-    expect(strip).toHaveTextContent("3 of 8");
-    // No misleading "made before tip-off" label on the headline figures
-    expect(strip).not.toHaveTextContent("Winner pick made before tip-off");
-    // The record is about picks, not percentages
-    expect(strip).not.toHaveTextContent("55%");
+    // The one line the games surfaces quote: the pre-tip subset, with a link.
+    const line = recordLine();
+    expect(line).toHaveTextContent("Model, picks made before tip-off: 38%");
+    expect(within(line).getByRole("link", { name: "Track record" })).toHaveAttribute("href", "/track-record");
+    // The headline (all picks, including reruns) and the rebuilt count are
+    // the record page's business; a game card does not restate them.
+    expect(screen.queryByText("Every pick")).toBeNull();
+    expect(screen.queryByText("1174/1373")).toBeNull();
+    expect(screen.queryByText("1365 of them made after tip-off")).toBeNull();
+    expect(screen.queryByText("Before tip-off")).toBeNull();
+    expect(screen.queryByTestId("record-fill")).toBeNull();
     vi.unstubAllGlobals();
   });
 
@@ -248,7 +246,7 @@ describe("GameDetailModal instant block", () => {
     vi.mocked(api.getTrackRecord).mockResolvedValue([vsMarket]);
     await renderOffline(preTip);
 
-    expect(screen.queryByTestId("record-fill")).toBeNull();
+    expect(screen.queryByText(/Model, picks made before tip-off:/)).toBeNull();
     expect(screen.queryByText("21/38")).toBeNull();
     vi.unstubAllGlobals();
   });
@@ -257,39 +255,31 @@ describe("GameDetailModal instant block", () => {
     vi.mocked(api.getTrackRecord).mockResolvedValue([]);
     await renderOffline(preTip);
 
-    // No row, no strip. What must never appear is a fabricated 0/0.
-    expect(screen.queryByTestId("record-fill")).toBeNull();
+    // No row, no line. What must never appear is a fabricated 0/0.
+    expect(screen.queryByText(/Model, picks made before tip-off:/)).toBeNull();
     expect(screen.queryByText("0/0")).toBeNull();
     vi.unstubAllGlobals();
   });
 
-  it("shows a dash, not 0/0, when the winner-pick row has settled nothing", async () => {
+  it("stays silent, not 0/0, when the winner-pick row has settled nothing", async () => {
     // 0 total, 0 correct, 0 rebuilt, 0 pre-tip, 0 pre-tip correct
     vi.mocked(api.getTrackRecord).mockResolvedValue([winnerPick(0, 0, 0, 0, 0)]);
     await renderOffline(preTip);
 
-    // A row that exists and has graded nothing is a real row with no numbers
-    // in it: the dash. `0/0` would be a claim about a record that does not
-    // exist, and the whole reason this rule is written down.
-    expect(screen.queryByTestId("record-fill")).toBeNull();
+    // A row that has graded nothing has no pre-tip figure to quote, so there
+    // is no line. `0/0` would be a claim about a record that does not exist.
+    expect(screen.queryByText(/Model, picks made before tip-off:/)).toBeNull();
     expect(screen.queryByText("0/0")).toBeNull();
-    const strip = recordStrip();
-    expect(strip).toHaveTextContent("Every pick");
-    expect(strip).toHaveTextContent("—");
-    // No rebuilt text when there are no rebuilt picks
-    expect(strip).not.toHaveTextContent("made after tip-off");
-    // No pre-tip section when there are no pre-tip picks
-    expect(strip).not.toHaveTextContent("Before tip-off");
     vi.unstubAllGlobals();
   });
 
   it("shows no record strip while the track record is still loading", async () => {
-    // A strip that renders 0/0 for a moment and then corrects itself is a lie
+    // A line that renders 0/0 for a moment and then corrects itself is a lie
     // a reader can catch. Nothing arrives until the numbers do.
     vi.mocked(api.getTrackRecord).mockReturnValue(new Promise(() => {}));
     await renderOffline(preTip);
 
-    expect(screen.queryByTestId("record-fill")).toBeNull();
+    expect(screen.queryByText(/Model, picks made before tip-off:/)).toBeNull();
     expect(screen.queryByText("0/0")).toBeNull();
     expect(screen.getByTestId("instant-block")).toBeInTheDocument();
     vi.unstubAllGlobals();
@@ -335,8 +325,8 @@ describe("GameDetailModal instant block", () => {
     // Every figure the block shows is on screen with no request spent...
     expect(within(block).getByTestId("tile-moneyline")).toBeInTheDocument();
     expect(within(block).getAllByTestId("pbar-fill")).toHaveLength(2);
-    expect(within(block).getByTestId("record-fill")).toBeInTheDocument();
     expect(within(block).getByText("Celtics is the pick.")).toBeInTheDocument();
+    expect(screen.getByText(/Model, picks made before tip-off:/)).toBeInTheDocument();
 
     // ...and nothing was asked for to get them.
     expect(fetchSpy).not.toHaveBeenCalled();
@@ -345,7 +335,7 @@ describe("GameDetailModal instant block", () => {
   });
 
   it("REQUIRED: each figure appears exactly once after the button is pressed", async () => {
-    vi.mocked(api.getTrackRecord).mockResolvedValue([winnerPick(40, 22, 3, 0, 0)]);
+    vi.mocked(api.getTrackRecord).mockResolvedValue([winnerPick(40, 22, 3, 10, 5)]);
     await renderOffline(preTip);
     vi.mocked(api.explainGame).mockResolvedValue(summaryAnswer as never);
     const summary = await pressAiSummary();
@@ -358,16 +348,15 @@ describe("GameDetailModal instant block", () => {
     expect(screen.getAllByTestId("tile-moneyline")).toHaveLength(1);
     expect(screen.getAllByTestId("pbar-fill")).toHaveLength(2);
     expect(screen.getAllByTestId("pbar-label")).toHaveLength(2);
-    expect(screen.getAllByTestId("record-fill")).toHaveLength(1);
+    expect(screen.getAllByText(/Model, picks made before tip-off:/)).toHaveLength(1);
     expect(screen.getAllByText("Celtics is the pick.")).toHaveLength(1);
-    expect(screen.getAllByText("22/40")).toHaveLength(1);
 
     // And the old duplicate sections are gone from the summary state: it used
     // to re-render the tiles, the bar, the legend and the record.
     expect(within(summary).queryByTestId("tile-moneyline")).toBeNull();
     expect(within(summary).queryAllByTestId("pbar-fill")).toHaveLength(0);
     expect(within(summary).queryByTestId("pbar-legend")).toBeNull();
-    expect(within(summary).queryByTestId("record-fill")).toBeNull();
+    expect(within(summary).queryByText(/Model, picks made before tip-off:/)).toBeNull();
     // The prose is still there — the summary is what the button buys.
     expect(within(summary).getByText("Boston is the pick at home.")).toBeInTheDocument();
     vi.unstubAllGlobals();
@@ -426,12 +415,11 @@ describe("GameDetailModal instant block", () => {
     // A record is a fact about the season, not about this fixture's pick, so it
     // stands on its own. An earlier guard that required a verdict dropped it
     // silently whenever the bundle had no pick.
-    vi.mocked(api.getTrackRecord).mockResolvedValue([winnerPick(40, 22, 3, 0, 0)]);
+    vi.mocked(api.getTrackRecord).mockResolvedValue([winnerPick(40, 22, 3, 8, 3)]);
     await renderOffline({ ...preTip, prediction: null });
 
     expect(screen.getByText(/No pick was made for this fixture\./)).toBeInTheDocument();
-    expect(screen.getByTestId("record-fill")).toBeInTheDocument();
-    expect(screen.getByText("22/40")).toBeInTheDocument();
+    expect(recordLine()).toHaveTextContent("Model, picks made before tip-off: 38%");
     vi.unstubAllGlobals();
   });
 

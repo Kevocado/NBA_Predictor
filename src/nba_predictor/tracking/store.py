@@ -1,6 +1,7 @@
 import logging
 import sqlite3
 import threading
+import time
 import warnings
 from contextlib import contextmanager
 from pathlib import Path
@@ -396,6 +397,35 @@ def insert_player_prediction(
         )
         conn.commit()
         return cur.lastrowid
+
+
+def insert_player_predictions(db_path: Path, rows: Sequence[dict], attempts: int = 4) -> int:
+    """Many player projections in ONE transaction (one connection, one commit), returning the number written.
+
+    The per-row `insert_player_prediction` opens a connection and commits for every row; a scoring run writes ~13,000,
+    and on the VPS's overlay filesystem two runs died part-way with `sqlite3.OperationalError: disk I/O error`. One
+    transaction is the same data with a thousandth of the syncs. A transient OperationalError is retried (the whole
+    batch, nothing half-written); a persistent one is raised, never swallowed.
+    """
+    batch = [(r["game_id"], r["player_id"], r["stat"], r["predicted_value"], r["created_at"], r.get("position")) for r in rows]
+    for attempt in range(attempts):
+        try:
+            with get_connection(db_path) as conn:
+                conn.executemany(
+                    """
+                    INSERT INTO player_prediction_snapshots (game_id, player_id, stat, predicted_value, created_at, position)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    batch,
+                )
+                conn.commit()
+            return len(batch)
+        except sqlite3.OperationalError as exc:
+            if attempt == attempts - 1:
+                raise
+            logger.warning("bulk player-prediction insert failed (%s); retrying %d/%d", exc, attempt + 1, attempts - 1)
+            time.sleep(2 * (attempt + 1))
+    return 0
 
 
 def record_player_names(db_path: Path, box_rows) -> int:

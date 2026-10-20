@@ -310,16 +310,11 @@ def score_upcoming_player_props(
         return 0
 
     created_at = datetime.now(timezone.utc).isoformat()
-    for row, stat, value in guarded:
-        store.insert_player_prediction(
-            db_path,
-            game_id=row["game_id"],
-            player_id=row["player_id"],
-            stat=stat,
-            predicted_value=value,
-            created_at=created_at,
-            position=row.get("position"),
-        )
+    store.insert_player_predictions(db_path, [
+        {"game_id": row["game_id"], "player_id": row["player_id"], "stat": stat, "predicted_value": value,
+         "created_at": created_at, "position": row.get("position")}
+        for row, stat, value in guarded
+    ])
     return len(guarded)
 
 

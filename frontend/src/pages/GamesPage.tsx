@@ -1,9 +1,18 @@
 import { useEffect, useRef, useState } from "react";
+import EarlySeasonNotice from "../components/EarlySeasonNotice";
 import GameDetailModal from "../components/GameDetailModal";
 import { api, type Game } from "../api/client";
 import { EmptyState, ErrorState, MatchCard, RoundNavigator, Skeleton } from "../predictor-ui";
 import { addDays, mondayOf } from "../lib/weeks";
 import { dayHeading, nextUpIds, tipZones, toCardModel, weekLabel, weekTally } from "../lib/nightCards";
+
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+/** "3 games · 2 of 3 right": what is inside a folded day, and what happened. */
+function daySummary(dayGames: Game[]): string {
+  const { hits, settled } = weekTally(dayGames);
+  return settled > 0 ? `${plural(dayGames.length, "game")} · ${hits} of ${settled} right` : plural(dayGames.length, "game");
+}
 
 type SortMode = "tip-off" | "confidence";
 
@@ -84,6 +93,9 @@ export default function GamesPage() {
     gamesByDay.set(game.game_date, existing);
   }
   const days = [...gamesByDay.entries()].sort(([a], [b]) => a.localeCompare(b));
+  // A week is up to seven nights of cards; on a phone that is a dozen screens. Open the day
+  // with the next games and fold the rest into one-line summaries a tap away.
+  const focusDay = (days.find(([, gs]) => gs.some((g) => !(g.completed && g.home_pts != null))) ?? days[0])?.[0];
 
   return (
     <div>
@@ -98,6 +110,8 @@ export default function GamesPage() {
         onJumpToCurrent={!isCurrentWeek && currentWeek ? () => setWeekStart(currentWeek) : undefined}
         record={games ? weekTally(games) : undefined}
       />
+
+      <EarlySeasonNotice />
 
       {error && <ErrorState message="We couldn't load this week's games. Check your connection and try again." onRetry={() => setReloadKey((k) => k + 1)} />}
       {!error && games === null && <Skeleton label="Loading games…" />}
@@ -122,19 +136,27 @@ export default function GamesPage() {
         </button>
       </div>
 
-      <div className="space-y-6">
+      <div className="space-y-2">
         {days.map(([day, dayGames]) => (
           <section key={day} aria-labelledby={`day-${day}`}>
-            <h3 id={`day-${day}`} className="mb-2 font-pr-display text-base font-semibold uppercase tracking-wide text-pr-text-dim">
-              {dayHeading(day)}
-            </h3>
-            <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-              {dayGames.map((game) => (
-                <li key={game.game_id} data-testid={`game-card-${game.game_id}`}>
-                  <MatchCard {...toCardModel(game, nextUp.has(game.game_id))} moment="tip-off" compact onOpen={() => setSelectedGameId(game.game_id)} />
-                </li>
-              ))}
-            </ul>
+            <details open={day === focusDay} className="group">
+              <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 border-b border-pr-rule py-2 [&::-webkit-details-marker]:hidden">
+                <h3 id={`day-${day}`} className="font-pr-display text-base font-semibold uppercase tracking-wide text-pr-text-dim">
+                  {dayHeading(day)}
+                </h3>
+                <span className="flex items-center gap-2 text-xs text-pr-text-faint">
+                  {daySummary(dayGames)}
+                  <span aria-hidden="true" className="inline-block h-2 w-2 -rotate-45 border-b-2 border-r-2 border-current transition-transform group-open:rotate-45" />
+                </span>
+              </summary>
+              <ul className="grid gap-3 pt-3 pb-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                {dayGames.map((game) => (
+                  <li key={game.game_id} data-testid={`game-card-${game.game_id}`}>
+                    <MatchCard {...toCardModel(game, nextUp.has(game.game_id))} moment="tip-off" compact onOpen={() => setSelectedGameId(game.game_id)} />
+                  </li>
+                ))}
+              </ul>
+            </details>
           </section>
         ))}
       </div>

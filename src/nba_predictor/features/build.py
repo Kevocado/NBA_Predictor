@@ -13,7 +13,7 @@ from nba_predictor.features.rest_travel import (
     rolling_travel_miles,
     timezone_change_count,
 )
-from nba_predictor.features.availability import AVAILABILITY_COLUMNS, compute_availability_features
+from nba_predictor.features.availability import AVAILABILITY_COLUMNS, compute_availability_by_season
 from nba_predictor.features.team_features import compute_h_features
 
 logger = logging.getLogger(__name__)
@@ -103,7 +103,7 @@ def build_feature_frame(
     if not set(AVAILABILITY_COLUMNS) <= set(games.columns):
         if players is None:
             logger.warning("no player box scores supplied: availability features take their no-history default (0.0)")
-        games = games.merge(compute_availability_features(games, players), on="game_id", how="left")
+        games = games.merge(compute_availability_by_season(games, players), on="game_id", how="left")
 
     long_form = add_rolling_four_factors(
         _long_format_box_scores(games), carry_over_weight_value=carry_over_weight

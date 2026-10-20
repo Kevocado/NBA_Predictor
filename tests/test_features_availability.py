@@ -122,3 +122,52 @@ def test_build_feature_frame_carries_the_columns_for_upcoming_games():
     row = frame[frame.game_id == "up"]
     assert len(row) == 1 and not row[cols].isna().any().any()
     assert (frame[AVAILABILITY_COLUMNS] > 0).any().any()
+
+
+# --- the rotation is ranked within a production-sized window, not over all history --------------------------
+
+def _three_seasons():
+    """BOS has a star ("X") only in season 2022; from 2023 on the same new core plays. Two teams, 12 games a season."""
+    games, rows = [], []
+    gid = 0
+    for season, start in ((2022, "2022-11-"), (2023, "2023-11-"), (2024, "2024-11-")):
+        for i in range(12):
+            day = f"{start}{1 + i:02d}"
+            games.append(dict(game_id=f"g{gid:03d}", game_date=day, home_team="BOS", away_team="NYK"))
+            for team in ("BOS", "NYK"):
+                core = ["X", "a", "b", "c", "d", "e", "f", "g"] if (team == "BOS" and season == 2022) else [f"{team}{k}" for k in range(8)]
+                for pid in core:
+                    m = 40.0 if pid == "X" else 30.0
+                    rows.append(dict(game_id=f"g{gid:03d}", game_date=day, team=team, player_id=pid, minutes=m, points=m / 3, rebounds=m / 8, assists=m / 10))
+            gid += 1
+    return pd.DataFrame(games), pd.DataFrame(rows)
+
+
+def test_by_season_equals_the_plain_function_on_a_single_season_frame():
+    from nba_predictor.features.availability import compute_availability_by_season
+
+    games, players = _world()
+    pd.testing.assert_frame_equal(compute_availability_by_season(games, players), compute_availability_features(games, players))
+
+
+def test_a_departed_players_old_minutes_do_not_make_the_new_core_look_absent():
+    from nba_predictor.features.availability import compute_availability_by_season
+
+    games, players = _three_seasons()
+    plain = compute_availability_features(games, players).set_index("game_id")
+    by_season = compute_availability_by_season(games, players).set_index("game_id")
+    opener_2024 = games[games.game_date >= "2024-11-01"].game_id.iloc[1]    # 2nd game: has a previous game to compare
+    # Over all history the departed 2022 star still tops BOS's cumulative minutes, so he counts as "absent last game".
+    assert plain.loc[opener_2024, "home_absent_min_share"] > 0.05
+    # Ranked from the previous season on (2023, 2024), the rotation is the people actually playing.
+    assert by_season.loc[opener_2024, "home_absent_min_share"] == 0.0
+    assert list(by_season.index) == list(games.game_id)
+
+
+def test_build_feature_frame_uses_the_season_scoped_availability():
+    games, players = _three_seasons()
+    raw = games.assign(home_pts=100, away_pts=95, home_win=1, home_fgm=40, home_fga=88, home_fg3m=12, home_tov=11, home_oreb=9, home_dreb=32, home_fta=20,
+                       away_fgm=38, away_fga=90, away_fg3m=10, away_tov=13, away_oreb=10, away_dreb=30, away_fta=18)
+    frame, _ = build_feature_frame(raw, players=players)
+    row = frame[frame.game_id == games[games.game_date >= "2024-11-01"].game_id.iloc[1]].iloc[0]
+    assert row["home_absent_min_share"] == 0.0

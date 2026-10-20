@@ -41,4 +41,8 @@ jobs:
                   models/*.pkl models/manifest.json models/manifest_history.jsonl \
                   data/public_snapshot.json
           git diff --staged --quiet || git commit -m "chore: refresh NBA data and retrain"
-          git push
+          for i in 1 2 3 4; do
+            git pull --rebase -q -X theirs && git push && exit 0
+            sleep $((i * 5))
+          done
+          echo "push kept losing the race" >&2; exit 1

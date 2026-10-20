@@ -16,6 +16,8 @@ COPY models/ ./models/
 COPY data/public_snapshot.json ./data/public_snapshot.json
 COPY data/cache/schedule/ ./data/cache/schedule/
 COPY data/cache/hub/ ./data/cache/hub/
+# Frozen earlier seasons for the retrain (scripts/build_history.py); the daily refresh on the VPS trains on these plus its window.
+COPY data/history/ ./data/history/
 COPY --from=frontend-build /app/frontend/dist ./frontend/dist
 
 ENV PORT=8000

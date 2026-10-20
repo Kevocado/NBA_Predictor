@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import EarlySeasonNotice from "../components/EarlySeasonNotice";
 import GameDetailModal from "../components/GameDetailModal";
-import { api, type Game } from "../api/client";
+import { ModelRecordLine } from "../components/ModelRecordLine";
+import { api, type Game, type TrackRecord } from "../api/client";
 import { EmptyState, ErrorState, MatchCard, RoundNavigator, Skeleton } from "../predictor-ui";
 import { addDays, mondayOf } from "../lib/weeks";
 import { dayHeading, nextUpIds, tipZones, toCardModel, weekLabel, weekTally } from "../lib/nightCards";
@@ -34,6 +35,9 @@ export default function GamesPage() {
   const [selectedGameId, setSelectedGameId] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [sort, setSort] = useState<SortMode>("tip-off");
+  // The trust strip's source. Loading and failure both stay `null`, and the
+  // line is not drawn at all: a games page must not invent a record.
+  const [trackRecord, setTrackRecord] = useState<TrackRecord[] | null>(null);
   // A deep link (?game=<id> on "/" — the hub's teaser rows point here) names
   // one game. Read once, on arrival, and matched against the week's games
   // after each successful load: only an id this page actually shows is
@@ -57,6 +61,10 @@ export default function GamesPage() {
       .getSeasonFirstWeek()
       .then((bounds) => land(bounds.first_week_start ?? mondayOf(new Date())))
       .catch(() => land(mondayOf(new Date())));
+  }, []);
+
+  useEffect(() => {
+    api.getTrackRecord().then(setTrackRecord).catch(() => setTrackRecord(null));
   }, []);
 
   useEffect(() => {
@@ -110,6 +118,8 @@ export default function GamesPage() {
         onJumpToCurrent={!isCurrentWeek && currentWeek ? () => setWeekStart(currentWeek) : undefined}
         record={games ? weekTally(games) : undefined}
       />
+
+      <ModelRecordLine rows={trackRecord} className="mb-4" />
 
       <EarlySeasonNotice />
 

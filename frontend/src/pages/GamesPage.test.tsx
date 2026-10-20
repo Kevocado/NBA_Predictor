@@ -11,6 +11,7 @@ vi.mock("../api/client", () => ({
     // whole client and a method the component tree reaches for must not be
     // `undefined`. See GamesPage.deepLink.test.tsx.
     getGameSignals: vi.fn(async () => ({ sport: "nba", id: "", signals: [] })),
+    getTrackRecord: vi.fn(async () => []),
   },
 }));
 

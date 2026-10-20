@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import TrackRecordPanel from "./TrackRecordPanel";
 import { wilsonInterval } from "../predictor-ui";
 import { api, type TrackRecord, type TrackRecordPick, type TrackRecordWeek, type VsMarket } from "../api/client";
@@ -167,9 +168,19 @@ describe("parity with the page before the kit", () => {
   it("renders everything as before, except the corrections", async () => {
     const { container } = render(<TrackRecordPanel />);
     await screen.findByTestId("tally-game_outcome");
+    await userEvent.click(screen.getByText("Every recorded pick"));
+    await screen.findAllByRole("table");
     const after = CORRECTIONS.reduce((text, [from, to]) => text.split(from).join(to), BEFORE);
     expect(container.textContent).toBe(after);
     expect(container.textContent).not.toBe(BEFORE);
+  });
+
+  it("builds the every-pick table only when it is opened (it is ~1,400 rows on the live page)", async () => {
+    render(<TrackRecordPanel />);
+    await screen.findByTestId("tally-game_outcome");
+    expect(screen.queryByRole("table")).toBeNull();
+    await userEvent.click(screen.getByText("Every recorded pick"));
+    expect(await screen.findByRole("table")).toBeInTheDocument();
   });
 
   it("made every correction", async () => {

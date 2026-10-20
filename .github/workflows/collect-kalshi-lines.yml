@@ -36,5 +36,8 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add data/lines
           git commit -m "Collect Kalshi NBA lines [automated]"
-          git pull --rebase -q
-          git push
+          for i in 1 2 3 4; do
+            git pull --rebase -q -X theirs && git push && exit 0
+            sleep $((i * 5))
+          done
+          echo "push kept losing the race" >&2; exit 1

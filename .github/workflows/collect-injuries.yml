@@ -1,0 +1,46 @@
+name: Collect NBA injury reports
+
+# Free, public, no key: stores ESPN's league-wide injury report with the time we saw it, into
+# data/injuries/*.jsonl.gz (one file per UTC day). ESPN keeps no history, and a model that discounts
+# Out/Doubtful/Questionable players needs to learn what each status actually meant. Four looks a day:
+# morning, early afternoon, after the ~5pm ET official report, and late evening.
+
+on:
+  schedule:
+    - cron: "30 12 * * *"
+    - cron: "30 17 * * *"
+    - cron: "45 21 * * *"
+    - cron: "30 1 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: collect-injuries
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install requests
+        run: pip install requests
+      - name: Collect
+        run: python src/nba_predictor/data/injury_log.py
+      - name: Commit and push if changed
+        run: |
+          if [ -z "$(git status --porcelain data/injuries)" ]; then echo "nothing new"; exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/injuries
+          git commit -m "Collect NBA injury report [automated]"
+          for i in 1 2 3 4; do
+            git pull --rebase -q -X theirs && git push && exit 0
+            sleep $((i * 5))
+          done
+          echo "push kept losing the race" >&2; exit 1

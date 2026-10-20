@@ -788,3 +788,15 @@ def test_an_empty_player_window_keeps_its_schema_instead_of_crashing_the_next_st
     frame = ingest.to_player_training_frame([], {})
     assert frame.empty and "player_id" in frame.columns
     assert list(frame.columns) == ingest.PLAYER_TRAINING_COLUMNS
+
+
+def test_compute_player_hub_puts_a_traded_player_on_his_current_team():
+    from nba_predictor.pipeline.ingest import compute_player_hub
+
+    games = [{"game_id": "g1", "game_date": "2026-03-01", "home_team": "BOS", "away_team": "MIA", "home_fga": 90, "away_fga": 85}]
+    boxes = {"g1": [_player_box_row("brown", "Jaylen Brown", "BOS", 34.0, 30.0, 8.0, 5.0), _player_box_row("free", "Free Agent", "BOS", 20.0, 8.0, 2.0, 1.0)]}
+
+    rows = {r["player_id"]: r for r in compute_player_hub(games, boxes, team_by_player={"brown": "PHI"})}
+
+    assert rows["brown"]["team"] == "PHI"      # the roster feed knows where he plays now
+    assert rows["free"]["team"] == "BOS"       # not on any roster: his last box score is all we know

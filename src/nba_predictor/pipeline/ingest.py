@@ -898,7 +898,7 @@ PLAYER_TRAINING_COLUMNS = [
 ]
 
 
-def compute_player_hub(games: list[dict], player_boxscores: dict[str, list[dict]]) -> list[dict]:
+def compute_player_hub(games: list[dict], player_boxscores: dict[str, list[dict]], team_by_player: dict[str, str] | None = None) -> list[dict]:
     """Real per-player aggregates from real box scores.
 
     `rating`/`live_form_rating` are a simple game-score-style composite
@@ -908,7 +908,11 @@ def compute_player_hub(games: list[dict], player_boxscores: dict[str, list[dict]
     team FGA, averaged — a field-goal-attempt-share proxy, not the full
     NBA usage% formula (which also needs team possessions/minutes-on-court
     context this data doesn't carry per-player).
+
+    `team_by_player` ({ESPN athlete id: team}) is the current roster: it overrides the team of the player's last box
+    score, which is wrong after a trade until he has played for his new team.
     """
+    team_by_player = team_by_player or {}
     games_by_id = {g["game_id"]: g for g in games}
     per_player_games: dict[str, list[dict]] = {}
 
@@ -956,7 +960,7 @@ def compute_player_hub(games: list[dict], player_boxscores: dict[str, list[dict]
             {
                 "player_id": player_id,
                 "player_name": entries[-1]["player_name"],
-                "team": entries[-1]["team"],
+                "team": team_by_player.get(player_id, entries[-1]["team"]),
                 "position": entries[-1]["position"],
                 "rating": round(
                     _game_score(
@@ -1101,7 +1105,9 @@ def run_ingest(
         log(f"Player box scores: {len(all_player_boxscores)} games in window, {len(player_boxscores)} since {cutoff} for the hub/props...")
         store.init_db(db_path)
         record_names_from_boxscores(player_boxscores, db_path)
-        (hub_dir / "players.json").write_text(json.dumps(compute_player_hub(recent_games, player_boxscores)))
+        hub_rosters = get_rosters()
+        team_by_player = {p["player_id"]: team for team, ps in (hub_rosters or {}).items() for p in ps}
+        (hub_dir / "players.json").write_text(json.dumps(compute_player_hub(recent_games, player_boxscores, team_by_player=team_by_player)))
     else:
         recent_games = []
         player_boxscores = {}

@@ -173,21 +173,20 @@ def project_team(
     *,
     latest_team: Mapping[str, str] | None = None,
     statuses: Mapping[str, str] | None = None,
-    window: int = WINDOW,
 ) -> list[PlayerProjection]:
     """Project every player whose latest team is ``team``.
 
     ``team_games`` is chronological, one entry per completed game:
     ``{"game_id": ..., "players": [row, ...]}``. Rows need ``player_id``,
     ``player_name``, ``team``, ``minutes`` and ``started``; ``position`` is
-    carried through. Only the last ``window`` games are used.
+    carried through. Only the last ``WINDOW`` games are used.
 
     ``latest_team`` is the player -> team map as of before the target game.
     When it is omitted every player appearing in ``team_games`` is assumed to
     still be on the team; the evaluation always passes the real map, because a
     traded player must not be projected for his old team.
     """
-    games = list(team_games)[-window:]
+    games = list(team_games)[-WINDOW:]
     observations: dict[str, dict[str, tuple[float, bool]]] = {}
     first_game: dict[str, int] = {}
     names: dict[str, str] = {}

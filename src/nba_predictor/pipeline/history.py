@@ -20,7 +20,8 @@ from nba_predictor import config
 logger = logging.getLogger(__name__)
 
 HISTORY_RELATIVE = Path("data") / "history" / "nba_history.json.gz"
-PLAYER_COLS = ["game_id", "game_date", "team", "player_id", "minutes", "points", "rebounds", "assists"]
+# Everything the props need (rolling means of points/rebounds/assists/threes/minutes) and the availability features use.
+PLAYER_COLS = ["game_id", "game_date", "team", "player_id", "player_name", "position", "minutes", "points", "rebounds", "assists", "fg3m"]
 
 
 def load_history(before: str, path: Path | None = None) -> tuple[list[dict], pd.DataFrame]:

@@ -22,6 +22,8 @@ from nba_predictor.models.game_outcome import predict_win_probability
 from nba_predictor.models.manifest import build_manifest, write_manifest
 from nba_predictor.models.probability import win_prob
 from nba_predictor.models.player_props import predict_player_stat, train_player_stat_model
+from nba_predictor.data.rosters import get_rosters
+from nba_predictor.models.prop_holdout import MARKETS, prop_holdout_metrics
 from nba_predictor.pipeline.history import merge_history
 from nba_predictor.pipeline.retrain import run_retrain_pipeline
 from nba_predictor.tracking import store
@@ -136,55 +138,140 @@ def _outcome_row_count(db_path: Path) -> int:
 PLAYER_STAT_TARGET_COLUMNS = {"points": "points", "rebounds": "rebounds", "assists": "assists", "threes": "fg3m"}
 
 
-def to_player_scoring_frame(games: list[dict], player_boxscores: dict[str, list[dict]], roster_window: int = 5) -> pd.DataFrame:
+def to_player_scoring_frame(
+    games: list[dict], player_boxscores: dict[str, list[dict]], roster_window: int = 5,
+    rosters: dict[str, list[dict]] | None = None, extra_completed: pd.DataFrame | None = None,
+) -> pd.DataFrame:
     """Estimate upcoming roster from recent completed games; rows for
-    upcoming games have None stats (causal — never touches a future result)."""
-    # Gather recent completed games per team
-    team_recent: dict[str, list[dict]] = {}
-    for g in games:
-        if g.get("completed"):
+    upcoming games have None stats (causal — never touches a future result).
+
+    A team's estimated roster is the players who appeared for it in any of
+    its last `roster_window` completed games (by date, not list order) AND
+    whose latest appearance anywhere is still for that team. The previous
+    version took only the team's single last box score, in list order:
+
+    * a star who sat that one game (rest, a minor knock) vanished from the
+      roster entirely;
+    * a traded player stayed on his OLD team's roster -- its last box score
+      in the window predated the trade -- while also joining his new team's,
+      so he was projected in two games on the same day, one of them a game
+      his team was not playing in (live 2026-10-20: Jaylen Brown in both
+      DET-BOS and NYK-PHI after BOS->PHI).
+
+    Keying membership to the player's LATEST team makes a wrong-team row
+    impossible by construction, and the (player, date) dedupe below makes
+    two projections for one player on one day impossible even if the
+    schedule itself lists his team twice that day.
+    """
+    completed_rows = to_player_training_frame(games, player_boxscores)
+    if extra_completed is not None and len(extra_completed):
+        # Earlier seasons (the frozen history): a player's rolling average must not start over each October.
+        completed_rows = pd.concat([extra_completed, completed_rows], ignore_index=True).drop_duplicates(["player_id", "game_id"], keep="last")
+
+    rows = []
+    if len(completed_rows):
+        completed_rows = completed_rows.sort_values(["game_date", "game_id"], kind="mergesort").reset_index(drop=True)
+        upcoming = sorted(
+            (g for g in games if not g.get("completed")),
+            key=lambda g: (g["game_date"], g["game_id"]),
+        )
+        if rosters is not None:
+            # The CURRENT roster (ESPN) is the authority on who plays for whom: box scores only know where a player
+            # last appeared. A reported-Out player gets no projection; everyone else on the roster does (history
+            # follows the player_id across teams in build_player_feature_frame).
+            def roster_for(team):
+                return [(p["player_id"], p["player_name"], p.get("position") or None) for p in rosters.get(team, []) if p.get("injury_status") != "Out"]
+        else:
+            # No roster feed: the latest-team rule over each team's last `roster_window` games (by date).
+            latest_team = completed_rows.groupby("player_id")["team"].last()
+            team_game_ids: dict[str, list[str]] = {}
+            for team, team_rows in completed_rows.groupby("team"):
+                dated = team_rows.drop_duplicates(subset=["game_id"]).sort_values(["game_date", "game_id"], kind="mergesort")
+                team_game_ids[team] = list(dated["game_id"])[-roster_window:]
+            box_roster: dict[str, dict[str, pd.Series]] = {}
+            for _, row in completed_rows.iterrows():
+                team = row["team"]
+                if row["game_id"] in team_game_ids.get(team, []) and latest_team.get(row["player_id"]) == team:
+                    box_roster.setdefault(team, {})[row["player_id"]] = row
+
+            def roster_for(team):
+                return [(pid, r["player_name"], r.get("position")) for pid, r in box_roster.get(team, {}).items()]
+
+        for g in upcoming:
             for side in ["home_team", "away_team"]:
                 team = g.get(side)
-                if team:
-                    team_recent.setdefault(team, []).append({"game_id": g["game_id"], "game_date": g["game_date"]})
-    # For upcoming games, estimate roster from recent completed boxscores
-    upcoming = [g for g in games if not g.get("completed")]
-    rows = []
-    for g in upcoming:
-        for side in ["home_team", "away_team"]:
-            team = g.get(side)
-            if team:
-                # Find the latest completed game for this team from the games list
-                team_completed_ids = [g_["game_id"] for g_ in games if g_.get("completed") and (g_.get("home_team") == team or g_.get("away_team") == team)]
-                if team_completed_ids:
-                    last_id = team_completed_ids[-1]
-                    if last_id in player_boxscores:
-                        for box_row in player_boxscores[last_id]:
-                            if box_row.get("team") == team:
-                                rows.append({
-                                    "player_id": box_row["player_id"],
-                                    "player_name": box_row["player_name"],
-                                    "team": team,
-                                    "game_id": g["game_id"],
-                                    "game_date": g["game_date"],
-                                    "points": None,
-                                    "rebounds": None,
-                                    "assists": None,
-                                    "fg3m": None,
-                                    "minutes": None,
-                                    "position": box_row.get("position"),
-                                })
-    # Also include completed player's real rows so feature frame can compute
-    completed_rows = to_player_training_frame(games, player_boxscores)
+                for player_id, player_name, position in roster_for(team):
+                    rows.append({
+                        "player_id": player_id,
+                        "player_name": player_name,
+                        "team": team,
+                        "game_id": g["game_id"],
+                        "game_date": g["game_date"],
+                        "points": None,
+                        "rebounds": None,
+                        "assists": None,
+                        "fg3m": None,
+                        "minutes": None,
+                        "position": position,
+                    })
+    upcoming_rows = pd.DataFrame(rows)
+    if len(upcoming_rows):
+        # At most one projection per player per day, by construction.
+        upcoming_rows = upcoming_rows.drop_duplicates(subset=["player_id", "game_date"], keep="first")
     # Combine, drop duplicates for upcoming (keep first per player/game)
-    combined = pd.concat([completed_rows, pd.DataFrame(rows)], ignore_index=True)
+    combined = pd.concat([completed_rows, upcoming_rows], ignore_index=True)
     combined = combined.drop_duplicates(subset=["player_id", "game_id"], keep="first").reset_index(drop=True)
     return combined
 
 
-def score_upcoming_player_props(games: list[dict], player_boxscores: dict[str, list[dict]], models_dir: Path, db_path: Path, model_version: str) -> int:
-    """Score upcoming player props using roster estimate + causal rolling features."""
-    scoring_df = to_player_scoring_frame(games, player_boxscores)
+#: A served projection must stay within this band around the player's own
+#: rolling average for that stat. The band is wide -- a real projection can
+#: legitimately sit well off the average on matchup or minutes grounds --
+#: and exists to catch a model whose output has collapsed (or exploded)
+#: relative to the very features it was fed, which is what the Sep-18
+#: vintage prop models do: fed a 25.0 points_roll they answer ~5.
+PROJECTION_GUARD_LOW = 0.4
+PROJECTION_GUARD_HIGH = 2.5
+#: Below this rolling average a ratio band is noise (a non-shooter's threes), so the guard has nothing to say.
+GUARD_MIN_AVERAGE = 0.25
+#: A clamp is a quality signal, not a fix: when more than this share of a run's projections needed one, the model is
+#: wrong and publishing a pile of "0.4 x average" as if it were modelled would be worse than publishing nothing.
+MAX_CLAMP_SHARE = 0.10
+
+
+def guard_player_prediction(stat: str, predicted: float, rolling_average: float | None) -> float:
+    """Clamp one projection into the band around the player's own rolling
+    average for that stat, logging whenever the clamp fires.
+
+    Without a rolling average there is nothing to judge the number against,
+    so it passes through; `build_player_feature_frame` drops such rows
+    before scoring anyway. A negative prediction is impossible for a
+    counting stat and is clamped by the same lower bound.
+    """
+    if rolling_average is None or pd.isna(rolling_average) or float(rolling_average) < GUARD_MIN_AVERAGE:
+        return predicted
+    low = PROJECTION_GUARD_LOW * float(rolling_average)
+    high = PROJECTION_GUARD_HIGH * float(rolling_average)
+    guarded = min(max(float(predicted), low), high)
+    if guarded != float(predicted):
+        logger.warning(
+            "player projection guard: %s prediction %.2f outside [%.2f, %.2f] "
+            "(rolling average %.2f); serving %.2f",
+            stat, predicted, low, high, rolling_average, guarded,
+        )
+    return guarded
+
+
+def score_upcoming_player_props(
+    games: list[dict], player_boxscores: dict[str, list[dict]], models_dir: Path, db_path: Path, model_version: str,
+    rosters: dict[str, list[dict]] | None = None, extra_completed: pd.DataFrame | None = None,
+) -> int:
+    """Score upcoming player props: current roster (ESPN) x causal rolling features.
+
+    Fails closed: if more than MAX_CLAMP_SHARE of the projections fall outside the sanity band around the player's own
+    rolling average, nothing is stored and the reason is logged. Returns the number of projections stored.
+    """
+    scoring_df = to_player_scoring_frame(games, player_boxscores, rosters=rosters, extra_completed=extra_completed)
     frame, feature_cols = build_player_feature_frame(scoring_df)
     upcoming_frame = frame[frame["points"].isna()].reset_index(drop=True)
     if len(upcoming_frame) == 0:
@@ -199,32 +286,49 @@ def score_upcoming_player_props(games: list[dict], player_boxscores: dict[str, l
             logger.warning("player model missing, skipping market: %s", path)
     predictions = {stat: predict_player_stat(model, upcoming_frame[feature_cols]) for stat, model in models.items()}
 
-    created_at = datetime.now(timezone.utc).isoformat()
-    stored = 0
+    guarded: list[tuple] = []
+    clamped = 0
     for i, row in upcoming_frame.iterrows():
         for stat in models:
-            store.insert_player_prediction(
-                db_path,
-                game_id=row["game_id"],
-                player_id=row["player_id"],
-                stat=stat,
-                predicted_value=float(predictions[stat][i]),
-                created_at=created_at,
-                position=row.get("position"),
-            )
-            stored += 1
-    return stored
+            raw = float(predictions[stat][i])
+            value = guard_player_prediction(stat, raw, row.get(f"{PLAYER_STAT_TARGET_COLUMNS[stat]}_roll"))
+            clamped += value != raw
+            guarded.append((row, stat, value))
+    if guarded and clamped / len(guarded) > MAX_CLAMP_SHARE:
+        logger.error(
+            "player props NOT published: %d of %d projections (%.0f%%) fell outside the sanity band around the player's own "
+            "rolling average; the player models are not trustworthy, retrain them", clamped, len(guarded), 100 * clamped / len(guarded),
+        )
+        return 0
+
+    created_at = datetime.now(timezone.utc).isoformat()
+    for row, stat, value in guarded:
+        store.insert_player_prediction(
+            db_path,
+            game_id=row["game_id"],
+            player_id=row["player_id"],
+            stat=stat,
+            predicted_value=value,
+            created_at=created_at,
+            position=row.get("position"),
+        )
+    return len(guarded)
 
 
 def train_player_prop_models(training_df: pd.DataFrame, models_dir: Path, model_version: str, trained_at: str) -> dict:
-    """Trains one XGBRegressor per stat target on real per-player rolling
-    features. Metrics are in-sample (fit then scored on the same rows) —
-    same honesty tradeoff score_and_store_predictions already accepts for
-    the team backtest, not a proper chronological holdout, stated here
-    rather than hidden."""
-    models_dir.mkdir(parents=True, exist_ok=True)
-    frame, feature_cols = build_player_feature_frame(training_df)
+    """Trains one XGBRegressor per stat on real per-player rolling features, over games the player PLAYED.
 
+    Reports a chronological HOLDOUT MAE per stat next to the player's own rolling-mean baseline (and the in-sample
+    figure for the gap), then refits on every row for serving. The earlier version trained on a ~3-week slice and
+    reported only in-sample numbers: fed a 25-point scorer it answered ~5 (mean prediction 5.3 vs actual 10.7 over
+    2021-2025 slices of that size, nba-eval/props_race.py). Trained on full history the model matches the baseline
+    (points 4.70 vs 4.69, rebounds 1.95 vs 1.95); the metrics now say so instead of flattering it.
+    """
+    models_dir.mkdir(parents=True, exist_ok=True)
+    played = training_df[training_df["minutes"] > 0]
+    frame, feature_cols = build_player_feature_frame(played)
+
+    holdout = prop_holdout_metrics(played, {m: train_player_stat_model for m in MARKETS}) if len(frame) >= 50 else {}
     metrics: dict[str, dict] = {}
     for stat, target_col in PLAYER_STAT_TARGET_COLUMNS.items():
         if len(frame) == 0:
@@ -232,15 +336,20 @@ def train_player_prop_models(training_df: pd.DataFrame, models_dir: Path, model_
             continue
         model = train_player_stat_model(frame[feature_cols], frame[target_col])
         joblib.dump(model, models_dir / f"player_{stat}_model.pkl")
-        preds = predict_player_stat(model, frame[feature_cols])
-        metrics[stat] = {"mae": float(np.mean(np.abs(preds - frame[target_col])))}
+        in_sample = float(np.mean(np.abs(predict_player_stat(model, frame[feature_cols]) - frame[target_col])))
+        h = holdout.get(stat, {})
+        metrics[stat] = {
+            "mae": h.get("holdout_mae", in_sample),          # the headline is the holdout figure when there is one
+            "naive_mae": h.get("naive_mae"),
+            "in_sample_mae": in_sample,
+        }
 
     manifest = build_manifest(
         model_names=list(PLAYER_STAT_TARGET_COLUMNS.keys()),
         metrics=metrics,
         model_version=model_version,
         trained_at=trained_at,
-        training={"n_train_player_games": int(len(frame)), "in_sample_metrics": True},
+        training={"n_train_player_games": int(len(frame)), "in_sample_metrics": not holdout},
     )
     write_manifest(manifest, models_dir / "player_props_manifest.json")
     return manifest
@@ -1033,8 +1142,8 @@ def run_ingest(
     log(f"  trained {model_version}: {manifest['metrics']}")
 
     player_training_df = to_player_training_frame(recent_games, player_boxscores)
-    log(f"Training player prop models on {len(player_training_df)} real player-game rows...")
-    player_manifest = train_player_prop_models(player_training_df, models_dir, model_version=model_version, trained_at=trained_at)
+    log(f"Training player prop models on {len(availability_players)} real player-game rows (frozen history + window)...")
+    player_manifest = train_player_prop_models(availability_players, models_dir, model_version=model_version, trained_at=trained_at)
     summary["player_model_metrics"] = player_manifest["metrics"]
     log(f"  trained player props: {player_manifest['metrics']}")
 
@@ -1055,7 +1164,24 @@ def run_ingest(
         summary["completed_player_predictions_stored"] = player_stored
         log(f"  stored {player_stored} real player predictions")
 
-        player_stored_upcoming = score_upcoming_player_props(recent_games, player_boxscores, models_dir, db_path, model_version)
+        # Score against the FULL window's box scores, not the hub's recent
+        # slice: a rolling average built from the last 21 days alone is a
+        # few preseason minutes in October, which is the failure
+        # player_props_refresher.HISTORY_DAYS exists to avoid on its path.
+        # Training and scoring both use the window plus the frozen earlier seasons (a recent slice trained a model
+        # that answered half the truth); the hub's recent slice only bounds what is shown and stored for browsing.
+        # player_hub_days == 0 keeps its documented meaning -- no player
+        # scoring at all -- so the widened call only replaces the recent
+        # one when the hub window is on.
+        if player_hub_days > 0:
+            # Current rosters decide who is on which team (None = feed down: the box-score rule, with a warning).
+            rosters = get_rosters()
+            hist_players = availability_players[~availability_players["game_id"].isin(window_game_ids)]
+            player_stored_upcoming = score_upcoming_player_props(
+                games, all_player_boxscores, models_dir, db_path, model_version, rosters=rosters, extra_completed=hist_players,
+            )
+        else:
+            player_stored_upcoming = score_upcoming_player_props(recent_games, player_boxscores, models_dir, db_path, model_version)
         summary["upcoming_player_predictions_stored"] = player_stored_upcoming
         log(f"  stored {player_stored_upcoming} player predictions for upcoming games")
 

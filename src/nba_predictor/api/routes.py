@@ -15,6 +15,7 @@ from nba_predictor.models.manifest import build_manifest
 from nba_predictor.api.deps import (
     get_db_path,
     get_injury_report,
+    get_roster_index,
     get_injury_report_best_effort,
     get_models_dir,
     get_schedule,
@@ -431,6 +432,7 @@ def get_game_players(
     schedule: list[dict] = Depends(get_schedule),
     db_path: Path = Depends(get_db_path),
     injuries: list[dict] = Depends(get_injury_report),
+    roster_index: dict[str, set[str]] | None = Depends(get_roster_index),
 ) -> list[PlayerPropOut]:
     """One projection per player and stat, with an out player left out.
 
@@ -445,6 +447,14 @@ def get_game_players(
     name_by_id = player_name_map(db_path, config.DATA_DIR / "cache" / "hub" / "players.json")
     picks = picks_by_player_stat(db_path, game_id, game)
     actual_by_key = actuals_by_player_stat(db_path, game_id)
+
+    # An UPCOMING game shows only players on the two teams' current rosters: older scoring runs assigned players from
+    # box scores, so a traded player's stale rows (Jaylen Brown on BOS, opening week 2026) can still sit in the store.
+    # A finished game keeps whoever played in it. Unknown rosters filter nothing.
+    if roster_index is not None and not game.get("completed"):
+        on_roster = roster_index.get(game.get("home_team"), set()) | roster_index.get(game.get("away_team"), set())
+        if on_roster:
+            picks = {key: value for key, value in picks.items() if key[0] in on_roster}
 
     # Resolve availability before ranking anything. Anything unresolvable here
     # removes nobody -- see api/availability.py for why that asymmetry.

@@ -134,8 +134,11 @@ def prop_holdout_metrics(
         holdout_pred = np.asarray(model.predict(holdout_frame[feature_cols]), dtype=float)
         holdout_mae = float(np.abs(holdout_pred - holdout_frame[target]).mean())
 
+        # The baseline any model has to beat: the player's own rolling mean (features are shift(1), so causal).
+        naive_mae = float(np.abs(holdout_frame[f"{target}_roll"] - holdout_frame[target]).mean())
         results[market] = {
             "holdout_mae": holdout_mae,
+            "naive_mae": naive_mae,
             "in_sample_mae": in_sample,
             # The honest gap. Positive means the in-sample number was flattering,
             # which is the thing this whole task exists to measure.

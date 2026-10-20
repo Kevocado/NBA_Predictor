@@ -21,7 +21,7 @@ from pathlib import Path
 from nba_predictor.pipeline import ingest
 
 OUT = Path("data/history/nba_history.json.gz")
-PLAYER_COLS = ["game_id", "game_date", "team", "player_id", "minutes", "points", "rebounds", "assists"]
+from nba_predictor.pipeline.history import PLAYER_COLS
 
 
 def build(cache: Path, before: str) -> dict:

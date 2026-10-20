@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
 import { api, type PowerRankingRow } from "../api/client";
+import HubRows from "./HubRows";
 import TeamLogo from "./TeamLogo";
 
 const TREND_GLYPH: Record<PowerRankingRow["trend"], string> = { up: "▲", down: "▼", steady: "–" };
@@ -10,32 +10,28 @@ const TREND_COLOR: Record<PowerRankingRow["trend"], string> = {
 };
 
 export default function PowerRankingsPanel() {
-  const [rows, setRows] = useState<PowerRankingRow[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    api.getHubRankings().then(setRows).catch(() => setError("Couldn't load rankings."));
-  }, []);
-
-  if (error) return <p className="text-[var(--color-shotclock)]">{error}</p>;
-  if (rows === null) return <p>Loading rankings…</p>;
-  if (rows.length === 0) return <p>No ranking data cached yet.</p>;
-
   return (
-    <ol className="space-y-1 text-sm">
-      {[...rows]
-        .sort((a, b) => a.rank - b.rank)
-        .map((row) => (
-          <li key={row.abbreviation} className="flex justify-between border-b border-[var(--color-line)] py-1">
-            <span className="flex items-center gap-1.5">
-              #{row.rank} <TeamLogo team={row.abbreviation} size={18} />
-              <span>{row.abbreviation}</span>
-            </span>
-            <span>
-              {row.power_rating.toFixed(0)} <span className={TREND_COLOR[row.trend]}>{TREND_GLYPH[row.trend]}</span>
-            </span>
-          </li>
-        ))}
-    </ol>
+    <HubRows<PowerRankingRow> load={api.getHubRankings} noun="ranking">
+      {(rows) => (
+        <>
+          <p className="mb-3 max-w-prose text-sm text-pr-text-dim">Team strength rating: higher is stronger.</p>
+          <ol className="space-y-1 text-sm">
+            {[...rows]
+              .sort((a, b) => a.rank - b.rank)
+              .map((row) => (
+                <li key={row.abbreviation} className="flex justify-between border-b border-[var(--color-line)] py-1">
+                  <span className="flex items-center gap-1.5">
+                    #{row.rank} <TeamLogo team={row.abbreviation} size={18} />
+                    <span>{row.abbreviation}</span>
+                  </span>
+                  <span>
+                    {row.power_rating.toFixed(0)} <span className={TREND_COLOR[row.trend]}>{TREND_GLYPH[row.trend]}</span>
+                  </span>
+                </li>
+              ))}
+          </ol>
+        </>
+      )}
+    </HubRows>
   );
 }

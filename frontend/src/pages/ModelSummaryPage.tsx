@@ -25,7 +25,7 @@ export const METRIC_NAMES: Record<string, string> = {
   mae: "MAE (holdout)",
   wf_mae: "MAE (walk-forward)",
   wf_naive_mae_fixed: "Naive baseline MAE (walk-forward)",
-  residual_sigma: "Residual σ (drives served probability)",
+  residual_sigma: "Typical miss (σ, drives served probability)",
 };
 
 // Metrics are fractions or points; three significant places read cleanly.
@@ -81,7 +81,7 @@ export default function ModelSummaryPage() {
               <td>{MODEL_NAMES[modelName] ?? modelName}</td>
               <td>
                 <div className="flex flex-wrap gap-x-4 gap-y-1">
-                  {Object.entries(manifest.metrics?.[modelName] ?? {}).map(([key, value]) => (
+                  {Object.entries(manifest.metrics?.[modelName] ?? {}).filter(([key]) => key in METRIC_NAMES).map(([key, value]) => (
                     <span key={key}>
                       <span className="text-pr-text-dim">{METRIC_NAMES[key] ?? key}</span> <span>{metric(value)}</span>
                     </span>
@@ -98,23 +98,23 @@ export default function ModelSummaryPage() {
       {training?.n_train_games != null ? (
         <div className="text-sm">
           <p className="mb-1">
-            <span className="text-pr-text-dim">Training matches: </span>
+            <span className="text-pr-text-dim">Games trained on: </span>
             <span>{training.n_train_games.toLocaleString()}</span>
           </p>
           {training.n_current_season_games != null && (
             <p className="mb-1">
-              <span className="text-pr-text-dim">Current-season matches: </span>
+              <span className="text-pr-text-dim">Games this season: </span>
               <span>{training.n_current_season_games.toLocaleString()}</span>
             </p>
           )}
           {training.n_holdout_games != null && (
             <p className="mb-1">
-              <span className="text-pr-text-dim">Held-out validation matches: </span>
+              <span className="text-pr-text-dim">Games held back to check it: </span>
               <span>{training.n_holdout_games.toLocaleString()}</span>
             </p>
           )}
           <p className="mt-2 text-pr-text-dim">
-            Current-season matches count only once their stats are final and the model has
+            This season's games count only once their results are final and the model has
             retrained.
           </p>
         </div>

@@ -1,24 +1,24 @@
-import { useEffect, useState } from "react";
 import { api, type TeamHubRow } from "../api/client";
+import HubRows from "./HubRows";
+import { teamsCaption } from "../lib/seasonCaption";
 import TeamLogo from "./TeamLogo";
 import { signed, streak } from "../predictor-ui";
 
 export default function TeamHubPanel() {
-  const [rows, setRows] = useState<TeamHubRow[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  return (
+    <HubRows<TeamHubRow> load={api.getHubTeams} noun="team">
+      {(rows) => <TeamTables rows={rows} />}
+    </HubRows>
+  );
+}
 
-  useEffect(() => {
-    api.getHubTeams().then(setRows).catch(() => setError("Couldn't load team data."));
-  }, []);
-
-  if (error) return <p className="text-[var(--color-shotclock)]">{error}</p>;
-  if (rows === null) return <p>Loading teams…</p>;
-  if (rows.length === 0) return <p>No team data cached yet.</p>;
-
+function TeamTables({ rows }: { rows: TeamHubRow[] }) {
   const conferences: Array<"East" | "West"> = ["East", "West"];
+  const caption = teamsCaption(rows);
 
   return (
     <div className="space-y-6">
+      {caption && <p className="text-sm text-pr-text-dim">{caption}</p>}
       {conferences.map((conference) => (
         <div key={conference}>
           <h3 className="mb-2 font-semibold">{conference}</h3>

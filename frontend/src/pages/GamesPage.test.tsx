@@ -6,7 +6,7 @@ import { api } from "../api/client";
 
 vi.mock("../api/client", () => ({
   api: {
-    getGamesWeek: vi.fn(), getSeasonFirstWeek: vi.fn(),
+    getGamesWeek: vi.fn(), getSeasonFirstWeek: vi.fn(), getManifest: vi.fn(),
     // Declared for completeness: this page never opens the modal, but it mocks the
     // whole client and a method the component tree reaches for must not be
     // `undefined`. See GamesPage.deepLink.test.tsx.
@@ -173,5 +173,59 @@ describe("GamesPage family layout", () => {
     await userEvent.click(screen.getByRole("button", { name: "Next week" }));
     await userEvent.click(await screen.findByRole("button", { name: "Jump to current week" }));
     await waitFor(() => expect(api.getGamesWeek).toHaveBeenLastCalledWith("2026-02-16"));
+  });
+
+  describe("length on a phone", () => {
+    const game = (id: string, date: string, over: object = {}) => ({
+      game_id: id, game_date: date, home_team: "BOS", away_team: "MIA",
+      prediction: { home_win_probability: 0.6, predicted_margin: 3, predicted_total: 224 },
+      completed: false, home_pts: null, away_pts: null, ...over,
+    });
+
+    it("opens the day with the next games and folds the rest into one-line summaries", async () => {
+      vi.mocked(api.getSeasonFirstWeek).mockResolvedValue({ first_week_start: "2026-02-09" });
+      vi.mocked(api.getGamesWeek).mockResolvedValue([
+        game("past", "2026-02-10", { completed: true, home_pts: 110, away_pts: 100 }),
+        game("a", "2026-02-16"), game("b", "2026-02-16"),
+        game("c", "2026-02-18"),
+      ] as never);
+      render(<GamesPage />);
+      await waitFor(() => expect(screen.getByTestId("game-card-a")).toBeInTheDocument());
+
+      const open = (name: string) => screen.getByRole("heading", { name }).closest("details")!.open;
+      expect(open("Monday 16 Feb")).toBe(true);
+      expect(open("Tuesday 10 Feb")).toBe(false);
+      expect(open("Wednesday 18 Feb")).toBe(false);
+      // The folded day still says what is inside, and what happened.
+      expect(screen.getByText("1 game · 1 of 1 right")).toBeInTheDocument();
+      expect(screen.getByText("2 games")).toBeInTheDocument();
+    });
+  });
+
+  describe("early-season notice", () => {
+    const week = async () => {
+      vi.mocked(api.getSeasonFirstWeek).mockResolvedValue({ first_week_start: "2026-10-19" });
+      vi.mocked(api.getGamesWeek).mockResolvedValue([]);
+    };
+
+    it("tells fans the model has not seen this season yet", async () => {
+      await week();
+      vi.mocked(api.getManifest).mockResolvedValue({ model_version: "v", trained_at: "t", models: [], metrics: {}, training: { n_current_season_games: 0 } });
+      render(<GamesPage />);
+      expect(await screen.findByRole("note")).toHaveTextContent(/has not seen a game of this season/i);
+    });
+
+    it("stays quiet mid-season and when the manifest cannot be read", async () => {
+      await week();
+      vi.mocked(api.getManifest).mockResolvedValue({ model_version: "v", trained_at: "t", models: [], metrics: {}, training: { n_current_season_games: 700 } });
+      const { unmount } = render(<GamesPage />);
+      await waitFor(() => expect(api.getManifest).toHaveBeenCalled());
+      expect(screen.queryByRole("note")).toBeNull();
+      unmount();
+      vi.mocked(api.getManifest).mockRejectedValue(new Error("down"));
+      render(<GamesPage />);
+      await waitFor(() => expect(api.getManifest).toHaveBeenCalledTimes(2));
+      expect(screen.queryByRole("note")).toBeNull();
+    });
   });
 });

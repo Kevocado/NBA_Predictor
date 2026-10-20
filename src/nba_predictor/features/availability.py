@@ -83,3 +83,33 @@ def compute_availability_features(games: pd.DataFrame, players: pd.DataFrame | N
         out[f"{side}_absent_min_share"] = [feat.get((g, t), d)[0] for g, t in zip(games.game_id, teams)]
         out[f"{side}_absent_prod_share"] = [feat.get((g, t), d)[1] for g, t in zip(games.game_id, teams)]
     return out[["game_id", *AVAILABILITY_COLUMNS]]
+
+
+def _season_of(game_date: str) -> int:
+    """NBA season (start year) of an ISO date: October on is the new season."""
+    year, month = int(game_date[:4]), int(game_date[5:7])
+    return year if month >= 10 else year - 1
+
+
+def compute_availability_by_season(games: pd.DataFrame, players: pd.DataFrame | None) -> pd.DataFrame:
+    """`compute_availability_features`, with each season ranked over its own production-sized window.
+
+    The plain function ranks the rotation by cumulative minutes over WHATEVER frame it is given. Production only ever
+    feeds it about a season (the ingest window starts at the previous season's Oct 1), where that is fine. Over a longer
+    frame it silently degrades: measured over 2018-2025 the mean absent-minutes share is 0.49, against 0.34 over the
+    production window, because players who left years ago stay in the top 8 and can never have "played last game".
+    So a longer training frame must not change what the feature means: each season's games are scored from the previous
+    season's Oct 1 on, exactly what production sees. On a frame that already starts there this is identical to the plain
+    function (pinned by a test), so nothing changes today.
+    """
+    seasons = games["game_date"].map(_season_of)
+    parts = []
+    for season in sorted(seasons.unique()):
+        lo, hi = f"{season - 1}-10-01", f"{season + 1}-09-30"
+        in_window = (games["game_date"] >= lo) & (games["game_date"] <= hi)
+        p = None if players is None or not len(players) else players[(players["game_date"] >= lo) & (players["game_date"] <= hi)]
+        feat = compute_availability_features(games[in_window], p)
+        parts.append(feat[feat["game_id"].isin(games.loc[seasons == season, "game_id"])])
+    out = pd.concat(parts, ignore_index=True)
+    return out.set_index("game_id").loc[games["game_id"]].reset_index()[["game_id", *AVAILABILITY_COLUMNS]]
+

@@ -22,6 +22,7 @@ from nba_predictor.models.game_outcome import predict_win_probability
 from nba_predictor.models.manifest import build_manifest, write_manifest
 from nba_predictor.models.probability import win_prob
 from nba_predictor.models.player_props import predict_player_stat, train_player_stat_model
+from nba_predictor.pipeline.history import merge_history
 from nba_predictor.pipeline.retrain import run_retrain_pipeline
 from nba_predictor.tracking import store
 
@@ -879,6 +880,7 @@ def compute_player_hub(games: list[dict], player_boxscores: dict[str, list[dict]
 
 def score_and_store_predictions(
     games_df: pd.DataFrame, models_dir: Path, db_path: Path, model_version: str, players: pd.DataFrame | None = None,
+    only_game_ids: set | None = None,
 ) -> int:
     """Scores every game that survives feature assembly with the trained model
     and stores the result as a tracked prediction. Returns the number stored.
@@ -890,6 +892,9 @@ def score_and_store_predictions(
 
     Win probability is derived from margin/sigma (Phi(margin/sigma)) for
     coherence. If the manifest lacks margin_sigma, we fail loudly.
+
+    `only_game_ids` stores predictions for those games only: features are built over the whole `games_df` (so a
+    multi-season frame keeps its mature rolling state) but earlier seasons are not re-stored in the tracking DB.
     """
     # Trusted artifacts: these .pkl files are written by run_retrain_pipeline
     # (via joblib.dump) in this same pipeline run — not from an external or
@@ -912,6 +917,8 @@ def score_and_store_predictions(
         raise ValueError(f"manifest missing positive finite margin_sigma; cannot serve win-from-margin. Got: {margin_sigma!r}")
 
     frame, feature_cols = build_training_frame(games_df, players=players)
+    if only_game_ids is not None:
+        frame = frame[frame["game_id"].isin(only_game_ids)].reset_index(drop=True)
     if len(frame) == 0:
         return 0
 
@@ -991,9 +998,15 @@ def run_ingest(
         player_boxscores = {}
         (hub_dir / "players.json").write_text(json.dumps([]))
     availability_players = to_player_training_frame(games, all_player_boxscores)
+    # Frozen earlier seasons in front of the window: the retrain and the scoring below both see them, so the model is
+    # fitted on, and scores from, the same mature rolling state. Only the window's own games are stored as predictions.
+    window_game_ids = {g["game_id"] for g in games}
+    all_games, availability_players = merge_history(games, availability_players, start)
+    summary["history_games"] = len(all_games) - len(games)
+    log(f"  frozen history: {summary['history_games']} earlier games in front of the window")
     log(f"  wrote hub caches to {hub_dir}")
 
-    training_df = to_training_frame(games)
+    training_df = to_training_frame(all_games)
     log(f"Training on {len(training_df)} completed games with full box scores...")
     # api/deps.py resolves this path and POST /retrain 400s without it, but
     # nothing in src/ ever wrote it -- so that endpoint was unrunnable in every
@@ -1030,11 +1043,11 @@ def run_ingest(
     else:
         store.init_db(db_path)
 
-        stored = score_and_store_predictions(training_df, models_dir, db_path, model_version, players=availability_players)
+        stored = score_and_store_predictions(training_df, models_dir, db_path, model_version, players=availability_players, only_game_ids=window_game_ids)
         summary["completed_predictions_stored"] = stored
         log(f"  stored {stored} real predictions for browsing in the UI")
 
-        stored_upcoming = score_upcoming_games(games, models_dir, db_path, model_version, players=availability_players)
+        stored_upcoming = score_upcoming_games(all_games, models_dir, db_path, model_version, players=availability_players)
         summary["upcoming_predictions_stored"] = stored_upcoming
         log(f"  stored {stored_upcoming} predictions for upcoming games")
 

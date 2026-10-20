@@ -19,6 +19,7 @@ on:
       - 'frontend/**'
       - 'models/**'
       - 'data/cache/**'
+      - 'data/history/**'
       - 'Dockerfile'
       - 'pyproject.toml'
       - '.github/workflows/deploy.yml'

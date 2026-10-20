@@ -34,6 +34,8 @@ const n0 = (x: number) => x.toLocaleString("en-US");
  */
 export default function TrackRecordPanel() {
   const [rows, setRows] = useState<TrackRecord[] | null>(null);
+  // The every-pick table is ~1,400 rows (tens of thousands of DOM nodes on a phone), so it is built only once opened.
+  const [picksOpen, setPicksOpen] = useState(false);
   const [vsMarket, setVsMarket] = useState<VsMarket | null>(null);
   const [error, setError] = useState(false);
   const [vsError, setVsError] = useState(false);
@@ -165,10 +167,13 @@ export default function TrackRecordPanel() {
         </RecordBlock>
       )}
 
-      <details className="rounded-pr border border-pr-rule bg-pr-panel px-4 py-3 text-sm">
+      <details
+        className="rounded-pr border border-pr-rule bg-pr-panel px-4 py-3 text-sm"
+        onToggle={(e) => setPicksOpen((e.currentTarget as HTMLDetailsElement).open)}
+      >
         <summary className="cursor-pointer font-semibold text-pr-text">Every recorded pick</summary>
         <div className="mt-3">
-          {allPicks.length === 0 ? (
+          {!picksOpen ? null : allPicks.length === 0 ? (
             <p className="text-pr-text-dim">No pick-level data in this response.</p>
           ) : (
             <StatTable

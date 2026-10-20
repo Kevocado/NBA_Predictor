@@ -37,6 +37,12 @@ def client(tmp_path, monkeypatch):
     app.dependency_overrides.clear()
 
 
+def _record_outcome(client, game_id, player_id):
+    from nba_predictor import config  # noqa: F401  (fixture already pointed DATA_DIR at tmp)
+    db_path = app.dependency_overrides[deps.get_db_path]()
+    store.insert_player_outcome(db_path, game_id=game_id, player_id=player_id, stat="points", actual_value=22.0, recorded_at="2026-04-11T03:00:00+00:00")
+
+
 def _names(client, game_id):
     return sorted({row["player_name"] for row in client.get(f"/games/{game_id}/players").json()})
 
@@ -54,3 +60,9 @@ def test_a_finished_game_keeps_whoever_played_in_it(client):
 def test_unknown_rosters_filter_nothing(client):
     app.dependency_overrides[deps.get_roster_index] = lambda: None
     assert _names(client, "up") == ["Jaylen Brown", "Jayson Tatum"]
+
+
+def test_a_finished_game_with_results_shows_only_the_players_who_played(client):
+    app.dependency_overrides[deps.get_roster_index] = lambda: None
+    _record_outcome(client, "done", "tatum")                      # Brown never appeared
+    assert _names(client, "done") == ["Jayson Tatum"]

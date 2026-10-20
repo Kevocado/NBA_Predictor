@@ -130,7 +130,9 @@ def get_scoreboard(date: str) -> list[dict]:
     """
     cache_key = date
     cached = _load_cache("scoreboard", cache_key)
-    if cached is not None:
+    # A scoreboard cached before `season_type` existed is refetched for the current seasons: it is what tells a
+    # preseason game (1) from a regular-season (2) or postseason (3) one.
+    if cached is not None and not (date >= "2025-10-01" and any("season_type" not in g for g in cached["games"])):
         return cached["games"]
 
     espn_date = date.replace("-", "")
@@ -162,6 +164,8 @@ def get_scoreboard(date: str) -> list[dict]:
                 "game_date": date,
                 # UTC start time; tracking uses it to tell pre-tip picks apart.
                 "tip_off": event.get("date"),
+                # ESPN: 1 preseason, 2 regular season, 3 postseason. None when the event does not say.
+                "season_type": (event.get("season") or {}).get("type"),
                 "home_team": home_abbr,
                 "away_team": away_abbr,
                 "completed": completed,

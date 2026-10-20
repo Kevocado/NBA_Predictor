@@ -456,6 +456,12 @@ def get_game_players(
         if on_roster:
             picks = {key: value for key, value in picks.items() if key[0] in on_roster}
 
+    # A FINISHED game with recorded results shows the players who played: a projection for someone who never
+    # appeared (scored from an old roster guess, or a rested star) has nothing to be judged against.
+    if game.get("completed") and actual_by_key:
+        played = {player_id for player_id, _stat in actual_by_key}
+        picks = {key: value for key, value in picks.items() if key[0] in played}
+
     # Resolve availability before ranking anything. Anything unresolvable here
     # removes nobody -- see api/availability.py for why that asymmetry.
     out_ids = {entry["player_id"] for entry in resolve_out_players(injuries, {key[0] for key in picks})}

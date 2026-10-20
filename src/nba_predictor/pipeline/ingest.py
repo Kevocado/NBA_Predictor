@@ -138,6 +138,14 @@ def _outcome_row_count(db_path: Path) -> int:
 PLAYER_STAT_TARGET_COLUMNS = {"points": "points", "rebounds": "rebounds", "assists": "assists", "threes": "fg3m"}
 
 
+def regular_and_post_only(df: pd.DataFrame) -> pd.DataFrame:
+    """Drops preseason rows (ESPN season type 1). A star's preseason minutes are a handful and say little about
+    his regular-season output: with them in the last-10 window, opening-week projections were ~half the truth."""
+    if "season_type" not in df.columns:
+        return df
+    return df[df["season_type"] != 1].reset_index(drop=True)
+
+
 def to_player_scoring_frame(
     games: list[dict], player_boxscores: dict[str, list[dict]], roster_window: int = 5,
     rosters: dict[str, list[dict]] | None = None, extra_completed: pd.DataFrame | None = None,
@@ -163,7 +171,7 @@ def to_player_scoring_frame(
     two projections for one player on one day impossible even if the
     schedule itself lists his team twice that day.
     """
-    completed_rows = to_player_training_frame(games, player_boxscores)
+    completed_rows = regular_and_post_only(to_player_training_frame(games, player_boxscores))
     if extra_completed is not None and len(extra_completed):
         # Earlier seasons (the frozen history): a player's rolling average must not start over each October.
         completed_rows = pd.concat([extra_completed, completed_rows], ignore_index=True).drop_duplicates(["player_id", "game_id"], keep="last")
@@ -325,7 +333,7 @@ def train_player_prop_models(training_df: pd.DataFrame, models_dir: Path, model_
     (points 4.70 vs 4.69, rebounds 1.95 vs 1.95); the metrics now say so instead of flattering it.
     """
     models_dir.mkdir(parents=True, exist_ok=True)
-    played = training_df[training_df["minutes"] > 0]
+    played = regular_and_post_only(training_df[training_df["minutes"] > 0])
     frame, feature_cols = build_player_feature_frame(played)
 
     holdout = prop_holdout_metrics(played, {m: train_player_stat_model for m in MARKETS}) if len(frame) >= 50 else {}
@@ -885,6 +893,8 @@ def to_player_training_frame(games: list[dict], player_boxscores: dict[str, list
                     "away_team": game.get("away_team"),
                     "opponent": (game["away_team"] if row["team"] == game.get("home_team")
                                  else game.get("home_team")),
+                    # ESPN season type (1 preseason): rolling features skip preseason minutes.
+                    "season_type": game.get("season_type"),
                 }
             )
     # With no rows (an off-season 21-day window) a bare DataFrame has no columns and the next stage died with
@@ -894,7 +904,7 @@ def to_player_training_frame(games: list[dict], player_boxscores: dict[str, list
 
 PLAYER_TRAINING_COLUMNS = [
     "player_id", "player_name", "team", "game_id", "game_date", "points", "rebounds", "assists", "fg3m", "minutes",
-    "position", "fgm", "fga", "home_team", "away_team", "opponent",
+    "position", "fgm", "fga", "home_team", "away_team", "opponent", "season_type",
 ]
 
 

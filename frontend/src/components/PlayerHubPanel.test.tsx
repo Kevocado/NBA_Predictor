@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, afterEach, beforeEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import PlayerHubPanel from "./PlayerHubPanel";
 import { api } from "../api/client";
@@ -15,6 +15,9 @@ vi.mock("../api/client", () => ({
   },
 }));
 afterEach(() => {
+  // Unmount first: restoring wipes the mocks' implementations, and a panel still mounted at that moment can run an
+  // effect against a bare mock (`undefined.then`), which surfaced as a failure in the NEXT test, intermittently in CI.
+  cleanup();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });

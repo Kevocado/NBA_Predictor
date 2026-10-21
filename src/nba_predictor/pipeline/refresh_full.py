@@ -11,12 +11,21 @@ import json
 
 from nba_predictor import config
 from nba_predictor.pipeline.ingest import default_window_end, default_window_start, run_ingest
+from nba_predictor.pipeline.refresh_kalshi import refresh_kalshi_markets
 from nba_predictor.pipeline.refresh_odds import refresh_market_predictions
 from nba_predictor.services.schedule_repository import load_schedule
 
 
 def run_full_refresh(log=print) -> dict:
     summary = run_ingest(default_window_start(), default_window_end(), log=log)
+    # Kalshi moneylines first: free, public, keyless. The sportsbook pass below is a paid, rate-limited feed.
+    try:
+        schedule = load_schedule(config.DATA_DIR / "cache" / "schedule" / "games.json")
+        summary["kalshi_market_rows"] = refresh_kalshi_markets(schedule, config.TRACKING_DB_PATH)
+        log(f"  stored {summary['kalshi_market_rows']} Kalshi market rows")
+    except Exception as exc:  # noqa: BLE001
+        summary["kalshi_error"] = str(exc)
+        log(f"  Kalshi market pass failed (the picks are already scored): {exc}")
     try:
         from nba_predictor.api.routes import _market_stds_from_manifest
 

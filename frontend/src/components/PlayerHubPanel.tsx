@@ -81,6 +81,7 @@ function PlayerTable({ rows }: { rows: PlayerHubRow[] }) {
   const sorted = [...filtered].sort((a, b) => b.rating - a.rating);
   const pageRows = sorted.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
   const hasNext = (page + 1) * PAGE_SIZE < sorted.length;
+  const pageCount = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
   const showExtra = !narrow || more;
 
   const columns: Column<PlayerHubRow>[] = [
@@ -160,7 +161,7 @@ function PlayerTable({ rows }: { rows: PlayerHubRow[] }) {
     <div>
       <p className="mb-3 max-w-prose text-sm text-pr-text-dim">Per-game averages. Early in the season they rest on a handful of games, so read them loosely.</p>
 
-      <PlayerLeaders rows={filtered} />
+      <PlayerLeaders rows={filtered} avatarSize={narrow ? 28 : 32} />
 
       <div className="mb-3 flex flex-wrap items-center gap-2 text-sm">
         <label htmlFor="player-hub-search" className="text-pr-text-dim">
@@ -240,11 +241,26 @@ function PlayerTable({ rows }: { rows: PlayerHubRow[] }) {
         Players {sorted.length === 0 ? 0 : page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, sorted.length)} of {sorted.length}
         {sorted.length !== rows.length ? ` (of ${rows.length})` : ""}
       </p>
-      <div className="mt-2 flex gap-2">
-        <button data-testid="player-hub-prev" disabled={page === 0} onClick={() => setPage((p) => p - 1)}>
+      {/* The pager: 44px targets, because a phone is read with a thumb, and the
+          page number in words, because "Page 1 of 3" says where you are. */}
+      <div className="mt-2 flex items-center gap-3">
+        <button
+          data-testid="player-hub-prev"
+          disabled={page === 0}
+          onClick={() => setPage((p) => p - 1)}
+          className="min-h-11 min-w-11 rounded border border-pr-rule px-3 text-sm text-pr-text disabled:opacity-40"
+        >
           Previous
         </button>
-        <button data-testid="player-hub-next" disabled={!hasNext} onClick={() => setPage((p) => p + 1)}>
+        <span className="text-sm text-pr-text-dim" data-testid="player-hub-page">
+          Page {page + 1} of {pageCount}
+        </span>
+        <button
+          data-testid="player-hub-next"
+          disabled={!hasNext}
+          onClick={() => setPage((p) => p + 1)}
+          className="min-h-11 min-w-11 rounded border border-pr-rule px-3 text-sm text-pr-text disabled:opacity-40"
+        >
           Next
         </button>
       </div>

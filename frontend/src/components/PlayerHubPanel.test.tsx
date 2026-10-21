@@ -85,6 +85,63 @@ describe("PlayerHubPanel", () => {
     expect(await screen.findByText("Player 20")).toBeInTheDocument();
   });
 
+  it("says which page it is on, and disables the pager at the ends", async () => {
+    vi.mocked(api.getHubPlayers).mockResolvedValue(Array.from({ length: 25 }, (_, i) => makePlayer(i)));
+
+    render(<PlayerHubPanel />);
+    await waitFor(() => expect(inTable("Player 0")).toBeInTheDocument());
+
+    // The first page: there is no page before it.
+    expect(screen.getByTestId("player-hub-prev")).toBeDisabled();
+    expect(screen.getByTestId("player-hub-next")).not.toBeDisabled();
+    expect(screen.getByTestId("player-hub-page")).toHaveTextContent("Page 1 of 2");
+
+    await userEvent.click(screen.getByTestId("player-hub-next"));
+
+    expect(await screen.findByText("Player 20")).toBeInTheDocument();
+    expect(screen.getByTestId("player-hub-prev")).not.toBeDisabled();
+    // The last page: there is no page after it.
+    expect(screen.getByTestId("player-hub-next")).toBeDisabled();
+    expect(screen.getByTestId("player-hub-page")).toHaveTextContent("Page 2 of 2");
+  });
+
+  it("does not cut a player's name off with an ellipsis", async () => {
+    vi.mocked(api.getHubPlayers).mockResolvedValue([
+      makePlayer(1, { player_name: "Shai Gilgeous-Alexander" }),
+    ]);
+
+    render(<PlayerHubPanel />);
+    await waitFor(() => expect(inTable("Shai Gilgeous-Alexander")).toBeInTheDocument());
+
+    // The leader board's name: it wraps, it is not cut short.
+    const name = within(screen.getByTestId("player-leaders")).getAllByText("Shai Gilgeous-Alexander")[0];
+    expect(name.className).not.toMatch(/truncate/);
+  });
+
+  it("gives the player's record a Close button, and puts the focus in it", async () => {
+    vi.mocked(api.getHubPlayers).mockResolvedValue([makePlayer(1)]);
+    vi.mocked(api.getHubPlayer).mockResolvedValue({
+      player_id: "1",
+      team: "BOS",
+      status: null,
+      games: [],
+    });
+
+    render(<PlayerHubPanel />);
+    await waitFor(() => expect(inTable("Player 1")).toBeInTheDocument());
+
+    await userEvent.click(screen.getByRole("button", { name: /Player 1/i }));
+
+    const record = await screen.findByTestId("player-detail-1");
+    // The focus is in the record, so a reader is reading the record.
+    await waitFor(() => expect(record).toHaveFocus());
+    expect(screen.getByTestId("player-record-close")).toBeInTheDocument();
+
+    // And the Close button puts it away.
+    await userEvent.click(screen.getByTestId("player-record-close"));
+    await waitFor(() => expect(screen.queryByTestId("player-detail-1")).toBeNull());
+  });
+
   it("shows an empty state when no player data is cached yet", async () => {
     vi.mocked(api.getHubPlayers).mockResolvedValue([]);
     render(<PlayerHubPanel />);

@@ -128,6 +128,16 @@ export interface TeamNextGame {
 }
 
 /** Everything the Teams page needs, in one payload. */
+/** One result in a team's form: the win or the loss, when it was played, and
+ *  whether it was played in the season on the page. Early in a season a team's
+ *  last ten games are mostly last season's, and the dots must not pretend
+ *  otherwise. */
+export interface FormEntry {
+  result: "W" | "L";
+  game_date: string;
+  this_season: boolean;
+}
+
 export interface TeamOverview {
   as_of: string;
   n_teams: number;
@@ -135,7 +145,7 @@ export interface TeamOverview {
   metrics: RatingMetric[];
   ratings: Record<string, Record<string, RatingFigure>>;
   /** The last ten results, oldest first. */
-  form: Record<string, string[]>;
+  form: Record<string, FormEntry[]>;
   last_games: Record<string, TeamGame[]>;
   next_game: Record<string, TeamNextGame | null>;
 }

@@ -136,6 +136,29 @@ describe("GameDetailModal", () => {
     expect(screen.getByTestId("review-on-the-number").textContent).toContain("1 of 1");
   });
 
+  it("shows a finished game's ratings, under the verdict, as they stood before the game", async () => {
+    vi.mocked(api.getGameDetail).mockResolvedValue({
+      ...completedDetail,
+      ratings: { ...ratings, caption: "Before the game. Last 15 games each." },
+    } as never);
+    vi.mocked(api.getGamePlayers).mockResolvedValue([
+      { player_id: "203999", player_name: "Nikola Jokic", stat: "points", predicted_value: 27.5, actual_value: 24.0 },
+    ]);
+    vi.mocked(api.getHubPlayers).mockResolvedValue(hub);
+
+    render(<GameDetailModal gameId="g2" onClose={() => {}} />);
+
+    await screen.findByTestId("team-ratings");
+    expect(screen.getByText(/Before the game\./)).toBeInTheDocument();
+    // Under the verdict: before the pick block, which is where a reader of a
+    // finished game looks for the form it was won or lost on.
+    const table = screen.getByTestId("team-ratings");
+    const explainer = screen.getByTestId("fixture-explainer");
+    expect(
+      table.compareDocumentPosition(explainer) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
   it("shows no player review without bands: there is no measured error to judge against", async () => {
     vi.mocked(api.getGameDetail).mockResolvedValue({ ...completedDetail, prop_bands: null } as never);
     vi.mocked(api.getGamePlayers).mockResolvedValue([

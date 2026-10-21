@@ -40,17 +40,26 @@ SCHEDULE = [
 
 
 def test_the_form_is_the_last_ten_results_oldest_first():
-    form = form_for_team(SCHEDULE, "BOS")
+    """The form carries the result AND the season it was played in.
 
-    assert form == ["W", "W", "L", "L"]
+    The shape changed on purpose (the follow-up work): a row of dots that does
+    not say which season a game was played in reads as this season's form when
+    it is not.
+    """
+    form = form_for_team(SCHEDULE, "BOS", season=2026)
+
+    assert [row["result"] for row in form] == ["W", "W", "L", "L"]
     assert len(form) <= FORM_GAMES
+    # The fixture's games are all in the 2026 season.
+    assert all(row["this_season"] for row in form)
 
 
 def test_an_unplayed_game_is_not_a_result():
     """A game that has not happened contributes nothing to the form."""
     form = form_for_team(SCHEDULE, "BOS", before="2026-10-21")
 
-    assert "L" not in form[-1:] or form[-1] == "L"
+    # The four completed games, and not the fifth that has not been played.
+    assert [row["result"] for row in form] == ["W", "W", "L", "L"]
     assert len(form) == 4
 
 
@@ -118,3 +127,28 @@ def test_a_pre_tip_pick_is_carried_with_its_probability(tmp_path):
 
     assert game["pick"] == "BOS"
     assert game["pick_probability"] == pytest.approx(0.62)
+
+
+def test_the_form_says_which_season_each_result_is_from():
+    """Early in a season a team's last ten games are mostly LAST season's.
+
+    A row of coloured dots that does not say so reads as this season's form
+    when it is not, so each result says which season it was played in.
+    """
+    schedule = [
+        _game("old", "2026-06-10", "BOS", "MIA", 110, 100),
+        _game("new", "2026-10-20", "BOS", "MIA", 100, 110),
+    ]
+
+    rows = form_for_team(schedule, "BOS", season=2026)
+
+    assert [row["this_season"] for row in rows] == [False, True]
+    assert [row["result"] for row in rows] == ["W", "L"]
+
+
+def test_the_form_marks_everything_from_another_season():
+    schedule = [_game("old", "2026-06-10", "BOS", "MIA", 110, 100)]
+
+    rows = form_for_team(schedule, "BOS", season=2026)
+
+    assert rows[0]["this_season"] is False

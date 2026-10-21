@@ -1,6 +1,6 @@
-import { rankTier } from "../predictor-ui";
 import type { GameRatings, RatingMetric } from "../api/client";
 import TeamLogo from "./TeamLogo";
+import { RatingLabel, RatingValue } from "./ratings";
 
 /**
  * The two sides' ratings against the league.
@@ -67,16 +67,13 @@ export function TeamRatings({
               return (
                 <tr key={metric.key} data-testid={`rating-row-${metric.key}`}>
                   <td className="pr-matchup-rank">
-                    <RatingCell figure={away} n={ratings.n_teams} label={metric.label} team={awayTeam} />
+                    <RatingValue figure={away} n={ratings.n_teams} label={metric.label} team={awayTeam} />
                   </td>
                   <td className="pr-matchup-label" title={metric.help}>
-                    {metric.label}
-                    {metric.unit && (
-                      <span className="block text-xs uppercase tracking-wide text-pr-text-faint">{metric.unit}</span>
-                    )}
+                    <RatingLabel metric={metric} />
                   </td>
                   <td className="pr-matchup-rank">
-                    <RatingCell figure={home} n={ratings.n_teams} label={metric.label} team={homeTeam} />
+                    <RatingValue figure={home} n={ratings.n_teams} label={metric.label} team={homeTeam} />
                   </td>
                 </tr>
               );
@@ -85,43 +82,6 @@ export function TeamRatings({
         </table>
       </div>
     </section>
-  );
-}
-
-/** One team's figure for one metric, and its place in the league. */
-function RatingCell({
-  figure,
-  n,
-  label,
-  team,
-}: {
-  figure?: { value: number | null; rank: number | null };
-  n: number;
-  label: string;
-  team: string;
-}) {
-  if (!figure || figure.value === null) {
-    // No figure is no row of numbers: an em dash, never a zero.
-    return (
-      <span className="pr-matchup-missing" data-testid="rating-missing">
-        —
-      </span>
-    );
-  }
-  const tier = figure.rank ? rankTier(figure.rank, n) : "bad";
-  return (
-    <span className="inline-flex items-center justify-center gap-1.5">
-      <span className="pr-rating-value" data-testid="rating-value">
-        {figure.value}
-      </span>
-      <span
-        className={`pr-rank-box pr-rank-${tier} pr-rating-rank`}
-        data-testid="rating-rank"
-        aria-label={`${team}: ${figure.rank} of ${n} for ${label}`}
-      >
-        {figure.rank}
-      </span>
-    </span>
   );
 }
 

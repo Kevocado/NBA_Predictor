@@ -14,6 +14,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
+from ..features.four_factors import season_of
 from ..tracking import store
 from ..tracking.timing import latest_pre_tip
 
@@ -47,16 +48,37 @@ def _result(game: dict, team: str) -> str:
     return "W" if won else "L"
 
 
-def form_for_team(schedule: list[dict], team: str, before: str | None = None) -> list[str]:
+def form_for_team(
+    schedule: list[dict],
+    team: str,
+    before: str | None = None,
+    season: int | None = None,
+) -> list[dict]:
     """The team's last `FORM_GAMES` results, oldest first.
 
     A game with no score yet contributes nothing: an unplayed game is not a
     result, and counting it as one would put a "L" in a form column for a game
     that has not happened.
+
+    **Each result says which season it was played in.** Early in a season a
+    team has played one or two games, so its last ten are mostly *last*
+    season's -- and a row of coloured dots that does not say so reads as this
+    season's form when it is not. `season` is the season the results are
+    measured against; a result from any other season is marked.
     """
     played = [g for g in _team_games(schedule, team, before) if g.get("completed")]
-    results = [_result(g, team) for g in played]
-    return [r for r in results if r][-FORM_GAMES:]
+    rows = []
+    for game in played:
+        result = _result(game, team)
+        if not result:
+            continue
+        game_date = str(game.get("game_date", ""))
+        rows.append({
+            "result": result,
+            "game_date": game_date,
+            "this_season": season is None or season_of(game_date) == season,
+        })
+    return rows[-FORM_GAMES:]
 
 
 def last_games_for_team(schedule: list[dict], team: str, before: str | None = None) -> list[dict]:
@@ -122,13 +144,14 @@ def overview(
     today: str,
 ) -> dict[str, Any]:
     """The Teams page's payload: the league's ratings and every team's form."""
+    season = season_of(str(today))
     payload: dict[str, Any] = {
         "as_of": today,
         "n_teams": ratings.get("n_teams") if ratings else 0,
         "caption": ratings.get("caption") if ratings else "",
         "metrics": ratings.get("metrics") if ratings else [],
         "ratings": ratings.get("teams") if ratings else {},
-        "form": {team: form_for_team(schedule, team) for team in teams},
+        "form": {team: form_for_team(schedule, team, season=season) for team in teams},
         "last_games": {team: last_games_for_team(schedule, team) for team in teams},
         "next_game": {team: next_game_for_team(schedule, team, db_path, today) for team in teams},
     }

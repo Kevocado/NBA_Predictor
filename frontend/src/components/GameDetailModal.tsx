@@ -248,6 +248,17 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
   }, [onClose]);
 
   const verdict = detail ? computePostMatchVerdict(detail) : null;
+  // The ratings: what each side is, and where that puts it in the league --
+  // the same figures the summary reads.
+  //
+  // **Where they sit depends on the game.** Before a game they are under the
+  // pick, because they are what the pick is made of. After it they are under
+  // the verdict, because then they are the form the game was won or lost on.
+  const ratingsBlock = detail?.ratings ? (
+    <div className="mb-5 border-b border-[var(--color-line)] pb-5">
+      <TeamRatings ratings={detail.ratings} awayTeam={detail.away_team} homeTeam={detail.home_team} />
+    </div>
+  ) : null;
   // The two teams in this game. ESPN's report covers the whole league, so a
   // player who is playing for neither of them is not this game's news. The
   // API already filters its feeds; this is the page's own rule, enforced here
@@ -515,6 +526,8 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
           </div>
         )}
 
+        {detail?.completed && ratingsBlock}
+
         {detail && (
           <div className="mb-5 border-b border-[var(--color-line)] pb-5">
             {/* In plain English: the flow renders from facts this modal already
@@ -545,18 +558,7 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
           </div>
         )}
 
-        {/* The ratings: what each side is, and where that puts it in the
-            league. Right under the pick, because it is what the pick is made
-            of -- the same figures the summary reads. */}
-        {detail?.ratings && (
-          <div className="mb-5 border-b border-[var(--color-line)] pb-5">
-            <TeamRatings
-              ratings={detail.ratings}
-              awayTeam={detail.away_team}
-              homeTeam={detail.home_team}
-            />
-          </div>
-        )}
+        {!detail?.completed && ratingsBlock}
 
         {detail && (detail.home_recent_form.length > 0 || detail.away_recent_form.length > 0) && (
           <div className="mb-5 flex items-center justify-between border-b border-[var(--color-line)] pb-5 text-sm">

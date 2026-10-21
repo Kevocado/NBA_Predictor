@@ -12,7 +12,7 @@ import TeamLogo from "./TeamLogo";
  * is not on that list: "nobody shot 3.0 threes a game" is a different claim
  * from "the threes leader shot 0.0".
  */
-export function PlayerLeaders({ rows }: { rows: PlayerHubRow[] }) {
+export function PlayerLeaders({ rows, avatarSize = 32 }: { rows: PlayerHubRow[]; avatarSize?: number }) {
   const groups = [
     { key: "points", label: "Points", value: (row: PlayerHubRow) => row.points_per_game },
     { key: "rebounds", label: "Rebounds", value: (row: PlayerHubRow) => row.rebounds_per_game },
@@ -34,9 +34,11 @@ export function PlayerLeaders({ rows }: { rows: PlayerHubRow[] }) {
                 {leaders.map((player, index) => (
                   <li key={player.player_id} className="flex items-center gap-2">
                     <span className="w-3 shrink-0 text-xs tabular-nums text-pr-text-faint">{index + 1}</span>
-                    <PlayerAvatar playerId={player.player_id} name={player.player_name} size={32} />
+                    <PlayerAvatar playerId={player.player_id} name={player.player_name} size={avatarSize} />
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-semibold">{player.player_name}</span>
+                      {/* The name wraps rather than being cut: an ellipsis that
+                          leaves "Shai Gilgeous-A…" tells the reader nothing. */}
+                      <span className="block text-sm font-semibold leading-tight">{player.player_name}</span>
                       <span className="flex items-center gap-1 text-xs text-pr-text-dim">
                         <TeamLogo team={player.team} size={20} ariaHidden />
                         {(group.value(player) ?? 0).toFixed(1)}

@@ -2,14 +2,16 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
   api,
+  type FormEntry,
   type PlayerHubRow,
   type PowerRankingRow,
   type StandingsRow,
   type TeamHubRow,
   type TeamOverview,
 } from "../api/client";
-import { StatTable, type Column } from "../predictor-ui";
+import { StatTable, type Column, type Separator } from "../predictor-ui";
 import { rankTier } from "../predictor-ui/lib/rankTier";
+import { RatingList, RatingValue } from "./ratings";
 import { standingsStatus } from "../lib/seasonCaption";
 import { teamName } from "../lib/teams";
 import TeamLogo from "./TeamLogo";
@@ -51,7 +53,7 @@ interface Row {
   off: { value: number | null; rank: number | null };
   def: { value: number | null; rank: number | null };
   pace: { value: number | null; rank: number | null };
-  form: string[];
+  form: FormEntry[];
   streak: number;
 }
 
@@ -98,7 +100,6 @@ export default function TeamsPanel() {
   const rows = useMemo(() => (data ? buildRows(data) : []), [data]);
   // Until every team has played there is no standings order to show (a pile of unseeded 0s): lead with the power rating.
   const everyTeamSeeded = rows.length > 0 && rows.every((row) => row.seed > 0);
-  const sortParam = params.get("sort") === "power" || !everyTeamSeeded ? "power" : "seed";
 
   if (failed) {
     return (
@@ -119,6 +120,11 @@ export default function TeamsPanel() {
   }
 
   const shown = rows.filter((row) => conference === "League" || teamConference(data.standings, row.team) === conference);
+  // A conference's seed order is only real once every team in it has a seed, and
+  // only then do the cut lines mean anything: they mark where the playoffs stop.
+  const conferenceSeeded =
+    conference !== "League" && shown.length > 0 && shown.every((row) => row.seed > 0);
+  const sortParam = params.get("sort") === "power" || (!everyTeamSeeded && !conferenceSeeded) ? "power" : "seed";
   const mostGamesPlayed = Math.max(...data.standings.map((r) => r.wins + r.losses));
   const state = data.standings[0]?.season_state;
   const note =
@@ -155,13 +161,35 @@ export default function TeamsPanel() {
       </div>
 
       <TeamsTable
+        key={conference}
         rows={shown}
         overview={data.overview}
         players={data.players}
         initialSortKey={sortParam}
+        separators={playInLines(shown, conferenceSeeded)}
       />
     </div>
   );
+}
+
+/**
+ * The cut lines: where the playoffs stop.
+ *
+ * Two lines, after the sixth and the tenth seed, because that is where the
+ * races are: the top six go to the playoffs, seven to ten play in, the rest
+ * are out. They are drawn only in a conference view, and only once every team
+ * in it has a seed -- the lines are about the seed order, and without one
+ * there is nothing for them to mark.
+ */
+function playInLines(rows: Row[], conferenceSeeded: boolean): Separator[] {
+  if (!conferenceSeeded) return [];
+  const seeded = [...rows].filter((row) => row.seed > 0).sort((a, b) => a.seed - b.seed);
+  const lines: Separator[] = [];
+  const playIn = seeded[5];
+  const out = seeded[9];
+  if (playIn) lines.push({ after: playIn.team, label: "Play-in (7-10)" });
+  if (out) lines.push({ after: out.team, label: "Out (11+)" });
+  return lines;
 }
 
 function teamConference(standings: StandingsRow[], team: string): string {
@@ -209,42 +237,30 @@ function buildRows(data: {
   });
 }
 
-/** A value and the team's place in the league, the one colour scale. */
-function RankedCell({
-  figure,
-  n,
-  label,
-}: {
-  figure: { value: number | null; rank: number | null };
-  n: number;
-  label: string;
-}): ReactNode {
-  if (figure.value === null || figure.rank === null) {
-    return <span className="text-pr-text-faint">—</span>;
-  }
-  const tier = rankTier(figure.rank, n);
-  return (
-    <span className="inline-flex items-center justify-end gap-1.5">
-      <span className="tabular-nums">{figure.value}</span>
-      <span
-        className={`pr-rank-box pr-rank-${tier} pr-rating-rank`}
-        aria-label={`${label}: ${figure.rank} of ${n}`}
-      >
-        {figure.rank}
-      </span>
-    </span>
-  );
-}
-
 /** The last ten results, oldest first: a dot per game, green or red. */
-function FormDots({ form }: { form: string[] }) {
+/**
+ * The last ten results, oldest first: a dot per game, green or red.
+ *
+ * **Last season's games are dimmed.** Early in a season a team has played one
+ * or two games, so its last ten are mostly last season's -- and a row of
+ * full-coloured dots reads as this season's form when it is not. The cell says
+ * how many of them are from last season.
+ */
+function FormDots({ form }: { form: FormEntry[] }) {
   if (form.length === 0) return <span className="text-pr-text-faint">—</span>;
+  const fromLastSeason = form.filter((entry) => !entry.this_season).length;
+  const label = `${form.map((entry) => entry.result).join(" ")}${
+    fromLastSeason > 0 ? ` — ${fromLastSeason} from last season` : ""
+  }`;
   return (
-    <span className="inline-flex items-center gap-0.5" aria-label={form.join(" ")}>
-      {form.map((result, i) => (
+    <span className="inline-flex items-center gap-0.5" aria-label={label} title={label}>
+      {form.map((entry, i) => (
         <span
           key={i}
-          className={`inline-block h-2 w-2 rounded-full ${result === "W" ? "bg-pr-win" : "bg-pr-loss"}`}
+          data-last-season={entry.this_season ? undefined : "true"}
+          className={`inline-block h-2 w-2 rounded-full ${
+            entry.result === "W" ? "bg-pr-win" : "bg-pr-loss"
+          } ${entry.this_season ? "" : "opacity-40"}`}
           aria-hidden="true"
         />
       ))}
@@ -321,11 +337,13 @@ function TeamsTable({
   overview,
   players,
   initialSortKey,
+  separators,
 }: {
   rows: Row[];
   overview: TeamOverview;
   players: PlayerHubRow[];
   initialSortKey: string;
+  separators: Separator[];
 }) {
   const n = overview.n_teams || 30;
 
@@ -372,28 +390,28 @@ function TeamsTable({
       label: "Net",
       value: (row) => row.net.value,
       numeric: true,
-      render: (row) => <RankedCell figure={row.net} n={n} label="net rating" />,
+      render: (row) => <RatingValue figure={row.net} n={n} label="net rating" />,
     },
     {
       key: "off",
       label: "Off",
       value: (row) => row.off.value,
       numeric: true,
-      render: (row) => <RankedCell figure={row.off} n={n} label="offence" />,
+      render: (row) => <RatingValue figure={row.off} n={n} label="offence" />,
     },
     {
       key: "def",
       label: "Def",
       value: (row) => row.def.value,
       numeric: true,
-      render: (row) => <RankedCell figure={row.def} n={n} label="defence" />,
+      render: (row) => <RatingValue figure={row.def} n={n} label="defence" />,
     },
     {
       key: "pace",
       label: "Pace",
       value: (row) => row.pace.value,
       numeric: true,
-      render: (row) => <RankedCell figure={row.pace} n={n} label="pace" />,
+      render: (row) => <RatingValue figure={row.pace} n={n} label="pace" />,
     },
     {
       key: "form",
@@ -428,27 +446,22 @@ function TeamsTable({
           : { key: "seed", dir: "asc" }
       }
       caption="NBA standings: seed, record, ratings and form"
+      separators={separators}
       expand={(row) => {
         const nextGame = overview.next_game?.[row.team] ?? null;
         return (
         <div className="grid gap-4 sm:grid-cols-2" data-testid={`team-detail-${row.team}`}>
           <div>
             <h3 className="mb-1 text-xs uppercase tracking-wide text-pr-text-dim">Ratings</h3>
-            <ul className="text-sm">
-              {(
-                [
-                  ["Net rating", row.net],
-                  ["Offence", row.off],
-                  ["Defence", row.def],
-                  ["Pace", row.pace],
-                ] as Array<[string, { value: number | null; rank: number | null }]>
-              ).map(([label, figure]) => (
-                <li key={label} className="flex items-center justify-between gap-2">
-                  <span>{label}</span>
-                  <RankedCell figure={figure} n={n} label={label} />
-                </li>
-              ))}
-            </ul>
+            {/* The same eleven metrics the game detail shows, from the same
+                payload and the same pieces -- not a second list of four. */}
+            <RatingList
+              metrics={overview.metrics}
+              figure={(metric) => overview.ratings?.[row.team]?.[metric.key]}
+              n={n}
+              team={row.team}
+              testId={`team-ratings-${row.team}`}
+            />
           </div>
           <div>
             <h3 className="mb-1 text-xs uppercase tracking-wide text-pr-text-dim">Last five</h3>

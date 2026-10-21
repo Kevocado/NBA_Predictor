@@ -10,6 +10,7 @@ import {
 } from "../api/client";
 import { StatTable, type Column } from "../predictor-ui";
 import { rankTier } from "../predictor-ui/lib/rankTier";
+import { RatingList, RatingValue } from "./ratings";
 import { standingsStatus } from "../lib/seasonCaption";
 import { teamName } from "../lib/teams";
 import TeamLogo from "./TeamLogo";
@@ -209,33 +210,6 @@ function buildRows(data: {
   });
 }
 
-/** A value and the team's place in the league, the one colour scale. */
-function RankedCell({
-  figure,
-  n,
-  label,
-}: {
-  figure: { value: number | null; rank: number | null };
-  n: number;
-  label: string;
-}): ReactNode {
-  if (figure.value === null || figure.rank === null) {
-    return <span className="text-pr-text-faint">—</span>;
-  }
-  const tier = rankTier(figure.rank, n);
-  return (
-    <span className="inline-flex items-center justify-end gap-1.5">
-      <span className="tabular-nums">{figure.value}</span>
-      <span
-        className={`pr-rank-box pr-rank-${tier} pr-rating-rank`}
-        aria-label={`${label}: ${figure.rank} of ${n}`}
-      >
-        {figure.rank}
-      </span>
-    </span>
-  );
-}
-
 /** The last ten results, oldest first: a dot per game, green or red. */
 function FormDots({ form }: { form: string[] }) {
   if (form.length === 0) return <span className="text-pr-text-faint">—</span>;
@@ -372,28 +346,28 @@ function TeamsTable({
       label: "Net",
       value: (row) => row.net.value,
       numeric: true,
-      render: (row) => <RankedCell figure={row.net} n={n} label="net rating" />,
+      render: (row) => <RatingValue figure={row.net} n={n} label="net rating" />,
     },
     {
       key: "off",
       label: "Off",
       value: (row) => row.off.value,
       numeric: true,
-      render: (row) => <RankedCell figure={row.off} n={n} label="offence" />,
+      render: (row) => <RatingValue figure={row.off} n={n} label="offence" />,
     },
     {
       key: "def",
       label: "Def",
       value: (row) => row.def.value,
       numeric: true,
-      render: (row) => <RankedCell figure={row.def} n={n} label="defence" />,
+      render: (row) => <RatingValue figure={row.def} n={n} label="defence" />,
     },
     {
       key: "pace",
       label: "Pace",
       value: (row) => row.pace.value,
       numeric: true,
-      render: (row) => <RankedCell figure={row.pace} n={n} label="pace" />,
+      render: (row) => <RatingValue figure={row.pace} n={n} label="pace" />,
     },
     {
       key: "form",
@@ -434,21 +408,15 @@ function TeamsTable({
         <div className="grid gap-4 sm:grid-cols-2" data-testid={`team-detail-${row.team}`}>
           <div>
             <h3 className="mb-1 text-xs uppercase tracking-wide text-pr-text-dim">Ratings</h3>
-            <ul className="text-sm">
-              {(
-                [
-                  ["Net rating", row.net],
-                  ["Offence", row.off],
-                  ["Defence", row.def],
-                  ["Pace", row.pace],
-                ] as Array<[string, { value: number | null; rank: number | null }]>
-              ).map(([label, figure]) => (
-                <li key={label} className="flex items-center justify-between gap-2">
-                  <span>{label}</span>
-                  <RankedCell figure={figure} n={n} label={label} />
-                </li>
-              ))}
-            </ul>
+            {/* The same eleven metrics the game detail shows, from the same
+                payload and the same pieces -- not a second list of four. */}
+            <RatingList
+              metrics={overview.metrics}
+              figure={(metric) => overview.ratings?.[row.team]?.[metric.key]}
+              n={n}
+              team={row.team}
+              testId={`team-ratings-${row.team}`}
+            />
           </div>
           <div>
             <h3 className="mb-1 text-xs uppercase tracking-wide text-pr-text-dim">Last five</h3>

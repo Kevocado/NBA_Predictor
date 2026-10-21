@@ -35,16 +35,64 @@ const teams: TeamHubRow[] = [
 
 const figure = (value: number | null, rank: number | null) => ({ value, rank });
 
+const METRICS = [
+  { key: "net", label: "Net rating", unit: "", help: "Points scored minus points allowed, per 100 possessions.", higher_is_better: true },
+  { key: "ortg", label: "Offence", unit: "pts per 100", help: "Points scored per 100 possessions.", higher_is_better: true },
+  { key: "drtg", label: "Defence", unit: "allowed per 100", help: "Points allowed per 100 possessions.", higher_is_better: false },
+  { key: "pace", label: "Pace", unit: "possessions", help: "Possessions per game.", higher_is_better: true },
+  { key: "efg_pct", label: "eFG%", unit: "", help: "Points per shot.", higher_is_better: true },
+  { key: "tov_rate", label: "Turnover %", unit: "", help: "Turnovers per 100 possessions.", higher_is_better: false },
+  { key: "orb_pct", label: "Offensive rebounds %", unit: "", help: "Share of missed shots got back.", higher_is_better: true },
+  { key: "ft_rate", label: "Free-throw rate", unit: "", help: "Free throws per 100 possessions.", higher_is_better: true },
+  { key: "fg3_pct", label: "3P%", unit: "", help: "Share of three-point shots made.", higher_is_better: true },
+  { key: "fg3_pct_allowed", label: "3P% allowed", unit: "", help: "Share of three-point shots the opponents made.", higher_is_better: false },
+  { key: "reb", label: "Rebounds", unit: "", help: "Rebounds per game.", higher_is_better: true },
+];
+
+/** Each metric's figure and rank per team: the league the fixture describes. */
+const VALUES: Record<string, Record<string, number>> = {
+  net: { BOS: 6.1, MIA: 0.2, LAL: 4.8 },
+  ortg: { BOS: 112.4, MIA: 108.0, LAL: 115.0 },
+  drtg: { BOS: 106.3, MIA: 107.8, LAL: 110.2 },
+  pace: { BOS: 99.1, MIA: 101.2, LAL: 97.0 },
+  efg_pct: { BOS: 55.1, MIA: 53.4, LAL: 56.0 },
+  tov_rate: { BOS: 12.9, MIA: 11.4, LAL: 13.6 },
+  orb_pct: { BOS: 25.4, MIA: 26.8, LAL: 23.1 },
+  ft_rate: { BOS: 21.2, MIA: 24.7, LAL: 19.8 },
+  fg3_pct: { BOS: 37.2, MIA: 38.4, LAL: 39.1 },
+  fg3_pct_allowed: { BOS: 35.8, MIA: 36.9, LAL: 34.4 },
+  reb: { BOS: 44.9, MIA: 42.1, LAL: 46.3 },
+};
+
+const RANKS: Record<string, Record<string, number>> = {
+  net: { BOS: 4, MIA: 15, LAL: 6 },
+  ortg: { BOS: 2, MIA: 11, LAL: 1 },
+  drtg: { BOS: 1, MIA: 9, LAL: 18 },
+  pace: { BOS: 14, MIA: 1, LAL: 22 },
+  efg_pct: { BOS: 3, MIA: 8, LAL: 5 },
+  tov_rate: { BOS: 6, MIA: 2, LAL: 9 },
+  orb_pct: { BOS: 7, MIA: 5, LAL: 12 },
+  ft_rate: { BOS: 11, MIA: 4, LAL: 19 },
+  fg3_pct: { BOS: 9, MIA: 6, LAL: 2 },
+  fg3_pct_allowed: { BOS: 5, MIA: 10, LAL: 21 },
+  reb: { BOS: 3, MIA: 12, LAL: 8 },
+};
+
+const ratingFigure = (value: number, rank: number) => ({ value, rank });
+
 const overview: TeamOverview = {
   as_of: "2026-11-01",
   n_teams: 30,
   caption: "Last 15 games each.",
-  metrics: [],
-  ratings: {
-    BOS: { net: figure(6.1, 4), ortg: figure(112.4, 2), drtg: figure(106.3, 1), pace: figure(99.1, 14) },
-    MIA: { net: figure(0.2, 15), ortg: figure(108.0, 11), drtg: figure(107.8, 9), pace: figure(101.2, 1) },
-    LAL: { net: figure(4.8, 6), ortg: figure(115.0, 1), drtg: figure(110.2, 18), pace: figure(97.0, 22) },
-  },
+  metrics: METRICS,
+  ratings: Object.fromEntries(
+    ["BOS", "MIA", "LAL"].map((team) => [
+      team,
+      Object.fromEntries(
+        METRICS.map((metric) => [metric.key, ratingFigure(VALUES[metric.key][team], RANKS[metric.key][team])]),
+      ),
+    ]),
+  ),
   form: { BOS: ["W", "W", "L"], MIA: ["W", "L"], LAL: ["L", "W", "W"] },
   last_games: {
     BOS: [{ game_id: "g1", game_date: "2026-10-30", opponent: "MIA", home: true, score: "110–100", result: "W" }],
@@ -161,6 +209,23 @@ describe("TeamsPanel", () => {
     expect(within(detail).getByText(/pick: BOS 58%/)).toBeInTheDocument();
     expect(within(detail).getByText("Jayson Tatum")).toBeInTheDocument();
     expect(within(detail).getByText(/28\.4 ppg/)).toBeInTheDocument();
+  });
+
+  it("shows all eleven ratings in a team's row, each with its rank", async () => {
+    renderPanel();
+    await screen.findByTestId("teams-panel");
+
+    await userEvent.click(screen.getByRole("button", { name: /Celtics/i }));
+
+    const ratings = screen.getByTestId("team-ratings-BOS");
+    const rows = within(ratings).getAllByTestId(/^rating-row-/);
+    expect(rows).toHaveLength(11);
+    for (const row of rows) {
+      expect(within(row).getByTestId("rating-rank")).toBeInTheDocument();
+    }
+    // The same eleven metrics the game detail shows.
+    expect(within(ratings).getByText("eFG%")).toBeInTheDocument();
+    expect(within(ratings).getByText("3P% allowed")).toBeInTheDocument();
   });
 
   it("does not call a four-game lead 'clinched' before the league has settled", async () => {

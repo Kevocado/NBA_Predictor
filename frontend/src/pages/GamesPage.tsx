@@ -1,11 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import EarlySeasonNotice from "../components/EarlySeasonNotice";
 import GameDetailModal from "../components/GameDetailModal";
+import TeamLogo from "../components/TeamLogo";
 import { ModelRecordLine } from "../components/ModelRecordLine";
 import { api, type Game, type TrackRecord } from "../api/client";
 import { EmptyState, ErrorState, MatchCard, RoundNavigator, Skeleton } from "../predictor-ui";
 import { addDays, mondayOf } from "../lib/weeks";
 import { dayHeading, nextUpIds, tipZones, toCardModel, weekLabel, weekTally } from "../lib/nightCards";
+
+/** The official logos on a card's two sides, as everywhere else on the site; the code chip is the fallback inside TeamLogo. */
+const withLogos = (model: ReturnType<typeof toCardModel>) => ({
+  ...model,
+  left: { ...model.left, badge: <TeamLogo team={model.left.code} size={36} ariaHidden /> },
+  right: { ...model.right, badge: <TeamLogo team={model.right.code} size={36} ariaHidden /> },
+});
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
@@ -162,7 +170,7 @@ export default function GamesPage() {
               <ul className="grid gap-3 pt-3 pb-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                 {dayGames.map((game) => (
                   <li key={game.game_id} data-testid={`game-card-${game.game_id}`}>
-                    <MatchCard {...toCardModel(game, nextUp.has(game.game_id))} moment="tip-off" compact onOpen={() => setSelectedGameId(game.game_id)} />
+                    <MatchCard {...withLogos(toCardModel(game, nextUp.has(game.game_id)))} moment="tip-off" compact onOpen={() => setSelectedGameId(game.game_id)} />
                   </li>
                 ))}
               </ul>

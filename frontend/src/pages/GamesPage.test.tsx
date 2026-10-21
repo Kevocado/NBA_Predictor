@@ -50,6 +50,20 @@ describe("GamesPage", () => {
     expect(screen.getByRole("heading", { name: "Wednesday 18 Feb" })).toBeInTheDocument();
   });
 
+  it("draws each side of a card with the team's official logo, not a colour chip", async () => {
+    vi.mocked(api.getSeasonFirstWeek).mockResolvedValue({ first_week_start: "2026-02-10" });
+    vi.mocked(api.getGamesWeek).mockResolvedValue([
+      { game_id: "g1", game_date: "2026-02-16", home_team: "BOS", away_team: "MIA", prediction: null, completed: false, home_pts: null, away_pts: null },
+    ]);
+
+    render(<GamesPage />);
+
+    const card = await screen.findByTestId("game-card-g1");
+    const logos = Array.from(card.querySelectorAll("img")).map((img) => img.getAttribute("src") ?? "");
+    expect(logos.some((src) => /\/bos\./.test(src))).toBe(true);
+    expect(logos.some((src) => /\/mia\./.test(src))).toBe(true);
+  });
+
   it("shows an empty state when no games are scheduled this week", async () => {
     vi.mocked(api.getSeasonFirstWeek).mockResolvedValue({ first_week_start: "2026-02-10" });
     vi.mocked(api.getGamesWeek).mockResolvedValue([]);

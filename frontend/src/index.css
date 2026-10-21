@@ -65,6 +65,13 @@ td {
   border-top: 1px solid var(--color-pr-rule);
 }
 
+/* The narrow player table shows six columns; a tighter gutter is what keeps
+   them on a 375px phone without a sideways scroll. */
+.player-table-compact th,
+.player-table-compact td {
+  padding-right: 0.375rem;
+}
+
 /* Numbers never run into each other: cells keep a gutter, stats stay on
    one line, and wide tables scroll in their own box (overflow-x-auto). */
 td:not(:first-child) {

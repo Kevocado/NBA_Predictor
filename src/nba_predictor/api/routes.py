@@ -9,7 +9,7 @@ from pathlib import Path
 import pandas as pd
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 
-from nba_predictor.api.availability import resolve_doubtful_players, resolve_out_players
+from nba_predictor.api.availability import for_teams, resolve_doubtful_players, resolve_out_players
 from nba_predictor.models.probability import cover_prob
 from nba_predictor.models.manifest import build_manifest
 from nba_predictor.api.deps import (
@@ -146,6 +146,28 @@ def load_latest_manifest() -> dict | None:
     return None
 
 
+def _prop_bands(models_dir: Path) -> dict[str, float] | None:
+    """The props model's own holdout MAE per stat, or None when there is none.
+
+    The band is what a projection has to miss by before it counts as wrong, so
+    it is the model's measured error and it moves with each retrain. A
+    made-up default would be a number nobody measured, and the post-game
+    review would judge players against it -- so a missing manifest means no
+    band, never a default.
+    """
+    path = Path(models_dir) / "player_props_manifest.json"
+    try:
+        manifest = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    bands: dict[str, float] = {}
+    for stat, figures in (manifest.get("metrics") or {}).items():
+        mae = (figures or {}).get("mae")
+        if isinstance(mae, (int, float)) and not isinstance(mae, bool):
+            bands[str(stat)] = float(mae)
+    return bands or None
+
+
 def _game_out(g: dict, db_path: Path) -> GameOut:
     manifest = load_latest_manifest()
     prediction, rebuilt = _prediction_out(db_path, g, manifest)
@@ -185,6 +207,7 @@ def get_game_detail(
     schedule: list[dict] = Depends(get_schedule),
     db_path: Path = Depends(get_db_path),
     injuries: list[dict] = Depends(get_injury_report_best_effort),
+    models_dir: Path = Depends(get_models_dir),
 ) -> GameDetailOut:
     game = get_game(schedule, game_id)
     if game is None:
@@ -214,6 +237,10 @@ def get_game_detail(
     picks = picks_by_player_stat(db_path, game_id, game)
     out_entries = resolve_out_players(injuries, {key[0] for key in picks})
     doubtful_entries = resolve_doubtful_players(injuries, {key[0] for key in picks})
+    # This game's two teams only: the report is league-wide, and a player who
+    # is playing for neither of them is not this game's news.
+    out_entries = for_teams(out_entries, {game["home_team"], game["away_team"]})
+    doubtful_entries = for_teams(doubtful_entries, {game["home_team"], game["away_team"]})
     injury_summary = f"Checked against ESPN availability — {len(out_entries)} Out, {len(doubtful_entries)} Day-to-Day"
 
     return GameDetailOut(
@@ -223,6 +250,7 @@ def get_game_detail(
         home_recent_form=get_recent_form(schedule, game["home_team"], before_date=game["game_date"]),
         away_recent_form=get_recent_form(schedule, game["away_team"], before_date=game["game_date"]),
         injury_summary=injury_summary,
+        prop_bands=_prop_bands(models_dir),
     )
 
 
@@ -522,6 +550,9 @@ def get_game_out_players(
 
     picks = picks_by_player_stat(db_path, game_id, game)
     entries = resolve_out_players(injuries, {key[0] for key in picks})
+    # This game's two teams only: the report is league-wide, and a player who
+    # is playing for neither of them is not this game's news.
+    entries = for_teams(entries, {game["home_team"], game["away_team"]})
 
     # Prefer the roster's own name for the id, the same source the ranking
     # uses, so the out line and the ranking never disagree on who this is.
@@ -560,6 +591,8 @@ def get_game_doubtful_players(
 
     picks = picks_by_player_stat(db_path, game_id, game)
     entries = resolve_doubtful_players(injuries, {key[0] for key in picks})
+    # This game's two teams only, for the reason the out feed does it.
+    entries = for_teams(entries, {game["home_team"], game["away_team"]})
 
     # The roster's own name for the id, the same source the ranking uses, so
     # the note and the row it attaches to never disagree on who this is.

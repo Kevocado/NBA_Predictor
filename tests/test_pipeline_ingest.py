@@ -76,9 +76,21 @@ def test_to_schedule_cache_includes_scores_and_completion():
     assert cache == [
         {
             "game_id": "1", "game_date": "2026-03-01", "home_team": "BOS", "away_team": "MIA",
-            "completed": True, "home_pts": 110, "away_pts": 100, "tip_off": None,
+            "completed": True, "home_pts": 110, "away_pts": 100, "season_type": None, "tip_off": None,
         }
     ]
+
+
+def test_to_schedule_cache_keeps_the_season_type():
+    """The window that ranks teams reads the schedule cache, and the preseason
+    is not a team's form -- so the cache has to say which season a game is in."""
+    from nba_predictor.pipeline.ingest import to_schedule_cache
+
+    games = [{"game_id": "1", "game_date": "2026-10-02", "home_team": "BOS", "away_team": "MIA", "season_type": 1}]
+
+    cache = to_schedule_cache(games)
+
+    assert cache[0]["season_type"] == 1
 
 
 def test_to_schedule_cache_keeps_the_tip_off_time():
@@ -208,6 +220,32 @@ def test_compute_player_hub_live_form_uses_last_five_games_only():
     assert row["live_form_rating"] > row["rating"]
 
 
+def test_the_player_hub_leaves_the_preseason_out():
+    """A player's averages are regular-season and playoff averages.
+
+    The preseason is a handful of minutes that say little about a player's
+    output, and a star's preseason line was pulling his averages up.
+    """
+    from nba_predictor.pipeline.ingest import compute_player_hub
+
+    games = [
+        {"game_id": "g1", "game_date": "2026-10-02", "home_team": "BOS", "away_team": "MIA",
+         "home_fga": 90, "away_fga": 85, "season_type": 1},
+        {"game_id": "g2", "game_date": "2026-10-20", "home_team": "BOS", "away_team": "MIA",
+         "home_fga": 90, "away_fga": 85, "season_type": 2},
+    ]
+    player_boxscores = {
+        "g1": [_player_box_row("p1", "Jayson Tatum", "BOS", 34.0, 30.0, 8.0, 5.0)],
+        "g2": [_player_box_row("p1", "Jayson Tatum", "BOS", 36.0, 26.0, 6.0, 7.0)],
+    }
+
+    rows = compute_player_hub(games, player_boxscores)
+
+    assert rows[0]["points_per_game"] == pytest.approx(26.0), (
+        "a preseason game is in the player's averages"
+    )
+
+
 def test_score_and_store_predictions_stores_real_model_output(tmp_path):
     import json
     import numpy as np
@@ -269,6 +307,31 @@ def test_compute_standings_assigns_seeds_by_win_pct():
     assert east[0]["win_pct"] == 1.0
     assert east[1]["abbreviation"] == "MIA"
     assert east[1]["games_back"] == 2.0
+
+
+def test_a_preseason_win_does_not_change_the_standings():
+    """The preseason is not a game in the race.
+
+    Both games are in the same season, so the current-season filter cannot be
+    what excludes the preseason one: only the preseason rule can.
+    """
+    from nba_predictor.pipeline.ingest import compute_standings
+
+    base = _sample_completed_games()[0]
+    games = [
+        dict(base, game_id="p1", game_date="2026-10-02", season_type=1),
+        dict(base, game_id="r1", game_date="2026-10-20", season_type=2),
+    ]
+
+    rows = compute_standings(games)
+    by_team = {r["abbreviation"]: r for r in rows}
+
+    assert (by_team["BOS"]["wins"], by_team["BOS"]["losses"]) == (1, 0), (
+        "a preseason win changed the standings"
+    )
+    assert (by_team["MIA"]["wins"], by_team["MIA"]["losses"]) == (0, 1), (
+        "a preseason loss changed the standings"
+    )
 
 
 def test_to_scoring_frame_includes_upcoming_games_with_null_fields():

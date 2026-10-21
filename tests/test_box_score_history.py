@@ -70,6 +70,18 @@ def _schedule_with_history(monkeypatch, dates):
     return schedule
 
 
+def _schedule_with_season_type(monkeypatch, dates, season_type):
+    """The same schedule, with every game carrying an ESPN season type.
+
+    Season type 1 is the preseason: not a team's form, and not a game's
+    standing. A schedule cache written before the field existed has no season
+    type at all, which is "unknown", not "preseason".
+    """
+    schedule = [dict(_game(f"g{i}", d, "BOS", "MIA"), season_type=season_type) for i, d in enumerate(dates)]
+    monkeypatch.setattr(facts_mod, "_schedule", lambda: schedule)
+    return schedule
+
+
 DATES = [f"2026-03-{d:02d}" for d in range(1, 18)]
 
 
@@ -95,6 +107,67 @@ def test_only_the_lookback_window_is_enriched(offline, counting_enrich):
     )
 
 
+# --- the window is a GAME COUNT, not a calendar slice ---------------------
+
+def test_the_window_reaches_into_last_season(offline, counting_enrich):
+    """Opening night must still have a window to read.
+
+    The window used to be a calendar slice of 120 days. On 21 October that
+    reaches back only into the offseason, so no team has MIN_GAMES games, the
+    context route answers `{}` and the summary has no matchup facts at all.
+    A game count reaches the games a team actually played, last season
+    included, which is the form the duels claim to measure.
+    """
+    last_season = [f"2026-06-{d:02d}" for d in range(1, 16)]
+    this_season = ["2026-10-18", "2026-10-19", "2026-10-20"]
+    _schedule_with_history(offline, last_season + this_season)
+
+    facts_mod.warm_box_history("2026-10-21")
+
+    passed = counting_enrich["passed"][0]
+    assert len(passed) == facts_mod.BOX_WINDOW, (
+        f"the window holds {len(passed)} games; each team's last "
+        f"{facts_mod.BOX_WINDOW} were asked for"
+    )
+    assert any(g["game_date"].startswith("2026-06") for g in passed), (
+        "the window did not reach into last season: on opening night the duels "
+        "would have no form to read and the context route would answer {}"
+    )
+
+
+def test_the_window_stops_at_its_bound(offline, counting_enrich):
+    """Bounded: how few games there are, the window does not reach without end."""
+    _schedule_with_history(offline, ["2024-06-01"])
+
+    facts_mod.warm_box_history("2026-10-21")
+
+    assert counting_enrich["passed"][0] == [], (
+        "a game older than the bound was read; the window is not bounded"
+    )
+
+
+def test_a_preseason_game_is_not_a_team_s_form(offline, counting_enrich):
+    """The preseason is not form. A schedule that says so is believed."""
+    _schedule_with_season_type(offline, [f"2026-03-{d:02d}" for d in range(1, 18)], season_type=1)
+
+    facts_mod.warm_box_history("2026-03-18")
+
+    assert counting_enrich["passed"][0] == [], (
+        "preseason games were read as a team's last games"
+    )
+
+
+def test_a_game_without_a_season_type_is_still_played(offline, counting_enrich):
+    """A schedule cache written before the field existed is 'unknown', not
+    'preseason'. Refusing to read it would empty the window on every deployment
+    that has not yet re-ingested."""
+    _schedule_with_history(offline, DATES)
+
+    facts_mod.warm_box_history("2026-03-18")
+
+    assert counting_enrich["passed"][0], "a schedule with no season type read nothing"
+
+
 # --- never build on a request thread -------------------------------------
 
 def test_a_cold_request_yields_no_history_and_builds_nothing(offline, counting_enrich):
@@ -118,8 +191,9 @@ def test_a_warm_request_returns_the_frame_it_was_given(offline, counting_enrich)
     facts_mod.warm_box_history("2026-03-18")
 
     frame = facts_mod._box_score_history("2026-03-18")
-    assert len(frame) == len(DATES), (
-        f"the request returned {len(frame)} rows for a warmed {len(DATES)}-game window"
+    assert len(frame) == facts_mod.BOX_WINDOW, (
+        f"the request returned {len(frame)} rows for a warmed window; a team's last "
+        f"{facts_mod.BOX_WINDOW} games are what the window holds"
     )
 
 
@@ -153,7 +227,7 @@ def test_two_game_dates_are_cached_side_by_side(offline, counting_enrich):
     )
 
     for date in dates:
-        assert len(facts_mod._box_score_history(date)) == len(DATES), (
+        assert len(facts_mod._box_score_history(date)) == facts_mod.BOX_WINDOW, (
             f"{date} went cold between two reads of the same pass"
         )
     assert counting_enrich["n"] == len(dates), (

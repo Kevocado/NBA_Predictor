@@ -32,6 +32,7 @@ from .. import config
 from ..api import deps
 from ..services import hub_service
 from ..services.schedule_repository import get_game
+from ..signals.four_factors_duel import WINDOW
 from ..tracking import store
 from ..tracking.timing import latest_pre_tip, made_before_tip, pick_cutoff
 
@@ -47,11 +48,17 @@ def _schedule() -> list[dict]:
     return deps.get_schedule(deps.get_schedule_path())
 
 
-#: How far back the duels' history reaches. A team plays ~3 games a week and a
-#: duel reads its last 15, so five weeks covers a full window with room for a
-#: team that has played less. Ranking further back than that reads a form the
-#: team has since moved on from.
-BOX_LOOKBACK_DAYS = 120
+#: How many games per team the window holds. The ranker reads each team's last
+#: `WINDOW` games, so that is what the window is: a game count, not a calendar
+#: slice. A slice of 120 days on 21 October reaches back only into the
+#: offseason, no team has `MIN_GAMES` games, and the context route answers `{}`
+#: -- so the AI summary had no matchup facts to read on opening night.
+BOX_WINDOW = WINDOW
+
+#: How far back the window may reach, in DAYS. A season runs about 250 days,
+#: so 400 reaches last season's games and stops there: the bound is what keeps
+#: a window from growing without end when a team has played almost nothing.
+BOX_LOOKBACK_MAX_DAYS = 400
 
 _BOX_HISTORY: dict = {}
 
@@ -66,6 +73,33 @@ BOX_HISTORY_KEEP = 8
 BOX_WARM_POLL_SECONDS = float(os.getenv("BOX_WARM_POLL_SECONDS", "30"))
 
 
+def _select_window(games: list[dict], window: int = BOX_WINDOW) -> list[dict]:
+    """Each team's last `window` games, and only those.
+
+    The ranker needs each team's last `window` games, so the window is a GAME
+    COUNT: a count reaches the games a team actually played, last season
+    included, which is the form the duels claim to measure. A calendar slice
+    cannot -- on opening night it reaches into the offseason only.
+
+    A game two teams played is kept for both, so the union is what a team's
+    opponents' form needs too.
+    """
+    if window <= 0:
+        return []
+    per_team: dict[str, list[dict]] = {}
+    for game in sorted(games, key=lambda g: (str(g.get("game_date", "")), str(g.get("game_id", "")))):
+        for side in ("home_team", "away_team"):
+            team = game.get(side)
+            if team:
+                per_team.setdefault(team, []).append(game)
+    keep = {
+        str(game.get("game_id"))
+        for team_games in per_team.values()
+        for game in team_games[-window:]
+    }
+    return [g for g in games if str(g.get("game_id")) in keep]
+
+
 def _build_box_history(as_of: str) -> pd.DataFrame:
     """Build the lookback window of completed games with their box scores.
 
@@ -74,21 +108,23 @@ def _build_box_history(as_of: str) -> pd.DataFrame:
     shaping step -- so the duels rank exactly the figures the features are built
     from, rather than a second, separately-fetched copy that could disagree.
 
-    **Bounded.** The ranker needs each team's last `window` games, so only
-    completed games in a lookback window ending at `as_of` are enriched. Reading
-    every completed game in the schedule would put a season of ESPN calls on a
-    single request.
+    **Bounded.** The ranker needs each team's last `window` games, so the
+    window holds those games and nothing else, and it reaches back at most
+    `BOX_LOOKBACK_MAX_DAYS`. Reading every completed game in the schedule
+    would put a season of ESPN calls on a single request.
 
     Only ever called from `warm_box_history`, which runs on a daemon thread.
     """
-    from ..pipeline.ingest import enrich_with_boxscores, to_training_frame
+    from ..pipeline.ingest import enrich_with_boxscores, is_preseason, to_training_frame
 
-    start = (pd.Timestamp(as_of) - pd.Timedelta(days=BOX_LOOKBACK_DAYS)).date().isoformat()
-    window = [
+    start = (pd.Timestamp(as_of) - pd.Timedelta(days=BOX_LOOKBACK_MAX_DAYS)).date().isoformat()
+    candidates = [
         g for g in _schedule()
-        if start <= str(g.get("game_date", "")) < str(as_of) and g.get("completed")
+        if start <= str(g.get("game_date", "")) < str(as_of)
+        and g.get("completed")
+        and not is_preseason(g)
     ]
-    return to_training_frame(enrich_with_boxscores(window))
+    return to_training_frame(enrich_with_boxscores(_select_window(candidates)))
 
 
 def _box_score_history(as_of: str) -> pd.DataFrame:

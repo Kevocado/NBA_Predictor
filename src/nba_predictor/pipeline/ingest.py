@@ -139,13 +139,29 @@ def _outcome_row_count(db_path: Path) -> int:
 
 PLAYER_STAT_TARGET_COLUMNS = {"points": "points", "rebounds": "rebounds", "assists": "assists", "threes": "fg3m"}
 
+#: ESPN's season type for the preseason. One constant, two shapes: the frame
+#: rule (`regular_and_post_only`) and the game-dict rule (`is_preseason`).
+PRESEASON_SEASON_TYPE = 1
+
+
+def is_preseason(game: dict) -> bool:
+    """True for an ESPN preseason game (season type 1).
+
+    The same rule `regular_and_post_only` applies to a frame, for the dict
+    shape the schedule cache and the hub caches carry. A game with no season
+    type at all -- a schedule cache written before the field existed -- is
+    "unknown", not "preseason": refusing to read it would empty every window
+    until the next ingest.
+    """
+    return game.get("season_type") == PRESEASON_SEASON_TYPE
+
 
 def regular_and_post_only(df: pd.DataFrame) -> pd.DataFrame:
     """Drops preseason rows (ESPN season type 1). A star's preseason minutes are a handful and say little about
     his regular-season output: with them in the last-10 window, opening-week projections were ~half the truth."""
     if "season_type" not in df.columns:
         return df
-    return df[df["season_type"] != 1].reset_index(drop=True)
+    return df[df["season_type"] != PRESEASON_SEASON_TYPE].reset_index(drop=True)
 
 
 def to_player_scoring_frame(
@@ -465,6 +481,10 @@ def to_schedule_cache(games: list[dict]) -> list[dict]:
             "completed": g.get("completed", False),
             "home_pts": g.get("home_pts"),
             "away_pts": g.get("away_pts"),
+            # ESPN's season type: 1 is the preseason, which is not a game in the
+            # race and not a team's form. The window that ranks teams needs to
+            # know, and the schedule cache is where it reads from.
+            "season_type": g.get("season_type"),
             # The pre-tip cutoff (tracking/timing.py) reads this.
             "tip_off": g.get("tip_off"),
         }
@@ -780,6 +800,9 @@ def compute_standings(games: list[dict], today: date | None = None) -> list[dict
     offseason/preseason when the page explicitly labels them as prior-season.
     """
     completed = _completed_with_box(games)
+    # The preseason is not a game in the race: BOS showed 4-0 on opening night
+    # because a preseason win counted. Same rule as the player hub's.
+    completed = [g for g in completed if not is_preseason(g)]
     state = season_state(games, today=today)
     racing = state in ("regular", "postseason")
 
@@ -932,7 +955,11 @@ def compute_player_hub(games: list[dict], player_boxscores: dict[str, list[dict]
     score, which is wrong after a trade until he has played for his new team.
     """
     team_by_player = team_by_player or {}
-    games_by_id = {g["game_id"]: g for g in games}
+    # The preseason is not a player's form: a handful of preseason minutes said
+    # little about his regular-season output and were in these averages.
+    # Filtering the games drops their box scores too -- a box score whose game
+    # is not in `games_by_id` is skipped below.
+    games_by_id = {g["game_id"]: g for g in games if not is_preseason(g)}
     per_player_games: dict[str, list[dict]] = {}
 
     ordered_game_ids = sorted(player_boxscores, key=lambda gid: games_by_id.get(gid, {}).get("game_date", ""))

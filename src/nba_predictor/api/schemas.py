@@ -74,6 +74,11 @@ class GameDetailOut(GameOut):
     # "Checked against ESPN availability — 2 Out, 0 Day-to-Day" or the gate's
     # actual state (e.g. "Injury report not yet published for this game").
     injury_summary: str | None = None
+    # The props model's own holdout error per stat (points, rebounds, assists,
+    # threes): the band a projection has to miss by before it counts as wrong.
+    # None when there is no props manifest -- no band is "not measured", never a
+    # default number.
+    prop_bands: dict[str, float] | None = None
 
 
 class PlayerPropOut(BaseModel):

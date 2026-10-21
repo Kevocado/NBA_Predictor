@@ -288,3 +288,22 @@ def test_a_cached_scoreboard_without_season_type_is_refetched(mock_fetch, clear_
         "competitions": [{"status": {"type": {"completed": False}}, "competitors": [
             {"homeAway": "home", "team": {"abbreviation": "BOS"}}, {"homeAway": "away", "team": {"abbreviation": "NYK"}}]}]}]}
     assert espn.get_scoreboard("2026-10-10")[0]["season_type"] == 1
+
+
+def _board(completed):
+    return {"events": [{"id": "1", "date": "2026-10-20T19:00Z", "season": {"type": 2}, "competitions": [{
+        "status": {"type": {"completed": completed}},
+        "competitors": [{"homeAway": "home", "team": {"abbreviation": "DET"}, "score": "121"},
+                        {"homeAway": "away", "team": {"abbreviation": "BOS"}, "score": "119"}]}]}]}
+
+
+@patch("nba_predictor.data.espn._fetch_json")
+def test_a_day_cached_before_its_games_finished_is_refetched(mock_fetch, clear_cache):
+    from nba_predictor.data import espn
+
+    mock_fetch.return_value = _board(False)
+    assert espn.get_scoreboard("2026-10-20")[0]["completed"] is False
+    mock_fetch.return_value = _board(True)
+    assert espn.get_scoreboard("2026-10-20")[0]["completed"] is True      # not stuck on the cached "awaiting result"
+    assert espn.get_scoreboard("2026-10-20")[0]["home_pts"] == 121
+    assert mock_fetch.call_count == 2                                      # the finished day is now cached and final

@@ -132,7 +132,9 @@ def get_scoreboard(date: str) -> list[dict]:
     cached = _load_cache("scoreboard", cache_key)
     # A scoreboard cached before `season_type` existed is refetched for the current seasons: it is what tells a
     # preseason game (1) from a regular-season (2) or postseason (3) one.
-    if cached is not None and not (date >= "2025-10-01" and any("season_type" not in g for g in cached["games"])):
+    # Only a finished day is final: a scoreboard cached while games were still to be played would otherwise show them as
+    # "awaiting result" for as long as the cache file lived (a postponed game keeps the day refetching, which is cheap).
+    if cached is not None and all(g["completed"] for g in cached["games"]) and not (date >= "2025-10-01" and any("season_type" not in g for g in cached["games"])):
         return cached["games"]
 
     espn_date = date.replace("-", "")

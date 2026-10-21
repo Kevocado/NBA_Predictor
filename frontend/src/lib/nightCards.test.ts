@@ -16,6 +16,20 @@ function game(over: Partial<Game> = {}): Game {
   };
 }
 
+describe("key out on the card", () => {
+  const out = [{ team: "BOS", player_name: "Jayson Tatum" }, { team: "MIA", player_name: "Bam Adebayo" }];
+
+  it("lists the reported-out players by surname after the margin and total", () => {
+    const card = toCardModel(game({ key_out: out }), false, TZ, TIP_MS - 3600_000);
+    expect(card.meta).toBe("BOS by 3.5 · Total 224.5 · Out: Tatum, Adebayo");
+  });
+
+  it("says nothing on a finished game or when nobody is out", () => {
+    expect(toCardModel(game({ key_out: out, completed: true, home_pts: 100, away_pts: 90 }), false, TZ).meta).not.toMatch(/Out:/);
+    expect(toCardModel(game({ key_out: [] }), false, TZ, TIP_MS - 3600_000).meta).not.toMatch(/Out:/);
+  });
+});
+
 describe("toCardModel", () => {
   it("puts away on the left and home on the right, with team colours and nicknames", () => {
     const card = toCardModel(game(), false, TZ, TIP_MS - 3600_000);

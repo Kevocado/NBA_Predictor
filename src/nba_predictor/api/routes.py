@@ -15,6 +15,7 @@ from nba_predictor.models.manifest import build_manifest
 from nba_predictor.api.deps import (
     get_db_path,
     get_injury_report,
+    get_roster_cache,
     get_roster_index,
     get_injury_report_best_effort,
     get_models_dir,
@@ -28,6 +29,7 @@ from nba_predictor.api.schemas import (
     DoubtfulPlayerOut,
     GameDetailOut,
     GameOut,
+    KeyOutOut,
     HeadToHeadMeetingOut,
     MarketPredictionOut,
     OutPlayerOut,
@@ -44,6 +46,7 @@ from nba_predictor.odds.value_bets import std_from_mae
 from nba_predictor.pipeline.ingest import run_ingest
 from nba_predictor.odds import edge_gate
 from nba_predictor.odds.edge_gate import _is_fresh
+from nba_predictor.api.key_out import key_out_for_game
 from nba_predictor.pipeline.refresh_odds import refresh_market_predictions
 from nba_predictor.pipeline.retrain import run_retrain_pipeline
 from nba_predictor.services.calibration_service import compute_model_calibration
@@ -162,10 +165,18 @@ def list_games(date: str, schedule: list[dict] = Depends(get_schedule), db_path:
 
 @router.get("/games/week", response_model=list[GameOut])
 def list_games_for_week(
-    start: str, schedule: list[dict] = Depends(get_schedule), db_path: Path = Depends(get_db_path)
+    start: str, schedule: list[dict] = Depends(get_schedule), db_path: Path = Depends(get_db_path),
+    rosters: dict[str, list[dict]] | None = Depends(get_roster_cache),
 ) -> list[GameOut]:
     games = get_games_for_week(schedule, start)
-    return [_game_out(g, db_path) for g in games]
+    minutes = {p["player_id"]: p.get("minutes_per_game", 0.0)
+               for p in load_hub_cache(config.DATA_DIR / "cache" / "hub" / "players.json")} if rosters else {}
+    out = []
+    for g in games:
+        item = _game_out(g, db_path)
+        item.key_out = [KeyOutOut(**k) for k in key_out_for_game(g, rosters, minutes)]
+        out.append(item)
+    return out
 
 
 @router.get("/games/{game_id}", response_model=GameDetailOut)

@@ -34,6 +34,11 @@ class MarketPredictionOut(BaseModel):
     rebuilt: bool = False
 
 
+class KeyOutOut(BaseModel):
+    team: str
+    player_name: str
+
+
 class GameOut(BaseModel):
     game_id: str
     game_date: str
@@ -47,6 +52,8 @@ class GameOut(BaseModel):
     completed: bool = False
     home_pts: int | None = None
     away_pts: int | None = None
+    # Reported-Out players who normally play real minutes (upcoming games only; empty when rosters are unknown).
+    key_out: list[KeyOutOut] = []
 
 
 class HeadToHeadMeetingOut(BaseModel):

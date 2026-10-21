@@ -67,6 +67,12 @@ export function toCardModel(game: Game, isNext: boolean, timeZone?: string, now:
     model.meta = `${marginLine(p, game.home_team, game.away_team)} · Total ${stat(p.predicted_total)}`;
   }
 
+  // Who is out, in the card's own words: surnames, upcoming games only.
+  if (!final && game.key_out?.length) {
+    const out = `Out: ${game.key_out.map((k) => k.player_name.trim().split(/\s+/).slice(-1)[0]).join(", ")}`;
+    model.meta = model.meta ? `${model.meta} · ${out}` : out;
+  }
+
   if (p && game.rebuilt) {
     // Built after tip-off: labelled from the moment it exists, never judged.
     model.status = "rebuilt";

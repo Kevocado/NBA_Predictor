@@ -568,17 +568,12 @@ def score_upcoming_games(
     totals = total_model.predict(upcoming_frame[feature_cols])
 
     created_at = datetime.now(timezone.utc).isoformat()
-    for i, row in upcoming_frame.iterrows():
-        wp = win_prob(float(margins[i]), margin_sigma)
-        store.insert_prediction(
-            db_path,
-            game_id=row["game_id"],
-            created_at=created_at,
-            model_version=model_version,
-            home_win_prob=wp,
-            predicted_margin=float(margins[i]),
-            predicted_total=float(totals[i]),
-        )
+    store.insert_predictions(db_path, [
+        dict(game_id=row["game_id"], created_at=created_at, model_version=model_version,
+             home_win_prob=win_prob(float(margins[i]), margin_sigma),
+             predicted_margin=float(margins[i]), predicted_total=float(totals[i]))
+        for i, row in upcoming_frame.iterrows()
+    ])
     return len(upcoming_frame)
 
 
@@ -1057,17 +1052,12 @@ def score_and_store_predictions(
     totals = total_model.predict(frame[feature_cols])
 
     created_at = datetime.now(timezone.utc).isoformat()
-    for i, row in frame.iterrows():
-        wp = win_prob(float(margins[i]), margin_sigma)
-        store.insert_prediction(
-            db_path,
-            game_id=row["game_id"],
-            created_at=created_at,
-            model_version=model_version,
-            home_win_prob=wp,
-            predicted_margin=float(margins[i]),
-            predicted_total=float(totals[i]),
-        )
+    store.insert_predictions(db_path, [
+        dict(game_id=row["game_id"], created_at=created_at, model_version=model_version,
+             home_win_prob=win_prob(float(margins[i]), margin_sigma),
+             predicted_margin=float(margins[i]), predicted_total=float(totals[i]))
+        for i, row in frame.iterrows()
+    ])
     return len(frame)
 
 

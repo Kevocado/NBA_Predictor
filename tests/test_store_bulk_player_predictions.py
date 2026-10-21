@@ -41,3 +41,25 @@ def test_a_persistent_error_is_raised_not_swallowed(tmp_path, monkeypatch):
     monkeypatch.setattr(store.time, "sleep", lambda s: None)
     with pytest.raises(sqlite3.OperationalError):
         store.insert_player_predictions(db, _rows(3))
+
+
+def _team_rows(n):
+    return [dict(game_id=f"g{i}", created_at="2026-10-21T00:00:00+00:00", model_version="v", home_win_prob=0.5, predicted_margin=1.0, predicted_total=220.0) for i in range(n)]
+
+
+def test_team_predictions_bulk_insert_and_retry(tmp_path, monkeypatch):
+    db = tmp_path / "t.db"
+    store.init_db(db)
+    real = store._connect
+    calls = {"n": 0}
+
+    def flaky(path):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise sqlite3.OperationalError("disk I/O error")
+        return real(path)
+
+    monkeypatch.setattr(store, "_connect", flaky)
+    monkeypatch.setattr(store.time, "sleep", lambda s: None)
+    assert store.insert_predictions(db, _team_rows(4)) == 4
+    assert len(store.get_predictions_for_game(db, "g2")) == 1

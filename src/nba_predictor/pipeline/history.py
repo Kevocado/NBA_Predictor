@@ -21,7 +21,10 @@ logger = logging.getLogger(__name__)
 
 HISTORY_RELATIVE = Path("data") / "history" / "nba_history.json.gz"
 # Everything the props need (rolling means of points/rebounds/assists/threes/minutes) and the availability features use.
-PLAYER_COLS = ["game_id", "game_date", "team", "player_id", "player_name", "position", "minutes", "points", "rebounds", "assists", "fg3m"]
+PLAYER_COLS = [
+    "game_id", "game_date", "team", "player_id", "player_name", "position", "minutes", "points", "rebounds", "assists", "fg3m",
+    "fga", "home_team", "away_team", "opponent",       # the matchup/usage features of the props model need these
+]
 
 
 def load_history(before: str, path: Path | None = None) -> tuple[list[dict], pd.DataFrame]:

@@ -18,9 +18,45 @@ from __future__ import annotations
 import pandas as pd
 
 from .duel import ranks
-from .four_factors_duel import MIN_GAMES, N_TEAMS, WINDOW
+from .four_factors_duel import MIN_GAMES, N_TEAMS, WINDOW, team_game_factors
 
 _NEED = ("fgm", "fga", "fg3m", "tov", "oreb", "dreb", "fta")
+
+#: The ratings a reader sees, in the order they read: (key, label, unit, higher is better).
+#:
+#: One row per metric, one league rank each. A defence is what it ALLOWS, so
+#: "Defence", "3P% allowed" and "Turnover %" are ranked the other way round: the
+#: best defence is the one that allows the least.
+RATING_METRICS: tuple[tuple[str, str, str, bool], ...] = (
+    ("net", "Net rating", "", True),
+    ("ortg", "Offence", "pts per 100", True),
+    ("drtg", "Defence", "allowed per 100", False),
+    ("pace", "Pace", "possessions", True),
+    ("efg_pct", "eFG%", "", True),
+    ("tov_rate", "Turnover %", "", False),
+    ("orb_pct", "Offensive rebounds %", "", True),
+    ("ft_rate", "Free-throw rate", "", True),
+    ("fg3_pct", "3P%", "", True),
+    ("fg3_pct_allowed", "3P% allowed", "", False),
+    ("reb", "Rebounds", "", True),
+)
+
+#: What each metric means, in words. The labels are short because they sit in a
+#: column; the meaning is a tooltip, because a reader who does not know what
+#: "eFG%" means should be able to find out without leaving the page.
+RATING_HELP: dict[str, str] = {
+    "net": "Points scored minus points allowed, per 100 possessions.",
+    "ortg": "Points scored per 100 possessions.",
+    "drtg": "Points allowed per 100 possessions.",
+    "pace": "Possessions per game. More possessions means more shots for both teams.",
+    "efg_pct": "Points per shot, counting a three-pointer as 1.5 shots.",
+    "tov_rate": "Turnovers per 100 possessions. Lower is better.",
+    "orb_pct": "Share of missed shots this team got back, per 100 possessions.",
+    "ft_rate": "Free throws per 100 possessions.",
+    "fg3_pct": "Share of three-point shots made.",
+    "fg3_pct_allowed": "Share of three-point shots the opponents made. Lower is better.",
+    "reb": "Rebounds per game.",
+}
 
 
 def _poss(fga, oreb, tov, fta):
@@ -107,3 +143,37 @@ def team_matchups(home: str, away: str, games: pd.DataFrame, as_of, n_teams: int
     p = ranks(rates["pace"].to_dict(), higher_is_better=True)
     out.append(row("pace", "pace", "pace", home, away, p[home], p[away]))
     return out
+
+
+def league_ratings(
+    games: pd.DataFrame,
+    as_of,
+    window: int = WINDOW,
+    min_games: int = MIN_GAMES,
+) -> pd.DataFrame:
+    """Every team's rating, and the league rank of each metric.
+
+    One row per team; one column per metric's value and one per metric's rank.
+    The values are the same ones the duels rank (`team_rates` for the rates,
+    `team_game_factors` for the four factors), so a rating and a duel cannot
+    disagree about the same number.
+
+    A team that has not played `min_games` is absent from the index rather than
+    ranked off a short sample, and a metric nobody has (a 3P% nobody shot) is
+    NaN, never zero.
+    """
+    rates = team_rates(games, as_of, window=window, min_games=min_games)
+    if not len(rates):
+        return pd.DataFrame()
+    factors = team_game_factors(games, as_of=as_of, window=window, min_games=min_games)
+    if not len(factors):
+        return pd.DataFrame()
+    frame = rates.join(factors[["efg_pct", "tov_rate", "orb_pct", "ft_rate"]], how="inner")
+    frame["net"] = frame["ortg"] - frame["drtg"]
+    for key, _label, _unit, higher_is_better in RATING_METRICS:
+        values = frame[key].dropna().to_dict()
+        if not values:
+            continue
+        by_value = ranks(values, higher_is_better=higher_is_better)
+        frame[f"{key}_rank"] = [by_value.get(team) for team in frame.index]
+    return frame

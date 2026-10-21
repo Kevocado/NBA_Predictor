@@ -77,6 +77,41 @@ export interface GameDetail extends Game {
   away_recent_form: string[];
   /** The availability gate's own sentence. */
   injury_summary?: string | null;
+  /** The props model's own error per stat: the band a projection has to miss
+   *  by before it counts as wrong. Absent when no props manifest was read. */
+  prop_bands?: Record<string, number> | null;
+  /** These two teams' ratings and league ranks, read from the box-score
+   *  window as of this game's own date. Absent when the league is not ranked
+   *  yet -- no ratings is not a table of zeros. */
+  ratings?: GameRatings | null;
+}
+
+/** One figure and its place in the league. `value` is null when nobody has the
+ *  figure; `rank` is null with it, because a rank for a missing number is a
+ *  position in nothing. */
+export interface RatingFigure {
+  value: number | null;
+  rank: number | null;
+}
+
+/** One metric: what it is called, what it means, and whether more is better. */
+export interface RatingMetric {
+  key: string;
+  label: string;
+  unit: string;
+  /** The metric in words, for the tooltip. Never jargon without one. */
+  help: string;
+  higher_is_better: boolean;
+}
+
+/** The ratings of the teams in one fixture, and the league they are ranked in. */
+export interface GameRatings {
+  as_of: string;
+  n_teams: number;
+  /** What the window was, in words. */
+  caption: string;
+  metrics: RatingMetric[];
+  teams: Record<string, Record<string, RatingFigure>>;
 }
 
 export interface SeasonBounds {
@@ -134,6 +169,11 @@ export interface OutPlayer {
   /** When it was known, in words. Never an epoch. */
   dated: string;
 }
+
+/** A player the gate flagged as doubtful. Same shape as an out player, and
+ *  served by its own route because the two answer different questions: an out
+ *  player leaves the ranking, a doubtful one stays in it. */
+export type DoubtfulPlayer = OutPlayer;
 
 export interface TrackRecordWeek {
   /** ISO date of the Monday the week starts on. */
@@ -368,6 +408,10 @@ export const api = {
    *  lists, attributed and dated. A sibling route, not a field on the props
    *  response -- see `OutPlayer`. */
   getGameOutPlayers: (gameId: string) => fetchJson<OutPlayer[]>(`/games/${gameId}/players/out`),
+  /** Players the gate flagged as doubtful: still ranked, and said out loud.
+   *  A sibling of the out feed, because an out player leaves the ranking and
+   *  a doubtful one does not. */
+  getGameDoubtfulPlayers: (gameId: string) => fetchJson<DoubtfulPlayer[]>(`/games/${gameId}/players/doubtful`),
   /** Spec §3's per-fixture signal payloads, rendered by the shared `SignalRows`.
    *  `[]` is a complete answer, never absent -- spec §2's "no data, no row". */
   getGameSignals: (gameId: string) => fetchJson<SignalsResponse>(`/api/signals/${encodeURIComponent(gameId)}`),

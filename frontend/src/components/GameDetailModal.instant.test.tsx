@@ -19,6 +19,7 @@ vi.mock("../api/client", () => ({
     // appears exactly once, and the ranking block would add figures to the page.
     // Its own rendering is covered in TopCalls.test.tsx.
     getGameOutPlayers: vi.fn().mockResolvedValue([]),
+    getGameDoubtfulPlayers: vi.fn().mockResolvedValue([]),
     getHubPlayers: vi.fn(),
     getTrackRecord: vi.fn(),
     explainGame: vi.fn(),
@@ -88,6 +89,7 @@ beforeEach(() => {
   vi.mocked(api.getHubPlayers).mockResolvedValue([]);
   vi.mocked(api.getGamePlayers).mockResolvedValue([]);
   vi.mocked(api.getGameOutPlayers).mockResolvedValue([]);
+  vi.mocked(api.getGameDoubtfulPlayers).mockResolvedValue([]);
   // Live data: 1373 total, 1174 correct, 1365 rebuilt, 8 pre-tip (3 correct)
   vi.mocked(api.getTrackRecord).mockResolvedValue([winnerPick(1373, 1174, 1365, 8, 3)]);
 });

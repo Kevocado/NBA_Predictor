@@ -18,6 +18,7 @@ rules cheap to honour, and they are the same rules the other sports follow:
 from __future__ import annotations
 
 import logging
+import math
 import os
 import threading
 import time
@@ -274,6 +275,83 @@ def _matchup_rows(home: str, away: str, as_of, pick_side: str | None) -> list[di
 
     duels = four_factors_duel(home, away, history, as_of)
     return to_context(duels, pick_side) + team_matchups(home, away, history, as_of)
+
+
+#: The metrics that are shares, not counts: a fraction in the data, a
+#: percentage on the page.
+_PERCENT_METRICS = frozenset(
+    {"efg_pct", "tov_rate", "orb_pct", "ft_rate", "fg3_pct", "fg3_pct_allowed"}
+)
+
+
+def _rating_value(row, key: str) -> dict:
+    """One team's figure and league rank for one metric.
+
+    `None` for a figure nobody has -- a 3P% nobody shot -- and never a zero,
+    which would read as a team that shot no threes at all. A rate that divides
+    by zero arrives as infinity, which is a missing figure too, not a number.
+    """
+    value = row.get(key)
+    rank = row.get(f"{key}_rank")
+    if value is None or not math.isfinite(float(value)):
+        return {"value": None, "rank": None}
+    number = float(value) * 100 if key in _PERCENT_METRICS else float(value)
+    return {
+        "value": round(number, 1),
+        "rank": None if rank is None or pd.isna(rank) else int(rank),
+    }
+
+
+def _window_caption(history: pd.DataFrame, as_of: str) -> str:
+    """What the window is, in words, for the reader under the table.
+
+    "Last 15 games each" is the claim the duels make. Early in a season a team
+    has not played 15 games yet, so the window reaches into last season -- and
+    a reader who does not know that would read a rating off last year's form
+    without being told.
+    """
+    from ..features.four_factors import season_of
+
+    caption = f"Last {BOX_WINDOW} games each"
+    dates = sorted({str(d) for d in history.get("game_date", []) if d})
+    if dates and season_of(dates[0]) != season_of(str(as_of)):
+        caption += ". Early season includes last season's games"
+    return caption + "."
+
+
+def ratings_payload(as_of: str, teams: list[str]) -> dict | None:
+    """These teams' ratings, their league ranks and the window they came from.
+
+    None when the league is not ranked yet -- no history, or a team that has
+    not played enough. A section with no numbers is not a section.
+    """
+    from ..signals.team_matchups import RATING_HELP, RATING_METRICS, league_ratings
+
+    history = _box_score_history(as_of)
+    if not len(history):
+        return None
+    ratings = league_ratings(history, as_of)
+    if not len(ratings) or any(team not in ratings.index for team in teams):
+        return None
+    return {
+        "as_of": str(as_of),
+        "n_teams": int(len(ratings)),
+        "caption": _window_caption(history, as_of),
+        "metrics": [
+            {
+                "key": key,
+                "label": label,
+                "unit": unit,
+                "help": RATING_HELP.get(key, ""),
+                "higher_is_better": higher_is_better,
+            }
+            for key, label, unit, higher_is_better in RATING_METRICS
+        ],
+        "teams": {
+            team: {key: _rating_value(ratings.loc[team], key) for key, *_ in RATING_METRICS}
+            for team in teams
+        },
+    }
 
 
 def _db_path() -> Path:

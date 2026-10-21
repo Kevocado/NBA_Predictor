@@ -65,19 +65,21 @@ function playerRow(row: BoxScoreRow): StickyRow {
 }
 
 function teamFooter(rows: BoxScoreRow[]): StickyRow[] {
-  const footer: StickyRow[] = [
-    { key: "total", testId: "box-score-totals", total: true, header: "Total", cells: STAT_KEYS.map((key) => stat(sumStat(rows, key, "predicted"))) },
-  ];
-  if (hasActuals(rows)) {
-    footer.push({
+  // **No projected total.** The sum of every rostered player's projection is
+  // not the team's projection: it adds up the players who never get minutes,
+  // and a team was shown a "Total 139.7" against an actual 121. The team's
+  // own projected total is on the page already, in the pick block. The ACTUAL
+  // total is a fact, so it is shown once the game is over.
+  if (!hasActuals(rows)) return [];
+  return [
+    {
       key: "actual",
       testId: "box-score-actual-totals",
       total: true,
       header: "Actual",
       cells: STAT_KEYS.map((key) => sumStat(rows, key, "actual")),
-    });
-  }
-  return footer;
+    },
+  ];
 }
 
 /**

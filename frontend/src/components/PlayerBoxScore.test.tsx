@@ -196,11 +196,24 @@ describe("PlayerBoxScore", () => {
   });
 
   it("totals the selected team from its own players only", () => {
-    renderBox();
-    // BOS 30+15+8 = 53. The other team's players never leak in.
-    expect(within(screen.getByTestId("box-score-totals")).getByText("53.0")).toBeTruthy();
+    // The ACTUAL total is the fact that is summed. The projected total is
+    // gone: summing every rostered player's projection is not the team's
+    // projection -- it adds up the players who never get minutes.
+    const played: PlayerProp[] = [
+      ...AWAY.flatMap((p) => propsFor(p.id, p.name, [...p.vals], [22, 4, 5, 3])),
+      ...HOME.flatMap((p) => propsFor(p.id, p.name, [...p.vals], [28, 9, 11, 5])),
+    ];
+    renderBox({ props: played });
+    // BOS 28+28+28 = 84 points. The other team's players never leak in.
+    expect(within(screen.getByTestId("box-score-actual-totals")).getByText("84")).toBeTruthy();
     pick("MIA");
-    expect(within(screen.getByTestId("box-score-totals")).getByText("35.0")).toBeTruthy();
+    expect(within(screen.getByTestId("box-score-actual-totals")).getByText("66")).toBeTruthy();
+  });
+
+  it("has no projected total: the sum of every rostered player is not the team's projection", () => {
+    renderBox();
+    expect(screen.queryByTestId("box-score-totals")).toBeNull();
+    expect(screen.queryByTestId("box-score-actual-totals")).toBeNull();
   });
 
   it("says so when a player cannot be matched to either team", () => {

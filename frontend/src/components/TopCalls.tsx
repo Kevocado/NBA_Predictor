@@ -96,9 +96,12 @@ export function buildTopCalls(props: PlayerProp[], out: OutPlayer[]): TopCallsDa
   return { categories, out: outRows };
 }
 
-export function TopCalls({ props, out }: { props: PlayerProp[]; out: OutPlayer[] }) {
+export function TopCalls({ props, out, showOut = true }: { props: PlayerProp[]; out: OutPlayer[]; showOut?: boolean }) {
   const { categories, out: outRows } = buildTopCalls(props, out);
-  return <PicksList title="Model's top calls" categories={categories} out={outRows} />;
+  // `showOut={false}` when the page names the out players itself: the kit
+  // shows an out player once, and a page that also lists them would show them
+  // twice.
+  return <PicksList title="Model's top calls" categories={categories} out={showOut ? outRows : []} />;
 }
 
 export default TopCalls;

@@ -79,6 +79,10 @@ class GameDetailOut(GameOut):
     # None when there is no props manifest -- no band is "not measured", never a
     # default number.
     prop_bands: dict[str, float] | None = None
+    # These two teams' ratings and their league ranks, read from the box-score
+    # window as of this game's own date. None when the league is not ranked
+    # yet -- no ratings is not a section with zeros.
+    ratings: dict | None = None
 
 
 class PlayerPropOut(BaseModel):

@@ -49,6 +49,7 @@ vi.mock("../api/client", () => ({
     getGameDetail: vi.fn(),
     getGamePlayers: vi.fn(),
     getGameOutPlayers: vi.fn(),
+    getGameDoubtfulPlayers: vi.fn().mockResolvedValue([]),
     getHubPlayers: vi.fn(),
     getHubTeams: vi.fn(),
     getHubRankings: vi.fn(),
@@ -102,6 +103,7 @@ function mockApi(over: Record<string, unknown> = {}) {
   vi.mocked(api.getGameDetail).mockResolvedValue({ ...detail } as never);
   vi.mocked(api.getGamePlayers).mockResolvedValue(PLAYERS as never);
   vi.mocked(api.getGameOutPlayers).mockResolvedValue([] as never);
+  vi.mocked(api.getGameDoubtfulPlayers).mockResolvedValue([] as never);
   vi.mocked(api.getHubPlayers).mockResolvedValue([] as never);
   vi.mocked(api.getHubTeams).mockResolvedValue([] as never);
   vi.mocked(api.getHubRankings).mockResolvedValue([] as never);
@@ -252,6 +254,7 @@ describe("NBA's absence row on the game modal", () => {
     vi.mocked(api.getGameSignals).mockResolvedValue({ sport: "nba", id: "401", signals: [ABSENCE] } as never);
     // The projections section is gated on the out feed having landed.
     vi.mocked(api.getGameOutPlayers).mockResolvedValue([] as never);
+  vi.mocked(api.getGameDoubtfulPlayers).mockResolvedValue([] as never);
     await openModal();
 
     const signal = await screen.findByTestId("signal-absence");

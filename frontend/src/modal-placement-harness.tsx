@@ -66,6 +66,7 @@ Object.assign(api, {
   getGameDetail: async () => DETAIL,
   getGamePlayers: async () => PLAYERS,
   getGameOutPlayers: async () => [],
+  getGameDoubtfulPlayers: async () => [],
   getHubPlayers: async () => [],
   getHubTeams: async () => [],
   getHubRankings: async () => [],

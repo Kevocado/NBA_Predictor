@@ -71,6 +71,29 @@ td:not(:first-child) {
   white-space: nowrap;
 }
 
+/* The ratings table: a figure and its place in the league, side by side.
+   The kit's rank box is sized to fill a whole cell of the matchup table;
+   here it sits beside a number, so it is smaller -- same colours, same
+   scale, one colour scale everywhere. */
+.pr-rating-value {
+  font-family: var(--font-pr-display);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+
+.pr-rating-rank {
+  min-width: 1.5rem;
+  padding: 0.125rem 0.3rem;
+  font-size: 0.75rem;
+}
+
+/* The site's own `td` rule puts every cell after the first on one line, which
+   would push a long metric label out of the table. A label wraps. */
+.pr-matchup-table td.pr-matchup-label {
+  white-space: normal;
+}
+
 @media (prefers-reduced-motion: reduce) {
   * {
     transition-duration: 0.01ms !important;

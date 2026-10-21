@@ -1,11 +1,13 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { api, type GameDetail, type OutPlayer, type PlayerProp, type PlayerHubRow, type MarketPrediction, type TrackRecord, type Prediction } from "../api/client";
+import { api, type GameDetail, type OutPlayer, type DoubtfulPlayer, type PlayerProp, type PlayerHubRow, type MarketPrediction, type TrackRecord, type Prediction } from "../api/client";
 import { ModelRecordLine } from "./ModelRecordLine";
 import TeamLogo from "./TeamLogo";
 import TopCalls from "./TopCalls";
+import TeamRatings from "./TeamRatings";
+import Availability from "./Availability";
 import { favourite } from "../lib/pick";
 import { teamName } from "../lib/teams";
-import { ErrorState, FixtureExplainer, SignalRows, Skeleton, kickoff, pct, signalIsDrawn, stat, statusWords, type Signal } from "../predictor-ui";
+import { ErrorState, FixtureExplainer, SignalRows, Skeleton, StatusBadge, kickoff, pct, signalIsDrawn, stat, statusWords, type Signal } from "../predictor-ui";
 import { panelFacts } from "../predictor-ui/lib/panelFacts";
 import PlayerBoxScore from "./PlayerBoxScore";
 
@@ -51,6 +53,21 @@ export function computePostMatchVerdict(detail: GameDetail): PostMatchVerdict | 
   };
 }
 
+/**
+ * The game's own state, in one chip.
+ *
+ * A finished game says so in the score block underneath, so it gets no chip
+ * here. A game with a score is Live; anything else is still to come.
+ *
+ * The rule reads the data the page already holds and never the browser's
+ * clock: comparing `tip_off` to `Date.now()` would put the server's status
+ * rule on the wrong side of a network boundary, and the two could disagree.
+ */
+function GameStatusChip({ completed, inPlay }: { completed: boolean; inPlay: boolean }) {
+  if (completed) return null;
+  return <StatusBadge status={inPlay ? "live" : "next"} moment="tip-off" />;
+}
+
 function FormBadge({ result }: { result: string }) {
   return (
     <span
@@ -77,6 +94,9 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
   // so the two cases stay apart. Showing the top three of a list we cannot prove
   // is complete would be the dishonest reading, not the cautious one.
   const [outPlayers, setOutPlayers] = useState<OutPlayer[] | null>(null);
+  // The players the gate flagged but did not remove: they stay in the ranking,
+  // and the page says they are there.
+  const [doubtfulPlayers, setDoubtfulPlayers] = useState<DoubtfulPlayer[] | null>(null);
   // Spec §4's signal rows. `[]` and never null once settled -- and `[]` is also
   // what every failure leaves behind, see the effect below.
   const [signals, setSignals] = useState<Signal[]>([]);
@@ -179,6 +199,23 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
     };
   }, [gameId, reloadKey]);
 
+  // The doubtful players: still ranked, but said out loud. The same gate, the
+  // same failure rule -- an unreadable feed is not an empty report.
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getGameDoubtfulPlayers(gameId)
+      .then((result) => {
+        if (!cancelled) setDoubtfulPlayers(result);
+      })
+      .catch(() => {
+        if (!cancelled) setDoubtfulPlayers(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [gameId, reloadKey]);
+
   useEffect(() => {
     api.getHubPlayers()
       .then(setHubPlayers)
@@ -210,6 +247,21 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
   }, [onClose]);
 
   const verdict = detail ? computePostMatchVerdict(detail) : null;
+  // The two teams in this game. ESPN's report covers the whole league, so a
+  // player who is playing for neither of them is not this game's news. The
+  // API already filters its feeds; this is the page's own rule, enforced here
+  // so a stale or partly-applied feed cannot put a third team's player on a
+  // game page.
+  const outForGame = useMemo(() => {
+    if (!detail) return [];
+    const teams = [detail.home_team, detail.away_team];
+    return (outPlayers ?? []).filter((p) => teams.includes(p.team));
+  }, [outPlayers, detail]);
+  const doubtfulForGame = useMemo(() => {
+    if (!detail) return [];
+    const teams = [detail.home_team, detail.away_team];
+    return (doubtfulPlayers ?? []).filter((p) => teams.includes(p.team));
+  }, [doubtfulPlayers, detail]);
   // The flow's facts: what this modal already holds, no request. The away
   // probability is the site's own convention (`favourite` derives the pair the
   // same way for the pick it prints), and the game carries no market line --
@@ -363,22 +415,30 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
         className="max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded border border-[var(--color-line)] bg-[var(--color-court-900)] p-6"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="mb-4 flex items-center justify-between">
-          <div>
-            <h2 id={titleId} className="flex items-center gap-1.5 text-xl font-bold uppercase tracking-wide">
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h2 id={titleId} className="flex flex-wrap items-center gap-2 text-xl font-bold uppercase tracking-wide">
               {detail ? (
                 <>
-                  <TeamLogo team={detail.away_team} size={22} ariaHidden />
+                  <TeamLogo team={detail.away_team} size={40} ariaHidden />
                   <span>{teamName(detail.away_team)}</span>
                   <span className="font-normal normal-case"> at </span>
-                  <TeamLogo team={detail.home_team} size={22} ariaHidden />
+                  <TeamLogo team={detail.home_team} size={40} ariaHidden />
                   <span>{teamName(detail.home_team)}</span>
                 </>
               ) : (
                 "Game detail"
               )}
             </h2>
-            {detail && <p className="text-xs text-pr-text-dim">{kickoff(detail.tip_off ?? detail.game_date)}</p>}
+            {detail && (
+              <p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-pr-text-dim">
+                <span>{kickoff(detail.tip_off ?? detail.game_date)}</span>
+                <GameStatusChip
+                  completed={detail.completed}
+                  inPlay={detail.home_pts !== null && detail.away_pts !== null}
+                />
+              </p>
+            )}
           </div>
           <button ref={closeRef} aria-label="Close" onClick={onClose} className="text-xl leading-none text-[var(--color-net-dim)]">
             ×
@@ -483,6 +543,19 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
           </div>
         )}
 
+        {/* The ratings: what each side is, and where that puts it in the
+            league. Right under the pick, because it is what the pick is made
+            of -- the same figures the summary reads. */}
+        {detail?.ratings && (
+          <div className="mb-5 border-b border-[var(--color-line)] pb-5">
+            <TeamRatings
+              ratings={detail.ratings}
+              awayTeam={detail.away_team}
+              homeTeam={detail.home_team}
+            />
+          </div>
+        )}
+
         {detail && (detail.home_recent_form.length > 0 || detail.away_recent_form.length > 0) && (
           <div className="mb-5 flex items-center justify-between border-b border-[var(--color-line)] pb-5 text-sm">
             <div>
@@ -582,9 +655,9 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
                 <li key={meeting.game_id} className="flex justify-between border-b border-[var(--color-line)] py-1">
                   <span>{kickoff(meeting.game_date)}</span>
                   <span className="inline-flex items-center gap-1">
-                    <TeamLogo team={meeting.away_team} size={16} />
+                    <TeamLogo team={meeting.away_team} size={20} />
                     {meeting.away_team} {meeting.away_pts} – {meeting.home_pts}{" "}
-                    <TeamLogo team={meeting.home_team} size={16} />
+                    <TeamLogo team={meeting.home_team} size={20} />
                     {meeting.home_team}
                   </span>
                 </li>
@@ -592,6 +665,14 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
             </ul>
           </div>
         )}
+
+        {/* Who is not playing, for these two teams. The names live here and not
+            in the ranking block below, so a player is named once. */}
+        {detail && (outForGame.length > 0 || doubtfulForGame.length > 0) ? (
+          <div className="mb-5 border-b border-[var(--color-line)] pb-5">
+            <Availability out={outForGame} doubtful={doubtfulForGame} />
+          </div>
+        ) : null}
 
         {/* The signal rows (spec §4), ABOVE the projections -- the same position
             Sports' `GameDetailModal` and PL's `FixtureModal` put them, so a fixture
@@ -638,7 +719,9 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
             <h3 id={`${titleId}-calls`} className="mb-2 text-sm text-[var(--color-net-faint)]">
               Player projections
             </h3>
-            <TopCalls props={players} out={outPlayers} />
+            {/* The out players are named once, in the Availability section
+                above, so the block below does not name them a second time. */}
+            <TopCalls props={players} out={outForGame} showOut={false} />
           </section>
         )}
         {players && players.length > 0 && !outPlayers && (

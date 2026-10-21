@@ -251,7 +251,26 @@ def get_game_detail(
         away_recent_form=get_recent_form(schedule, game["away_team"], before_date=game["game_date"]),
         injury_summary=injury_summary,
         prop_bands=_prop_bands(models_dir),
+        ratings=_game_ratings(game),
     )
+
+
+def _game_ratings(game: dict) -> dict | None:
+    """These two teams' ratings and league ranks, or None when there are none.
+
+    Read from the same warmed box history the duels read, as of the game's own
+    date: a rating is the form going INTO the game, so a game that has been
+    played is not allowed to borrow the form that came after it.
+    """
+    from ..api import facts as facts_mod
+
+    try:
+        return facts_mod.ratings_payload(
+            str(game["game_date"]), [game["home_team"], game["away_team"]]
+        )
+    except Exception:  # noqa: BLE001 - a rating is an enhancement, never the page
+        logger.exception("ratings unavailable for %s", game.get("game_id"))
+        return None
 
 
 # The MAE is a property of the tracking database and the schedule, not of the request:

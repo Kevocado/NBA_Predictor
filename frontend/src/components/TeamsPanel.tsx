@@ -9,7 +9,7 @@ import {
   type TeamHubRow,
   type TeamOverview,
 } from "../api/client";
-import { StatTable, type Column } from "../predictor-ui";
+import { StatTable, type Column, type Separator } from "../predictor-ui";
 import { rankTier } from "../predictor-ui/lib/rankTier";
 import { RatingList, RatingValue } from "./ratings";
 import { standingsStatus } from "../lib/seasonCaption";
@@ -100,7 +100,6 @@ export default function TeamsPanel() {
   const rows = useMemo(() => (data ? buildRows(data) : []), [data]);
   // Until every team has played there is no standings order to show (a pile of unseeded 0s): lead with the power rating.
   const everyTeamSeeded = rows.length > 0 && rows.every((row) => row.seed > 0);
-  const sortParam = params.get("sort") === "power" || !everyTeamSeeded ? "power" : "seed";
 
   if (failed) {
     return (
@@ -121,6 +120,11 @@ export default function TeamsPanel() {
   }
 
   const shown = rows.filter((row) => conference === "League" || teamConference(data.standings, row.team) === conference);
+  // A conference's seed order is only real once every team in it has a seed, and
+  // only then do the cut lines mean anything: they mark where the playoffs stop.
+  const conferenceSeeded =
+    conference !== "League" && shown.length > 0 && shown.every((row) => row.seed > 0);
+  const sortParam = params.get("sort") === "power" || (!everyTeamSeeded && !conferenceSeeded) ? "power" : "seed";
   const mostGamesPlayed = Math.max(...data.standings.map((r) => r.wins + r.losses));
   const state = data.standings[0]?.season_state;
   const note =
@@ -157,13 +161,35 @@ export default function TeamsPanel() {
       </div>
 
       <TeamsTable
+        key={conference}
         rows={shown}
         overview={data.overview}
         players={data.players}
         initialSortKey={sortParam}
+        separators={playInLines(shown, conferenceSeeded)}
       />
     </div>
   );
+}
+
+/**
+ * The cut lines: where the playoffs stop.
+ *
+ * Two lines, after the sixth and the tenth seed, because that is where the
+ * races are: the top six go to the playoffs, seven to ten play in, the rest
+ * are out. They are drawn only in a conference view, and only once every team
+ * in it has a seed -- the lines are about the seed order, and without one
+ * there is nothing for them to mark.
+ */
+function playInLines(rows: Row[], conferenceSeeded: boolean): Separator[] {
+  if (!conferenceSeeded) return [];
+  const seeded = [...rows].filter((row) => row.seed > 0).sort((a, b) => a.seed - b.seed);
+  const lines: Separator[] = [];
+  const playIn = seeded[5];
+  const out = seeded[9];
+  if (playIn) lines.push({ after: playIn.team, label: "Play-in (7-10)" });
+  if (out) lines.push({ after: out.team, label: "Out (11+)" });
+  return lines;
 }
 
 function teamConference(standings: StandingsRow[], team: string): string {
@@ -311,11 +337,13 @@ function TeamsTable({
   overview,
   players,
   initialSortKey,
+  separators,
 }: {
   rows: Row[];
   overview: TeamOverview;
   players: PlayerHubRow[];
   initialSortKey: string;
+  separators: Separator[];
 }) {
   const n = overview.n_teams || 30;
 
@@ -418,6 +446,7 @@ function TeamsTable({
           : { key: "seed", dir: "asc" }
       }
       caption="NBA standings: seed, record, ratings and form"
+      separators={separators}
       expand={(row) => {
         const nextGame = overview.next_game?.[row.team] ?? null;
         return (

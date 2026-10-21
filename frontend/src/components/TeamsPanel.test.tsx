@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import TeamsPanel from "./TeamsPanel";
@@ -234,6 +234,47 @@ describe("TeamsPanel", () => {
     // The same eleven metrics the game detail shows.
     expect(within(ratings).getByText("eFG%")).toBeInTheDocument();
     expect(within(ratings).getByText("3P% allowed")).toBeInTheDocument();
+  });
+
+  it("draws the play-in lines in a conference view, and not in the league view", async () => {
+    // A settled conference: fifteen teams, seeded one to fifteen.
+    const east = Array.from({ length: 15 }, (_, i) => ({
+      conference: "East", seed: i + 1, abbreviation: `E${i}`, wins: 14 - i, losses: i,
+      win_pct: 0.5, games_back: i * 0.5, playoff_status: "clinched", season_state: "regular",
+    }));
+    vi.mocked(api.getHubStandings).mockResolvedValue(east as never);
+    vi.mocked(api.getHubTeams).mockResolvedValue([] as never);
+    vi.mocked(api.getHubRankings).mockResolvedValue([] as never);
+    vi.mocked(api.getHubPlayers).mockResolvedValue([] as never);
+    vi.mocked(api.getHubTeamOverview).mockResolvedValue({ ...overview, ratings: {} } as never);
+
+    renderPanel();
+    await screen.findByTestId("teams-panel");
+
+    await userEvent.click(screen.getByRole("button", { name: "East" }));
+    expect(await screen.findByText("Play-in (7-10)")).toBeInTheDocument();
+    expect(screen.getByText("Out (11+)")).toBeInTheDocument();
+
+    // The league view has no lines: the seeds are per conference, so a cut
+    // through them would be saying nothing.
+    await userEvent.click(screen.getByRole("button", { name: "League" }));
+    await waitFor(() => expect(screen.queryByText("Play-in (7-10)")).toBeNull());
+  });
+
+  it("draws no lines when the conference has no seed order yet", async () => {
+    vi.mocked(api.getHubStandings).mockResolvedValue([
+      { conference: "East", seed: 1, abbreviation: "BOS", wins: 1, losses: 0, win_pct: 1, games_back: 0, playoff_status: "clinched", season_state: "regular" },
+      { conference: "East", seed: 0, abbreviation: "MIA", wins: 0, losses: 0, win_pct: 0, games_back: 0, playoff_status: null, season_state: "regular" },
+    ] as never);
+    vi.mocked(api.getHubTeams).mockResolvedValue([] as never);
+    vi.mocked(api.getHubRankings).mockResolvedValue([] as never);
+    vi.mocked(api.getHubPlayers).mockResolvedValue([] as never);
+
+    renderPanel();
+    await screen.findByTestId("teams-panel");
+
+    await userEvent.click(screen.getByRole("button", { name: "East" }));
+    await waitFor(() => expect(screen.queryByText("Play-in (7-10)")).toBeNull());
   });
 
   it("dims the dots from last season, and leaves this season's alone", async () => {

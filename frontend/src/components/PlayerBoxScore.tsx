@@ -19,17 +19,37 @@ interface PlayerBoxScoreProps {
   hubPlayers: PlayerHubRow[];
   homeTeam: string;
   awayTeam: string;
+  /** The props model's own error per stat. A delta outside it is coloured; a
+   *  delta inside it is the model being as wrong as it said it would be. */
+  bands?: Record<string, number> | null;
 }
 
 const COLUMNS = STAT_KEYS.map((key) => ({ key, label: STAT_LABELS[key] }));
 
-function statCell(row: BoxScoreRow, key: StatKey): ReactNode {
+function statCell(
+  row: BoxScoreRow,
+  key: StatKey,
+  bands?: Record<string, number> | null,
+): ReactNode {
   const predicted = row.predicted[key];
   const actual = row.actual[key];
   // A prop rebuilt after tip-off is shown, never judged -- so no delta, which
   // would be a score against a projection made with the result already known.
   const showDelta = actual !== undefined && predicted !== undefined && !row.rebuilt;
   if (actual === undefined) return predicted === undefined ? null : stat(predicted);
+  const gap = actual - predicted!;
+  const band = bands?.[key];
+  // The colour says whether the model was wrong by more than it says it can
+  // be. Inside the band the delta is plain: the model was as wrong as it
+  // promised, which is not a colour.
+  const tone =
+    band === undefined
+      ? ""
+      : gap > band
+        ? "text-pr-win"
+        : gap < -band
+          ? "text-pr-loss"
+          : "";
   return (
     <>
       {predicted === undefined ? "—" : stat(predicted)}
@@ -37,8 +57,8 @@ function statCell(row: BoxScoreRow, key: StatKey): ReactNode {
         {actual}
         {showDelta && (
           <>
-            {" "}({actual - predicted > 0 ? "+" : ""}
-            {(actual - predicted).toFixed(1)})
+            {" "}(<span className={tone}>{actual - predicted > 0 ? "+" : ""}
+            {(actual - predicted).toFixed(1)}</span>)
           </>
         )}
       </span>
@@ -46,7 +66,7 @@ function statCell(row: BoxScoreRow, key: StatKey): ReactNode {
   );
 }
 
-function playerRow(row: BoxScoreRow): StickyRow {
+function playerRow(row: BoxScoreRow, bands?: Record<string, number> | null): StickyRow {
   return {
     key: row.player_id,
     testId: "box-score-row",
@@ -60,7 +80,7 @@ function playerRow(row: BoxScoreRow): StickyRow {
         )}
       </>
     ),
-    cells: STAT_KEYS.map((key) => statCell(row, key)),
+    cells: STAT_KEYS.map((key) => statCell(row, key, bands)),
   };
 }
 
@@ -92,7 +112,7 @@ function teamFooter(rows: BoxScoreRow[]): StickyRow[] {
  * splitByTeam as before; a player who cannot be placed is named in a note, not
  * guessed onto a side.
  */
-export default function PlayerBoxScore({ playerProps, hubPlayers, homeTeam, awayTeam }: PlayerBoxScoreProps) {
+export default function PlayerBoxScore({ playerProps, hubPlayers, homeTeam, awayTeam, bands }: PlayerBoxScoreProps) {
   const { away, home, unattributed } = useMemo(
     () => splitByTeam(attachHubRows(pivotProps(playerProps), hubPlayers), homeTeam, awayTeam),
     [playerProps, hubPlayers, homeTeam, awayTeam],
@@ -132,7 +152,7 @@ export default function PlayerBoxScore({ playerProps, hubPlayers, homeTeam, away
               testId="box-score-scroll"
               caption={`${side.name} projected box score`}
               columns={COLUMNS}
-              sections={[{ rows: side.rows.map(playerRow) }]}
+              sections={[{ rows: side.rows.map((row) => playerRow(row, bands)) }]}
               footer={side.rows.length > 0 ? teamFooter(side.rows) : []}
               empty={`No box score for ${side.name} yet`}
             />

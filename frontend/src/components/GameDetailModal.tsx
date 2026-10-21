@@ -5,6 +5,7 @@ import TeamLogo from "./TeamLogo";
 import TopCalls from "./TopCalls";
 import TeamRatings from "./TeamRatings";
 import Availability from "./Availability";
+import PostGameReview from "./PostGameReview";
 import { favourite } from "../lib/pick";
 import { teamName } from "../lib/teams";
 import { ErrorState, FixtureExplainer, SignalRows, Skeleton, StatusBadge, kickoff, pct, signalIsDrawn, stat, statusWords, type Signal } from "../predictor-ui";
@@ -714,6 +715,17 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
             roster is the thing this must not be, and one list per category with
             at most three rows each cannot be read that way. Gated on the out
             feed having loaded -- see `outPlayers`. */}
+        {/* The post-game review, above the player block: what the model got
+            right about the players, judged against its own error. */}
+        {detail?.completed && players && players.length > 0 && (
+          <section aria-labelledby={`${titleId}-review`} className="mb-5 border-b border-[var(--color-line)] pb-5">
+            <h3 id={`${titleId}-review`} className="sr-only">
+              Player review
+            </h3>
+            <PostGameReview props={players} bands={detail.prop_bands} />
+          </section>
+        )}
+
         {players && players.length > 0 && outPlayers && (
           <section aria-labelledby={`${titleId}-calls`} className="mt-4">
             <h3 id={`${titleId}-calls`} className="mb-2 text-sm text-[var(--color-net-faint)]">
@@ -749,6 +761,7 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
               hubPlayers={hubPlayers}
               homeTeam={detail?.home_team ?? ""}
               awayTeam={detail?.away_team ?? ""}
+              bands={detail?.prop_bands ?? null}
             />
           </section>
         )}

@@ -147,13 +147,14 @@ describe("boxScore totals", () => {
 });
 
 describe("PlayerBoxScore", () => {
-  function renderBox(overrides: { props?: PlayerProp[]; hub?: PlayerHubRow[] } = {}) {
+  function renderBox(overrides: { props?: PlayerProp[]; hub?: PlayerHubRow[]; bands?: Record<string, number> } = {}) {
     return render(
       <PlayerBoxScore
         playerProps={overrides.props ?? allProps}
         hubPlayers={overrides.hub ?? allHub}
         homeTeam="BOS"
         awayTeam="MIA"
+        bands={overrides.bands}
       />,
     );
   }
@@ -230,8 +231,38 @@ describe("PlayerBoxScore", () => {
     pick("MIA");
     const row = screen.getAllByTestId("box-score-row")[0];
     expect(within(row).getByText("20.0")).toBeTruthy();
-    expect(within(row).getByText("22 (+2.0)")).toBeTruthy();
+    // The delta is its own element now, because it carries the colour: green
+    // when the player beat the projection by more than the model's own error.
+    expect(within(row).getByText("+2.0")).toBeTruthy();
     expect(screen.getByTestId("box-score-actual-totals")).toBeTruthy();
+  });
+
+  it("leaves the delta plain when the miss is inside the model's own error", () => {
+    const played: PlayerProp[] = [
+      ...AWAY.flatMap((p) => propsFor(p.id, p.name, [...p.vals], [22, 4, 5, 3])),
+      ...HOME.flatMap((p) => propsFor(p.id, p.name, [...p.vals], [28, 9, 11, 5])),
+    ];
+    // A points band of 4.6: a miss of 2 points is inside it.
+    renderBox({ props: played, bands: { points: 4.6 } });
+    pick("MIA");
+    const row = screen.getAllByTestId("box-score-row")[0];
+    const inside = within(row).getByText("+2.0");
+    expect(inside.className).not.toMatch(/text-pr-(win|loss)/);
+  });
+
+  it("colours the delta when the player beat the projection by more than the error", () => {
+    const played: PlayerProp[] = [
+      ...AWAY.flatMap((p) => propsFor(p.id, p.name, [...p.vals], [22, 4, 5, 3])),
+      ...HOME.flatMap((p) => propsFor(p.id, p.name, [...p.vals], [28, 9, 11, 5])),
+    ];
+    const bigMiss: PlayerProp[] = played.map((p) =>
+      p.stat === "points" ? { ...p, actual_value: (p.actual_value ?? 0) + 9 } : p,
+    );
+    renderBox({ props: bigMiss, bands: { points: 4.6 } });
+    pick("MIA");
+    const row = screen.getAllByTestId("box-score-row")[0];
+    const outside = within(row).getByText(/\+11\.0/);
+    expect(outside.className).toMatch(/text-pr-win/);
   });
 
   it("scores a rebuilt projection never: no delta, even when it is wrong", () => {

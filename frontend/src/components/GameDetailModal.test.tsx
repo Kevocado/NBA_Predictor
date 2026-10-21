@@ -119,6 +119,46 @@ describe("GameDetailModal", () => {
     expect(screen.getByText(/loading/i)).toBeInTheDocument();
   });
 
+  it("shows the player review for a finished game, judged against the model's own error", async () => {
+    vi.mocked(api.getGameDetail).mockResolvedValue({
+      ...completedDetail,
+      prop_bands: { points: 4.6 },
+    } as never);
+    vi.mocked(api.getGamePlayers).mockResolvedValue([
+      { player_id: "203999", player_name: "Nikola Jokic", stat: "points", predicted_value: 27.5, actual_value: 24.0 },
+    ]);
+    vi.mocked(api.getHubPlayers).mockResolvedValue(hub);
+
+    render(<GameDetailModal gameId="g2" onClose={() => {}} />);
+
+    await screen.findByTestId("post-game-review");
+    // 3.5 points is inside the model's own 4.6, so the line is on the number.
+    expect(screen.getByTestId("review-on-the-number").textContent).toContain("1 of 1");
+  });
+
+  it("shows no player review without bands: there is no measured error to judge against", async () => {
+    vi.mocked(api.getGameDetail).mockResolvedValue({ ...completedDetail, prop_bands: null } as never);
+    vi.mocked(api.getGamePlayers).mockResolvedValue([
+      { player_id: "203999", player_name: "Nikola Jokic", stat: "points", predicted_value: 27.5, actual_value: 24.0 },
+    ]);
+    vi.mocked(api.getHubPlayers).mockResolvedValue(hub);
+
+    render(<GameDetailModal gameId="g2" onClose={() => {}} />);
+
+    await screen.findByRole("rowheader", { name: "Nikola Jokic" });
+    expect(screen.queryByTestId("post-game-review")).not.toBeInTheDocument();
+  });
+
+  it("shows no player review before the game is played", async () => {
+    vi.mocked(api.getGameDetail).mockResolvedValue({ ...detail, prop_bands: { points: 4.6 } } as never);
+    vi.mocked(api.getGamePlayers).mockResolvedValue(players);
+
+    render(<GameDetailModal gameId="g1" onClose={() => {}} />);
+
+    await screen.findByRole("heading", { name: "Heat at Celtics" });
+    expect(screen.queryByTestId("post-game-review")).not.toBeInTheDocument();
+  });
+
   it("renders the team's ratings against the league: one row per metric", async () => {
     vi.mocked(api.getGameDetail).mockResolvedValue({ ...detail, ratings } as never);
     vi.mocked(api.getGamePlayers).mockResolvedValue(players);
@@ -330,7 +370,9 @@ it("shows predicted vs actual and the error for a settled player prop", async ()
   const head = await screen.findByRole("rowheader", { name: "Nikola Jokic" });
   const playerRow = within(head.closest("tr")!);
   expect(playerRow.getByText("27.5")).toBeInTheDocument();
-  expect(playerRow.getByText(/24\.0 \(-3\.5\)|24 \(-3\.5\)/)).toBeInTheDocument();
+  // The delta is its own element now, because it carries the colour.
+  expect(playerRow.getByText("-3.5")).toBeInTheDocument();
+  expect(head.closest("tr")!.textContent).toContain("24");
   // The team total that IS a fact appears: a per-player list makes the reader
   // add it up by hand. The projected total does not: summing every rostered
   // player's projection is not the team's projection.

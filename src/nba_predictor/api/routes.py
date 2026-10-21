@@ -642,6 +642,31 @@ def hub_standings() -> list[dict]:
     return load_hub_cache(config.DATA_DIR / "cache" / "hub" / "standings.json")
 
 
+@router.get("/hub/team-overview")
+def hub_team_overview(
+    schedule: list[dict] = Depends(get_schedule),
+    db_path: Path = Depends(get_db_path),
+    today: str = Depends(get_today),
+) -> dict:
+    """Everything the Teams page needs, in one payload.
+
+    The league's ratings (the same window the game detail reads), every team's
+    recent form, its last five games and its next game with the model's pick.
+    One endpoint so the page does not join four feeds and hope they agree.
+    """
+    from ..api import facts as facts_mod
+    from ..api.team_overview import overview
+    from ..data.team_reference import TEAMS
+
+    teams = [t.abbreviation for t in TEAMS]
+    try:
+        ratings = facts_mod.ratings_payload(today, teams)
+    except Exception:  # noqa: BLE001 - the ratings are an enhancement, not the page
+        logger.exception("ratings unavailable for the teams page")
+        ratings = None
+    return overview(schedule, db_path, ratings, teams, today)
+
+
 @router.get("/hub/track-record", response_model=list[TrackRecordOut])
 def hub_track_record(
     db_path: Path = Depends(get_db_path), schedule: list[dict] = Depends(get_schedule)

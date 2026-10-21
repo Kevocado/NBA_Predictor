@@ -104,6 +104,42 @@ export interface RatingMetric {
   higher_is_better: boolean;
 }
 
+/** One game a team has played, for the row's detail. */
+export interface TeamGame {
+  game_id: string;
+  game_date: string;
+  opponent: string;
+  home: boolean;
+  /** "110–100", home score first. */
+  score: string;
+  result: "W" | "L" | "";
+}
+
+/** The team's next game, with what the model picked for it. */
+export interface TeamNextGame {
+  game_id: string;
+  game_date: string;
+  tip_off?: string | null;
+  opponent: string;
+  home: boolean;
+  /** null when the model has not picked this game yet. */
+  pick: string | null;
+  pick_probability: number | null;
+}
+
+/** Everything the Teams page needs, in one payload. */
+export interface TeamOverview {
+  as_of: string;
+  n_teams: number;
+  caption: string;
+  metrics: RatingMetric[];
+  ratings: Record<string, Record<string, RatingFigure>>;
+  /** The last ten results, oldest first. */
+  form: Record<string, string[]>;
+  last_games: Record<string, TeamGame[]>;
+  next_game: Record<string, TeamNextGame | null>;
+}
+
 /** The ratings of the teams in one fixture, and the league they are ranked in. */
 export interface GameRatings {
   as_of: string;
@@ -426,6 +462,9 @@ export const api = {
   getHubPlayers: () => fetchJson<PlayerHubRow[]>("/hub/players"),
   getHubRankings: () => fetchJson<PowerRankingRow[]>("/hub/rankings"),
   getHubStandings: () => fetchJson<StandingsRow[]>("/hub/standings"),
+  /** The Teams page's one payload: the league's ratings, every team's form,
+   *  its last five games and its next game with the model's pick. */
+  getHubTeamOverview: () => fetchJson<TeamOverview>("/hub/team-overview"),
   getTrackRecord: () => fetchJson<TrackRecord[]>("/hub/track-record"),
   getVsMarket: () => fetchJson<VsMarket>("/hub/vs-market"),
   getManifest: () => fetchJson<Manifest>("/manifest"),

@@ -1,10 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import DataHubPage from "./DataHubPage";
 
 vi.mock("../api/client", () => ({
   api: {
     getHubTeams: vi.fn().mockResolvedValue([]),
+    getHubTeamOverview: vi.fn().mockResolvedValue({
+      as_of: "2026-11-01", n_teams: 30, caption: "", metrics: [], ratings: {}, form: {}, last_games: {}, next_game: {},
+    }),
     getHubPlayers: vi.fn().mockResolvedValue([]),
     getHubRankings: vi.fn().mockResolvedValue([]),
     getHubStandings: vi.fn().mockResolvedValue([]),
@@ -34,16 +38,16 @@ vi.mock("../api/client", () => ({
 
 describe("DataHubPage", () => {
   it("shows the Team Hub panel by default", async () => {
-    render(<DataHubPage />);
+    render(<MemoryRouter><DataHubPage /></MemoryRouter>);
     await waitFor(() => expect(screen.getByText(/no team data/i)).toBeInTheDocument());
   });
 
   it("shows the panel its route names, with no second tab row of its own", async () => {
-    const { rerender } = render(<DataHubPage initialTab="player-hub" />);
+    const { rerender } = render(<MemoryRouter><DataHubPage initialTab="player-hub" /></MemoryRouter>);
     await waitFor(() => expect(screen.getByText(/no player data/i)).toBeInTheDocument());
     expect(screen.queryByRole("navigation")).toBeNull();
     // Same instance, new route: the panel follows the prop instead of stale local state.
-    rerender(<DataHubPage initialTab="track-record" />);
+    rerender(<MemoryRouter><DataHubPage initialTab="track-record" /></MemoryRouter>);
     await waitFor(() => expect(screen.getByText(/no tracked predictions/i)).toBeInTheDocument());
   });
 });

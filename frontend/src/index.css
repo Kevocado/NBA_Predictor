@@ -94,6 +94,36 @@ td:not(:first-child) {
   white-space: normal;
 }
 
+/* The Teams table on a phone: the team and its seed stay put while the figures
+   slide under them. A pinned cell has to be opaque, or the numbers scrolled
+   past it show through it. */
+[data-testid="teams-table"] table th:nth-child(1),
+[data-testid="teams-table"] table td:nth-child(1) {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  width: 9rem;
+  min-width: 9rem;
+  background: var(--color-pr-stage);
+}
+
+[data-testid="teams-table"] table th:nth-child(2),
+[data-testid="teams-table"] table td:nth-child(2) {
+  position: sticky;
+  left: 9rem;
+  z-index: 1;
+  width: 3.5rem;
+  min-width: 3.5rem;
+  border-right: 1px solid var(--color-pr-rule);
+  background: var(--color-pr-stage);
+}
+
+[data-testid="teams-table"] table thead th:nth-child(1),
+[data-testid="teams-table"] table thead th:nth-child(2) {
+  z-index: 2;
+  background: var(--color-pr-panel);
+}
+
 @media (prefers-reduced-motion: reduce) {
   * {
     transition-duration: 0.01ms !important;

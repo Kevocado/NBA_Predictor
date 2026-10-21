@@ -1,14 +1,10 @@
-import TeamHubPanel from "../components/TeamHubPanel";
+import TeamsPanel from "../components/TeamsPanel";
 import PlayerHubPanel from "../components/PlayerHubPanel";
-import PowerRankingsPanel from "../components/PowerRankingsPanel";
-import StandingsPanel from "../components/StandingsPanel";
 import TrackRecordPanel from "../components/TrackRecordPanel";
 
 const PANELS = {
-  "team-hub": TeamHubPanel,
+  "team-hub": TeamsPanel,
   "player-hub": PlayerHubPanel,
-  "power-rankings": PowerRankingsPanel,
-  standings: StandingsPanel,
   "track-record": TrackRecordPanel,
 } as const;
 

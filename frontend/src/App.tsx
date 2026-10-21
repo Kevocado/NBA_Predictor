@@ -1,4 +1,4 @@
-import { Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { AppFrame } from "./predictor-ui";
 import { SITES } from "./lib/sites";
 import GamesPage from "./pages/GamesPage";
@@ -10,12 +10,14 @@ import CalibrationPage from "./pages/CalibrationPage";
 // The aggregate "Data Hub" tab is dropped; its panels each have their own route.
 // Teams lives at /hub (the old Data Hub URL): /teams is an API route, so a refresh or shared
 // link to it would return JSON instead of this app.
+//
+// ONE Teams tab. The standings and the power rankings were two more tabs saying two more
+// things about the same thirty teams, so both now land on the Teams page -- the power
+// rankings' old link keeps its intent with ?sort=power.
 const TABS = [
   { id: "/", label: "Games" },
   { id: "/hub", label: "Teams" },
   { id: "/players", label: "Players" },
-  { id: "/power-rankings", label: "Power rankings" },
-  { id: "/standings", label: "Standings" },
   { id: "/track-record", label: "Track record" },
   { id: "/calibration-report", label: "Calibration" },
   { id: "/model", label: "Model" },
@@ -40,9 +42,11 @@ export default function App() {
         <Route path="/" element={<GamesPage />} />
         <Route path="/hub" element={<DataHubPage initialTab="team-hub" />} />
         <Route path="/players" element={<DataHubPage initialTab="player-hub" />} />
-        <Route path="/power-rankings" element={<DataHubPage initialTab="power-rankings" />} />
-        <Route path="/standings" element={<DataHubPage initialTab="standings" />} />
         <Route path="/track-record" element={<DataHubPage initialTab="track-record" />} />
+        {/* The two old team tabs land on the Teams page. The power rankings' old
+            link keeps its intent with ?sort=power. */}
+        <Route path="/standings" element={<Navigate to="/hub" replace />} />
+        <Route path="/power-rankings" element={<Navigate to="/hub?sort=power" replace />} />
         <Route path="/model" element={<ModelSummaryPage />} />
         <Route path="/calibration-report" element={<CalibrationPage />} />
       </Routes>

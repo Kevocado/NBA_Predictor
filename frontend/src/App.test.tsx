@@ -74,7 +74,21 @@ describe("App family frame", () => {
     expect(within(pages).getByRole("tab", { name: "Games" })).not.toHaveAttribute("aria-selected", "true");
     expect(
       within(pages).getAllByRole("tab").map((b) => b.textContent),
-    ).toEqual(["Games", "Teams", "Players", "Power rankings", "Standings", "Track record", "Calibration", "Model"]);
+    ).toEqual(["Games", "Teams", "Players", "Track record", "Calibration", "Model"]);
+  });
+
+  it("sends the old standings link to the Teams page", async () => {
+    renderAt("/standings");
+    expect(await screen.findByText(/no team data/i)).toBeInTheDocument();
+    const pages = screen.getByRole("tablist", { name: "Pages" });
+    expect(within(pages).getByRole("tab", { name: "Teams" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("sends the old power-rankings link to the Teams page, still sorted by power", async () => {
+    renderAt("/power-rankings");
+    expect(await screen.findByText(/no team data/i)).toBeInTheDocument();
+    const pages = screen.getByRole("tablist", { name: "Pages" });
+    expect(within(pages).getByRole("tab", { name: "Teams" })).toHaveAttribute("aria-selected", "true");
   });
 
   it("navigates when a page tab is pressed", async () => {

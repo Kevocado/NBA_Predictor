@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 
@@ -344,3 +346,89 @@ def test_market_rows_made_after_tip_off_are_flagged_rebuilt(tmp_path):
     markets = client.get("/games/g1").json()["markets"]
 
     assert sorted(m["rebuilt"] for m in markets) == [False, True]
+
+
+def test_the_out_list_names_only_the_two_teams(tmp_path, monkeypatch):
+    """A third team's Out player is not this game's news.
+
+    The report is league-wide, so a game between two teams used to list a
+    player who was playing for neither of them.
+    """
+    from nba_predictor.api import deps
+    from nba_predictor.api.app import app as fastapi_app
+    from nba_predictor.tracking import store
+
+    client, db_path = _client_with_overrides(tmp_path, monkeypatch)
+    for player_id in ("p1", "p2", "p3"):
+        store.insert_player_prediction(
+            db_path, game_id="g1", player_id=player_id, stat="points",
+            predicted_value=20.0, created_at="2026-11-01T12:00:00",
+        )
+    fastapi_app.dependency_overrides[deps.get_injury_report] = lambda: [
+        {"team": "BOS", "player_id": "p1", "player_name": "Home Out", "status": "Out", "dated": "2026-11-01"},
+        {"team": "MIA", "player_id": "p2", "player_name": "Away Out", "status": "Out", "dated": "2026-11-01"},
+        {"team": "SAS", "player_id": "p3", "player_name": "Tobias Harris", "status": "Out", "dated": "2026-11-01"},
+    ]
+
+    body = client.get("/games/g1/players/out").json()
+
+    assert {row["team"] for row in body} == {"BOS", "MIA"}, (
+        "the out list names a team that is not playing in this game"
+    )
+    assert len(body) == 2
+
+
+def test_the_game_detail_counts_only_the_two_teams_outs(tmp_path, monkeypatch):
+    """The availability sentence counts this game's players, not the league's."""
+    from nba_predictor.api import deps
+    from nba_predictor.api.app import app as fastapi_app
+    from nba_predictor.tracking import store
+
+    client, db_path = _client_with_overrides(tmp_path, monkeypatch)
+    for player_id in ("p1", "p2", "p3"):
+        store.insert_player_prediction(
+            db_path, game_id="g1", player_id=player_id, stat="points",
+            predicted_value=20.0, created_at="2026-11-01T12:00:00",
+        )
+    fastapi_app.dependency_overrides[deps.get_injury_report_best_effort] = lambda: [
+        {"team": "BOS", "player_id": "p1", "player_name": "Home Out", "status": "Out", "dated": "2026-11-01"},
+        {"team": "SAS", "player_id": "p3", "player_name": "Tobias Harris", "status": "Out", "dated": "2026-11-01"},
+    ]
+
+    body = client.get("/games/g1").json()
+
+    assert body["injury_summary"] == "Checked against ESPN availability — 1 Out, 0 Day-to-Day", (
+        "the availability sentence counts a player from another team"
+    )
+
+
+def test_the_game_detail_serves_the_props_bands(tmp_path, monkeypatch):
+    """The band is the props model's own error, so it moves with each retrain."""
+    from nba_predictor.api import deps
+    from nba_predictor.api.app import app as fastapi_app
+
+    client, _ = _client_with_overrides(tmp_path, monkeypatch)
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    (models_dir / "player_props_manifest.json").write_text(
+        json.dumps({"metrics": {"points": {"mae": 4.6}, "rebounds": {"mae": 1.9}}}),
+    )
+    fastapi_app.dependency_overrides[deps.get_models_dir] = lambda: models_dir
+
+    body = client.get("/games/g1").json()
+
+    assert body["prop_bands"] == {"points": 4.6, "rebounds": 1.9}
+
+
+def test_the_props_bands_are_null_without_a_manifest(tmp_path, monkeypatch):
+    """No manifest means no band. A made-up default would be a number nobody
+    measured, and the review would judge players against it."""
+    from nba_predictor.api import deps
+    from nba_predictor.api.app import app as fastapi_app
+
+    client, _ = _client_with_overrides(tmp_path, monkeypatch)
+    fastapi_app.dependency_overrides[deps.get_models_dir] = lambda: tmp_path / "no-models"
+
+    body = client.get("/games/g1").json()
+
+    assert body["prop_bands"] is None

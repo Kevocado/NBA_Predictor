@@ -65,10 +65,70 @@ td {
   border-top: 1px solid var(--color-pr-rule);
 }
 
+/* The narrow player table shows six columns; a tighter gutter is what keeps
+   them on a 375px phone without a sideways scroll. */
+.player-table-compact th,
+.player-table-compact td {
+  padding-right: 0.375rem;
+}
+
 /* Numbers never run into each other: cells keep a gutter, stats stay on
    one line, and wide tables scroll in their own box (overflow-x-auto). */
 td:not(:first-child) {
   white-space: nowrap;
+}
+
+/* The ratings table: a figure and its place in the league, side by side.
+   The kit's rank box is sized to fill a whole cell of the matchup table;
+   here it sits beside a number, so it is smaller -- same colours, same
+   scale, one colour scale everywhere. */
+.pr-rating-value {
+  font-family: var(--font-pr-display);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+
+.pr-rating-rank {
+  min-width: 1.5rem;
+  padding: 0.125rem 0.3rem;
+  font-size: 0.75rem;
+}
+
+/* The site's own `td` rule puts every cell after the first on one line, which
+   would push a long metric label out of the table. A label wraps. */
+.pr-matchup-table td.pr-matchup-label {
+  white-space: normal;
+}
+
+/* The Teams table on a phone: the team and its seed stay put while the figures
+   slide under them. A pinned cell has to be opaque, or the numbers scrolled
+   past it show through it. */
+[data-testid="teams-table"] table th:nth-child(1),
+[data-testid="teams-table"] table td:nth-child(1) {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  width: 9rem;
+  min-width: 9rem;
+  background: var(--color-pr-stage);
+}
+
+[data-testid="teams-table"] table th:nth-child(2),
+[data-testid="teams-table"] table td:nth-child(2) {
+  position: sticky;
+  left: 9rem;
+  z-index: 1;
+  width: 3.5rem;
+  min-width: 3.5rem;
+  border-right: 1px solid var(--color-pr-rule);
+  background: var(--color-pr-stage);
+}
+
+[data-testid="teams-table"] table thead th:nth-child(1),
+[data-testid="teams-table"] table thead th:nth-child(2) {
+  z-index: 2;
+  background: var(--color-pr-panel);
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -112,6 +112,18 @@ def resolve_out_players(injuries, player_ids) -> list[dict]:
     return _resolve_players(injuries, player_ids, is_out)
 
 
+def for_teams(entries: list[dict], teams) -> list[dict]:
+    """Only the entries that belong to one of ``teams``.
+
+    ESPN's report is league-wide, so a game between two teams used to list a
+    player who was playing for neither of them -- "Out: Tobias Harris, SAS" on a
+    BOS-at-DET game page. An entry with no team at all cannot be attributed to
+    this game either, so it is dropped rather than shown.
+    """
+    wanted = {str(team) for team in teams or ()}
+    return [entry for entry in entries if str(entry.get("team") or "") in wanted]
+
+
 def resolve_doubtful_players(injuries, player_ids) -> list[dict]:
     """The players in ``player_ids`` the report says are day-to-day.
 

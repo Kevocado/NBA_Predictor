@@ -9,7 +9,7 @@ from pathlib import Path
 import pandas as pd
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 
-from nba_predictor.api.availability import resolve_doubtful_players, resolve_out_players
+from nba_predictor.api.availability import for_teams, resolve_doubtful_players, resolve_out_players
 from nba_predictor.models.probability import cover_prob
 from nba_predictor.models.manifest import build_manifest
 from nba_predictor.api.deps import (
@@ -146,6 +146,28 @@ def load_latest_manifest() -> dict | None:
     return None
 
 
+def _prop_bands(models_dir: Path) -> dict[str, float] | None:
+    """The props model's own holdout MAE per stat, or None when there is none.
+
+    The band is what a projection has to miss by before it counts as wrong, so
+    it is the model's measured error and it moves with each retrain. A
+    made-up default would be a number nobody measured, and the post-game
+    review would judge players against it -- so a missing manifest means no
+    band, never a default.
+    """
+    path = Path(models_dir) / "player_props_manifest.json"
+    try:
+        manifest = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    bands: dict[str, float] = {}
+    for stat, figures in (manifest.get("metrics") or {}).items():
+        mae = (figures or {}).get("mae")
+        if isinstance(mae, (int, float)) and not isinstance(mae, bool):
+            bands[str(stat)] = float(mae)
+    return bands or None
+
+
 def _game_out(g: dict, db_path: Path) -> GameOut:
     manifest = load_latest_manifest()
     prediction, rebuilt = _prediction_out(db_path, g, manifest)
@@ -185,6 +207,7 @@ def get_game_detail(
     schedule: list[dict] = Depends(get_schedule),
     db_path: Path = Depends(get_db_path),
     injuries: list[dict] = Depends(get_injury_report_best_effort),
+    models_dir: Path = Depends(get_models_dir),
 ) -> GameDetailOut:
     game = get_game(schedule, game_id)
     if game is None:
@@ -214,6 +237,10 @@ def get_game_detail(
     picks = picks_by_player_stat(db_path, game_id, game)
     out_entries = resolve_out_players(injuries, {key[0] for key in picks})
     doubtful_entries = resolve_doubtful_players(injuries, {key[0] for key in picks})
+    # This game's two teams only: the report is league-wide, and a player who
+    # is playing for neither of them is not this game's news.
+    out_entries = for_teams(out_entries, {game["home_team"], game["away_team"]})
+    doubtful_entries = for_teams(doubtful_entries, {game["home_team"], game["away_team"]})
     injury_summary = f"Checked against ESPN availability — {len(out_entries)} Out, {len(doubtful_entries)} Day-to-Day"
 
     return GameDetailOut(
@@ -223,7 +250,27 @@ def get_game_detail(
         home_recent_form=get_recent_form(schedule, game["home_team"], before_date=game["game_date"]),
         away_recent_form=get_recent_form(schedule, game["away_team"], before_date=game["game_date"]),
         injury_summary=injury_summary,
+        prop_bands=_prop_bands(models_dir),
+        ratings=_game_ratings(game),
     )
+
+
+def _game_ratings(game: dict) -> dict | None:
+    """These two teams' ratings and league ranks, or None when there are none.
+
+    Read from the same warmed box history the duels read, as of the game's own
+    date: a rating is the form going INTO the game, so a game that has been
+    played is not allowed to borrow the form that came after it.
+    """
+    from ..api import facts as facts_mod
+
+    try:
+        return facts_mod.ratings_payload(
+            str(game["game_date"]), [game["home_team"], game["away_team"]]
+        )
+    except Exception:  # noqa: BLE001 - a rating is an enhancement, never the page
+        logger.exception("ratings unavailable for %s", game.get("game_id"))
+        return None
 
 
 # The MAE is a property of the tracking database and the schedule, not of the request:
@@ -522,6 +569,9 @@ def get_game_out_players(
 
     picks = picks_by_player_stat(db_path, game_id, game)
     entries = resolve_out_players(injuries, {key[0] for key in picks})
+    # This game's two teams only: the report is league-wide, and a player who
+    # is playing for neither of them is not this game's news.
+    entries = for_teams(entries, {game["home_team"], game["away_team"]})
 
     # Prefer the roster's own name for the id, the same source the ranking
     # uses, so the out line and the ranking never disagree on who this is.
@@ -560,6 +610,8 @@ def get_game_doubtful_players(
 
     picks = picks_by_player_stat(db_path, game_id, game)
     entries = resolve_doubtful_players(injuries, {key[0] for key in picks})
+    # This game's two teams only, for the reason the out feed does it.
+    entries = for_teams(entries, {game["home_team"], game["away_team"]})
 
     # The roster's own name for the id, the same source the ranking uses, so
     # the note and the row it attaches to never disagree on who this is.
@@ -580,6 +632,58 @@ def hub_players() -> list[dict]:
     return load_hub_cache(config.DATA_DIR / "cache" / "hub" / "players.json")
 
 
+@router.get("/hub/players/next-games")
+def hub_players_next_games(
+    schedule: list[dict] = Depends(get_schedule),
+    db_path: Path = Depends(get_db_path),
+    today: str = Depends(get_today),
+) -> dict:
+    """Every player's next game, with the model's projection for it.
+
+    The table's last column. A projection that is not there is null, never
+    zero: a player with no stored projection has no projection.
+    """
+    from ..api.player_details import next_game_projections
+
+    players = load_hub_cache(config.DATA_DIR / "cache" / "hub" / "players.json")
+    team_of = {str(p.get("player_id")): str(p.get("team") or "") for p in players if p.get("player_id")}
+    return next_game_projections(schedule, db_path, team_of, today)
+
+
+@router.get("/hub/players/{player_id}")
+def hub_player_detail(
+    player_id: str,
+    schedule: list[dict] = Depends(get_schedule),
+    db_path: Path = Depends(get_db_path),
+    injuries: list[dict] = Depends(get_injury_report_best_effort),
+    today: str = Depends(get_today),
+) -> dict:
+    """One player: their last ten games, their status, their next game."""
+    from ..api.player_details import next_game_projections, player_detail
+
+    players = load_hub_cache(config.DATA_DIR / "cache" / "hub" / "players.json")
+    row = next((p for p in players if str(p.get("player_id")) == str(player_id)), None)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Unknown player: {player_id}")
+    detail = player_detail(
+        schedule, db_path, str(player_id), str(row.get("team") or ""), injuries, today
+    )
+    detail["next_game"] = next_game_projections(
+        schedule, db_path, {str(player_id): str(row.get("team") or "")}, today
+    ).get(str(player_id))
+    detail["averages"] = {
+        "points_per_game": row.get("points_per_game"),
+        "rebounds_per_game": row.get("rebounds_per_game"),
+        "assists_per_game": row.get("assists_per_game"),
+        "fg_pct": row.get("fg_pct"),
+        "three_pt_pct": row.get("three_pt_pct"),
+        "ft_pct": row.get("ft_pct"),
+        "minutes_per_game": row.get("minutes_per_game"),
+        "rating": row.get("rating"),
+    }
+    return detail
+
+
 @router.get("/hub/rankings")
 def hub_rankings() -> list[dict]:
     return load_hub_cache(config.DATA_DIR / "cache" / "hub" / "rankings.json")
@@ -588,6 +692,31 @@ def hub_rankings() -> list[dict]:
 @router.get("/hub/standings")
 def hub_standings() -> list[dict]:
     return load_hub_cache(config.DATA_DIR / "cache" / "hub" / "standings.json")
+
+
+@router.get("/hub/team-overview")
+def hub_team_overview(
+    schedule: list[dict] = Depends(get_schedule),
+    db_path: Path = Depends(get_db_path),
+    today: str = Depends(get_today),
+) -> dict:
+    """Everything the Teams page needs, in one payload.
+
+    The league's ratings (the same window the game detail reads), every team's
+    recent form, its last five games and its next game with the model's pick.
+    One endpoint so the page does not join four feeds and hope they agree.
+    """
+    from ..api import facts as facts_mod
+    from ..api.team_overview import overview
+    from ..data.team_reference import TEAMS
+
+    teams = [t.abbreviation for t in TEAMS]
+    try:
+        ratings = facts_mod.ratings_payload(today, teams)
+    except Exception:  # noqa: BLE001 - the ratings are an enhancement, not the page
+        logger.exception("ratings unavailable for the teams page")
+        ratings = None
+    return overview(schedule, db_path, ratings, teams, today)
 
 
 @router.get("/hub/track-record", response_model=list[TrackRecordOut])

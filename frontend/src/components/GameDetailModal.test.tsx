@@ -19,6 +19,7 @@ vi.mock("../api/client", () => ({
     // the game's figures, so it resolves empty: an unreadable feed would (rightly)
     // withhold the ranking block, and that is TopCalls' own test to cover.
     getGameOutPlayers: vi.fn().mockResolvedValue([]),
+    getGameDoubtfulPlayers: vi.fn().mockResolvedValue([]),
     getHubPlayers: vi.fn().mockResolvedValue([]),
     // The block's record strip reads this. These tests are about the game's own
     // figures, so it stays empty here — the strip is covered in
@@ -43,6 +44,7 @@ beforeEach(() => {
   // Same re-arm for the gate's sibling route: a wiped mock would make every
   // render call undefined.then() and take the whole modal down.
   vi.mocked(api.getGameOutPlayers).mockResolvedValue([]);
+  vi.mocked(api.getGameDoubtfulPlayers).mockResolvedValue([]);
 });
 
 const completedDetail = {
@@ -78,6 +80,36 @@ const hubPlayer = (player_id: string, player_name: string, team: string) => ({
 });
 const hub = [hubPlayer("203999", "Nikola Jokic", "MIA"), hubPlayer("p1", "Jayson Tatum", "BOS")];
 
+/** The ratings the API serves for a fixture: one row per metric. */
+const ratings = {
+  as_of: "2026-11-01",
+  n_teams: 30,
+  caption: "Last 15 games each.",
+  metrics: [
+    { key: "net", label: "Net rating", unit: "", help: "Points scored minus points allowed, per 100 possessions.", higher_is_better: true },
+    { key: "ortg", label: "Offence", unit: "pts per 100", help: "Points scored per 100 possessions.", higher_is_better: true },
+    { key: "drtg", label: "Defence", unit: "allowed per 100", help: "Points allowed per 100 possessions.", higher_is_better: false },
+    { key: "pace", label: "Pace", unit: "possessions", help: "Possessions per game.", higher_is_better: true },
+    { key: "efg_pct", label: "eFG%", unit: "", help: "Points per shot.", higher_is_better: true },
+    { key: "tov_rate", label: "Turnover %", unit: "", help: "Turnovers per 100 possessions.", higher_is_better: false },
+    { key: "orb_pct", label: "Offensive rebounds %", unit: "", help: "Share of missed shots got back.", higher_is_better: true },
+    { key: "ft_rate", label: "Free-throw rate", unit: "", help: "Free throws per 100 possessions.", higher_is_better: true },
+    { key: "fg3_pct", label: "3P%", unit: "", help: "Share of three-point shots made.", higher_is_better: true },
+    { key: "fg3_pct_allowed", label: "3P% allowed", unit: "", help: "Share of three-point shots the opponents made.", higher_is_better: false },
+    { key: "reb", label: "Rebounds", unit: "", help: "Rebounds per game.", higher_is_better: true },
+  ],
+  teams: {
+    BOS: Object.fromEntries(
+      ["net", "ortg", "drtg", "pace", "efg_pct", "tov_rate", "orb_pct", "ft_rate", "fg3_pct", "fg3_pct_allowed", "reb"]
+        .map((key) => [key, { value: 100, rank: 5 }]),
+    ),
+    MIA: Object.fromEntries(
+      ["net", "ortg", "drtg", "pace", "efg_pct", "tov_rate", "orb_pct", "ft_rate", "fg3_pct", "fg3_pct_allowed", "reb"]
+        .map((key) => [key, { value: 101, rank: 4 }]),
+    ),
+  },
+};
+
 describe("GameDetailModal", () => {
   it("shows a loading state before data arrives", () => {
     vi.mocked(api.getGameDetail).mockReturnValue(new Promise(() => {}));
@@ -85,6 +117,83 @@ describe("GameDetailModal", () => {
 
     render(<GameDetailModal gameId="g1" onClose={() => {}} />);
     expect(screen.getByText(/loading/i)).toBeInTheDocument();
+  });
+
+  it("shows the player review for a finished game, judged against the model's own error", async () => {
+    vi.mocked(api.getGameDetail).mockResolvedValue({
+      ...completedDetail,
+      prop_bands: { points: 4.6 },
+    } as never);
+    vi.mocked(api.getGamePlayers).mockResolvedValue([
+      { player_id: "203999", player_name: "Nikola Jokic", stat: "points", predicted_value: 27.5, actual_value: 24.0 },
+    ]);
+    vi.mocked(api.getHubPlayers).mockResolvedValue(hub);
+
+    render(<GameDetailModal gameId="g2" onClose={() => {}} />);
+
+    await screen.findByTestId("post-game-review");
+    // 3.5 points is inside the model's own 4.6, so the line is on the number.
+    expect(screen.getByTestId("review-on-the-number").textContent).toContain("1 of 1");
+  });
+
+  it("shows no player review without bands: there is no measured error to judge against", async () => {
+    vi.mocked(api.getGameDetail).mockResolvedValue({ ...completedDetail, prop_bands: null } as never);
+    vi.mocked(api.getGamePlayers).mockResolvedValue([
+      { player_id: "203999", player_name: "Nikola Jokic", stat: "points", predicted_value: 27.5, actual_value: 24.0 },
+    ]);
+    vi.mocked(api.getHubPlayers).mockResolvedValue(hub);
+
+    render(<GameDetailModal gameId="g2" onClose={() => {}} />);
+
+    await screen.findByRole("rowheader", { name: "Nikola Jokic" });
+    expect(screen.queryByTestId("post-game-review")).not.toBeInTheDocument();
+  });
+
+  it("shows no player review before the game is played", async () => {
+    vi.mocked(api.getGameDetail).mockResolvedValue({ ...detail, prop_bands: { points: 4.6 } } as never);
+    vi.mocked(api.getGamePlayers).mockResolvedValue(players);
+
+    render(<GameDetailModal gameId="g1" onClose={() => {}} />);
+
+    await screen.findByRole("heading", { name: "Heat at Celtics" });
+    expect(screen.queryByTestId("post-game-review")).not.toBeInTheDocument();
+  });
+
+  it("renders the team's ratings against the league: one row per metric", async () => {
+    vi.mocked(api.getGameDetail).mockResolvedValue({ ...detail, ratings } as never);
+    vi.mocked(api.getGamePlayers).mockResolvedValue(players);
+
+    render(<GameDetailModal gameId="g1" onClose={() => {}} />);
+
+    await screen.findByTestId("team-ratings");
+    expect(screen.getAllByTestId(/^rating-row-/)).toHaveLength(11);
+    expect(screen.getByTestId("rating-row-net")).toBeInTheDocument();
+    expect(screen.getByTestId("rating-row-reb")).toBeInTheDocument();
+  });
+
+  it("shows no ratings section when the league is not ranked yet", async () => {
+    vi.mocked(api.getGameDetail).mockResolvedValue({ ...detail, ratings: null } as never);
+    vi.mocked(api.getGamePlayers).mockResolvedValue(players);
+
+    render(<GameDetailModal gameId="g1" onClose={() => {}} />);
+
+    await screen.findByRole("heading", { name: "Heat at Celtics" });
+    expect(screen.queryByTestId("team-ratings")).not.toBeInTheDocument();
+  });
+
+  it("names only the two teams' unavailable players", async () => {
+    vi.mocked(api.getGameDetail).mockResolvedValue(detail);
+    vi.mocked(api.getGamePlayers).mockResolvedValue(players);
+    vi.mocked(api.getGameOutPlayers).mockResolvedValue([
+      { player_id: "1", player_name: "Home Out", team: "BOS", status: "Out", source: "ESPN injury report", dated: "2026-11-01" },
+      { player_id: "2", player_name: "Third Team Out", team: "SAS", status: "Out", source: "ESPN injury report", dated: "2026-11-01" },
+    ]);
+
+    render(<GameDetailModal gameId="g1" onClose={() => {}} />);
+
+    await screen.findByTestId("availability-out");
+    expect(screen.getByText("Home Out")).toBeInTheDocument();
+    expect(screen.queryByText("Third Team Out")).not.toBeInTheDocument();
   });
 
   it("renders player prop predictions as a box score split by team", async () => {
@@ -261,10 +370,14 @@ it("shows predicted vs actual and the error for a settled player prop", async ()
   const head = await screen.findByRole("rowheader", { name: "Nikola Jokic" });
   const playerRow = within(head.closest("tr")!);
   expect(playerRow.getByText("27.5")).toBeInTheDocument();
-  expect(playerRow.getByText(/24\.0 \(-3\.5\)|24 \(-3\.5\)/)).toBeInTheDocument();
-  // And a real team total appears, because a per-player list makes the reader
-  // add it up by hand.
-  expect(screen.getByTestId("box-score-totals")).toBeInTheDocument();
+  // The delta is its own element now, because it carries the colour.
+  expect(playerRow.getByText("-3.5")).toBeInTheDocument();
+  expect(head.closest("tr")!.textContent).toContain("24");
+  // The team total that IS a fact appears: a per-player list makes the reader
+  // add it up by hand. The projected total does not: summing every rostered
+  // player's projection is not the team's projection.
+  expect(screen.getByTestId("box-score-actual-totals")).toBeInTheDocument();
+  expect(screen.queryByTestId("box-score-totals")).not.toBeInTheDocument();
 });
 
 it("shows only the predicted value for an unsettled player prop", async () => {

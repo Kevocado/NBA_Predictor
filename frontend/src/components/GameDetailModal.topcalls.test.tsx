@@ -15,6 +15,7 @@ vi.mock("../api/client", () => ({
     getGameDetail: vi.fn(),
     getGamePlayers: vi.fn(),
     getGameOutPlayers: vi.fn(),
+    getGameDoubtfulPlayers: vi.fn().mockResolvedValue([]),
     getHubPlayers: vi.fn().mockResolvedValue([]),
     getTrackRecord: vi.fn().mockResolvedValue([]),
     explainGame: vi.fn(),
@@ -27,6 +28,7 @@ beforeEach(() => {
   vi.mocked(api.getHubPlayers).mockResolvedValue([]);
   vi.mocked(api.getTrackRecord).mockResolvedValue([]);
   vi.mocked(api.getGameOutPlayers).mockResolvedValue([]);
+  vi.mocked(api.getGameDoubtfulPlayers).mockResolvedValue([]);
   vi.mocked(api.getGameDetail).mockResolvedValue({
     game_id: "g1", game_date: "2026-11-01", home_team: "BOS", away_team: "MIA",
     prediction: { home_win_probability: 0.62, predicted_margin: 3.5, predicted_total: 224.5 },
@@ -80,10 +82,13 @@ it("removes an out player from the modal's ranking and names him once below", as
     { player_id: "2", player_name: "Absent", team: "BOS", status: "Out", source: "ESPN injury report", dated: "2026-11-01 08:00" },
   ]);
   await open();
-  await waitFor(() => expect(screen.getByTestId("picks-out")).toBeInTheDocument());
+  await waitFor(() => expect(screen.getByTestId("availability-out")).toBeInTheDocument());
   for (const list of screen.getAllByTestId("picks-category")) {
     expect(within(list).queryByText(/Absent/)).not.toBeInTheDocument();
   }
+  // Named ONCE: in the availability section, not a second time under the
+  // ranking.
+  expect(screen.queryByTestId("picks-out")).not.toBeInTheDocument();
 });
 
 it("shows no ranking at all when the out feed cannot be read", async () => {

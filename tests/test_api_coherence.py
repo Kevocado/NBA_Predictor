@@ -108,7 +108,7 @@ def test_score_upcoming_games_uses_win_from_margin(tmp_path):
         mock_load.side_effect = load_side_effect
 
         with patch("nba_predictor.pipeline.ingest.build_feature_frame") as mock_build, \
-             patch("nba_predictor.pipeline.ingest.store.insert_prediction") as mock_insert:
+             patch("nba_predictor.pipeline.ingest.store.insert_predictions") as mock_insert:
 
             mock_df = pd.DataFrame({
                 "game_id": ["g1", "g2", "g3"],
@@ -129,9 +129,9 @@ def test_score_upcoming_games_uses_win_from_margin(tmp_path):
             count = score_upcoming_games(games, models_dir, tmp_path / "tracking.db", "v20261007")
 
             assert count == 3
-            assert mock_insert.call_count == 3
+            assert mock_insert.call_count == 1
 
-            calls = mock_insert.call_args_list
+            calls = [type("C", (), {"kwargs": r}) for r in mock_insert.call_args.args[1]]
             wp_g1 = calls[0].kwargs["home_win_prob"]
             wp_g2 = calls[1].kwargs["home_win_prob"]
             wp_g3 = calls[2].kwargs["home_win_prob"]

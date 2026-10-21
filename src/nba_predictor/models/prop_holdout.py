@@ -78,6 +78,7 @@ def prop_holdout_metrics(
     df: pd.DataFrame,
     factories: dict[str, Callable],
     holdout_fraction: float = 0.2,
+    frame_builder: Callable = build_player_feature_frame,
 ) -> dict:
     """Holdout vs in-sample MAE per market on one chronological split.
 
@@ -98,7 +99,7 @@ def prop_holdout_metrics(
     # One feature build over train+holdout, so holdout rolling features inherit
     # the training history a real prediction would have (see module docstring).
     combined = pd.concat([train, holdout], ignore_index=True)
-    combined_frame, feature_cols = build_player_feature_frame(combined)
+    combined_frame, feature_cols = frame_builder(combined)
     holdout_ids = set(holdout["game_id"])
 
     train_frame = combined_frame[~combined_frame["game_id"].isin(holdout_ids)]

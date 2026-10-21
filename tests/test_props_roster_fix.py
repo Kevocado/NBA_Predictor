@@ -190,7 +190,7 @@ def test_a_collapsed_model_publishes_nothing(tmp_path):
     models_dir.mkdir()
     for stat in ingest.PLAYER_STAT_TARGET_COLUMNS:
         collapsed = DummyRegressor(strategy="constant", constant=1.0)
-        collapsed.fit([[0.0] * 5], [1.0])
+        collapsed.fit([[0.0] * 12], [1.0])
         joblib.dump(collapsed, models_dir / f"player_{stat}_model.pkl")
 
     db_path = tmp_path / "t.db"
@@ -285,7 +285,7 @@ def test_a_few_clamps_still_publish_the_guarded_values(tmp_path, monkeypatch):
     models_dir = tmp_path / "models"; models_dir.mkdir()
     for stat in ingest.PLAYER_STAT_TARGET_COLUMNS:
         sane = DummyRegressor(strategy="constant", constant=20.0 if stat == "points" else 5.0)
-        sane.fit([[0.0] * 5], [1.0])
+        sane.fit([[0.0] * 12], [1.0])
         joblib.dump(sane, models_dir / f"player_{stat}_model.pkl")
     # twelve players x four stats = 48 projections; make exactly one of them need a clamp by giving one player a tiny average
     boxes["c2"][0] = _box("p0", "P0", "DET", 2.0)
@@ -319,3 +319,25 @@ def test_preseason_games_do_not_drag_a_stars_rolling_average_down():
     frame, _ = build_player_feature_frame(scoring)
     upcoming = frame[frame["points"].isna()]
     assert float(upcoming.iloc[0]["points_roll"]) == 30.0
+
+
+def test_a_model_fitted_on_the_old_feature_set_is_skipped_not_crashed(tmp_path):
+    """Right after a deploy the image still holds last night's five-feature pickles; scoring must not die on them."""
+    import joblib
+    from sklearn.linear_model import LinearRegression
+
+    from nba_predictor.pipeline import ingest
+    from nba_predictor.tracking import store
+
+    games, boxes = [], {}
+    for i in range(3):
+        gid = f"c{i}"
+        games.append(_game(gid, f"2026-10-1{i}", "DET", "MIA", True))
+        boxes[gid] = [_box("p0", "P0", "DET", 20.0)]
+    games.append(_game("next", "2026-10-21", "DET", "CHI", False))
+    models_dir = tmp_path / "models"; models_dir.mkdir()
+    for stat in ingest.PLAYER_STAT_TARGET_COLUMNS:
+        old = LinearRegression().fit([[0.0] * 5, [1.0] * 5], [1.0, 2.0])      # five features: the previous model generation
+        joblib.dump(old, models_dir / f"player_{stat}_model.pkl")
+    db_path = tmp_path / "t.db"; store.init_db(db_path)
+    assert ingest.score_upcoming_player_props(games, boxes, models_dir, db_path, "v-test") == 0

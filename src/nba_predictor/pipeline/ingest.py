@@ -23,6 +23,7 @@ from nba_predictor.models.manifest import build_manifest, write_manifest
 from nba_predictor.models.probability import win_prob
 from nba_predictor.models.player_props import predict_player_stat, train_player_stat_model
 from nba_predictor.data.rosters import get_rosters
+from nba_predictor.features.prop_model_frame import build_prop_model_frame
 from nba_predictor.models.prop_holdout import MARKETS, prop_holdout_metrics
 from nba_predictor.pipeline.history import merge_history
 from nba_predictor.pipeline.retrain import run_retrain_pipeline
@@ -172,6 +173,7 @@ def to_player_scoring_frame(
     schedule itself lists his team twice that day.
     """
     completed_rows = regular_and_post_only(to_player_training_frame(games, player_boxscores))
+    completed_rows = completed_rows[completed_rows["minutes"] > 0]       # rolling means over games he played, as in training
     if extra_completed is not None and len(extra_completed):
         # Earlier seasons (the frozen history): a player's rolling average must not start over each October.
         completed_rows = pd.concat([extra_completed, completed_rows], ignore_index=True).drop_duplicates(["player_id", "game_id"], keep="last")
@@ -221,6 +223,10 @@ def to_player_scoring_frame(
                         "fg3m": None,
                         "minutes": None,
                         "position": position,
+                        "fga": None,
+                        "home_team": g.get("home_team"),
+                        "away_team": g.get("away_team"),
+                        "opponent": g.get("away_team") if side == "home_team" else g.get("home_team"),
                     })
     upcoming_rows = pd.DataFrame(rows)
     if len(upcoming_rows):
@@ -280,7 +286,7 @@ def score_upcoming_player_props(
     rolling average, nothing is stored and the reason is logged. Returns the number of projections stored.
     """
     scoring_df = to_player_scoring_frame(games, player_boxscores, rosters=rosters, extra_completed=extra_completed)
-    frame, feature_cols = build_player_feature_frame(scoring_df)
+    frame, feature_cols = build_prop_model_frame(scoring_df)
     upcoming_frame = frame[frame["points"].isna()].reset_index(drop=True)
     if len(upcoming_frame) == 0:
         return 0
@@ -289,9 +295,16 @@ def score_upcoming_player_props(
     for stat in PLAYER_STAT_TARGET_COLUMNS:
         path = models_dir / f"player_{stat}_model.pkl"
         try:
-            models[stat] = joblib.load(path)
+            model = joblib.load(path)
         except FileNotFoundError:
             logger.warning("player model missing, skipping market: %s", path)
+            continue
+        n_fitted = getattr(model, "n_features_in_", len(feature_cols))
+        if n_fitted != len(feature_cols):
+            # A model fitted before the feature set changed: skip it until the next retrain replaces it.
+            logger.warning("player model %s was fitted on %d features, the frame has %d: skipping %s until the next retrain", path.name, n_fitted, len(feature_cols), stat)
+            continue
+        models[stat] = model
     predictions = {stat: predict_player_stat(model, upcoming_frame[feature_cols]) for stat, model in models.items()}
 
     guarded: list[tuple] = []
@@ -329,9 +342,9 @@ def train_player_prop_models(training_df: pd.DataFrame, models_dir: Path, model_
     """
     models_dir.mkdir(parents=True, exist_ok=True)
     played = regular_and_post_only(training_df[training_df["minutes"] > 0])
-    frame, feature_cols = build_player_feature_frame(played)
+    frame, feature_cols = build_prop_model_frame(played)
 
-    holdout = prop_holdout_metrics(played, {m: train_player_stat_model for m in MARKETS}) if len(frame) >= 50 else {}
+    holdout = prop_holdout_metrics(played, {m: train_player_stat_model for m in MARKETS}, frame_builder=build_prop_model_frame) if len(frame) >= 50 else {}
     metrics: dict[str, dict] = {}
     for stat, target_col in PLAYER_STAT_TARGET_COLUMNS.items():
         if len(frame) == 0:
@@ -362,7 +375,7 @@ def score_and_store_player_predictions(training_df: pd.DataFrame, models_dir: Pa
     """Backtest: scores every completed player-game row that survived
     feature assembly with the trained per-stat models, stores each as a
     tracked player prediction."""
-    frame, feature_cols = build_player_feature_frame(training_df)
+    frame, feature_cols = build_prop_model_frame(training_df)
     if len(frame) == 0:
         return 0
 

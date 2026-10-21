@@ -661,7 +661,7 @@ def test_score_upcoming_player_props_stores_position(tmp_path):
     games = _player_games_two_completed()
     box = _player_boxscores()
     train_df = ingest.to_player_training_frame(games, box)
-    frame, feature_cols = ingest.build_player_feature_frame(train_df)
+    frame, feature_cols = ingest.build_prop_model_frame(train_df)
     assert len(frame) > 0
     models_dir = _train_player_models(tmp_path, frame, feature_cols)
 
@@ -681,7 +681,7 @@ def test_score_and_store_player_predictions_stores_position(tmp_path):
     games = [g for g in _player_games_two_completed() if g["completed"]]
     box = _player_boxscores()
     train_df = ingest.to_player_training_frame(games, box)
-    frame, feature_cols = ingest.build_player_feature_frame(train_df)
+    frame, feature_cols = ingest.build_prop_model_frame(train_df)
     assert len(frame) > 0
     models_dir = _train_player_models(tmp_path, frame, feature_cols)
 
@@ -708,7 +708,7 @@ def test_missing_player_model_skips_stat(tmp_path, caplog):
     models_dir.mkdir()
     # Train every stat EXCEPT threes — its .pkl is missing.
     train_df = ingest.to_player_training_frame(games, box)
-    frame, feature_cols = ingest.build_player_feature_frame(train_df)
+    frame, feature_cols = ingest.build_prop_model_frame(train_df)
     for stat, target_col in ingest.PLAYER_STAT_TARGET_COLUMNS.items():
         if stat == "threes" or not len(frame):
             continue

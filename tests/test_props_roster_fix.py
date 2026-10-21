@@ -229,6 +229,35 @@ def test_clamps_on_deep_bench_players_alone_do_not_block_publication(tmp_path):
     assert ingest.score_upcoming_player_props(games, boxes, models_dir, db_path, "v-test") > 0
 
 
+def test_opening_week_serves_last_seasons_average_not_the_models_window(tmp_path):
+    """Week one of the new season: the number is last season's average (the model's constant 8 is replaced)."""
+    import joblib
+    from sklearn.dummy import DummyRegressor
+
+    from nba_predictor.pipeline import ingest
+    from nba_predictor.tracking import store
+
+    games, boxes = [], {}
+    for i in range(3):
+        gid = f"a{i}"
+        games.append(_game(gid, f"2026-04-1{i}", "DET", "MIA", True))
+        boxes[gid] = [_box("star", "Star", "DET", 25.0)]
+    games.append(_game("next", "2026-10-21", "DET", "CHI", False))
+
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    for stat in ingest.PLAYER_STAT_TARGET_COLUMNS:
+        m = DummyRegressor(strategy="constant", constant=20.0)
+        m.fit([[0.0] * 12], [20.0])
+        joblib.dump(m, models_dir / f"player_{stat}_model.pkl")
+
+    db_path = tmp_path / "t.db"
+    store.init_db(db_path)
+    assert ingest.score_upcoming_player_props(games, boxes, models_dir, db_path, "v-test") > 0
+    points = [r["predicted_value"] for r in store.get_player_predictions_for_game(db_path, "next") if r["stat"] == "points"]
+    assert points == [25.0]
+
+
 # ---------------------------------------------------------------------------
 # Current rosters (ESPN) are the authority; Out players get no projection
 # ---------------------------------------------------------------------------

@@ -23,6 +23,7 @@ from nba_predictor.models.manifest import build_manifest, write_manifest
 from nba_predictor.models.probability import win_prob
 from nba_predictor.models.player_props import predict_player_stat, train_player_stat_model
 from nba_predictor.data.rosters import get_rosters
+from nba_predictor.features.early_season import shrunk_projections
 from nba_predictor.features.prop_model_frame import build_prop_model_frame
 from nba_predictor.models.prop_holdout import MARKETS, prop_holdout_metrics
 from nba_predictor.pipeline.history import merge_history
@@ -309,13 +310,17 @@ def score_upcoming_player_props(
             continue
         models[stat] = model
     predictions = {stat: predict_player_stat(model, upcoming_frame[feature_cols]) for stat, model in models.items()}
+    # Early in a player's season the model's rolling window is still last season; lean on last season's average instead.
+    early = shrunk_projections(
+        scoring_df[scoring_df["points"].notna()], upcoming_frame[["game_id", "player_id", "game_date"]], {s: PLAYER_STAT_TARGET_COLUMNS[s] for s in models},
+    )
 
     guarded: list[tuple] = []
     clamped = rot_clamped = rot_total = 0
     for i, row in upcoming_frame.iterrows():
         rotation = float(row.get("minutes_trend", 0) or 0) >= ROTATION_MINUTES
         for stat in models:
-            raw = float(predictions[stat][i])
+            raw = early.get((row["game_id"], row["player_id"], stat), float(predictions[stat][i]))
             value = guard_player_prediction(stat, raw, row.get(f"{PLAYER_STAT_TARGET_COLUMNS[stat]}_roll"))
             clamped += value != raw
             rot_total += rotation

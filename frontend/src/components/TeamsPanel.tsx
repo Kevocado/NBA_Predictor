@@ -96,7 +96,9 @@ export default function TeamsPanel() {
   }, [attempt]);
 
   const rows = useMemo(() => (data ? buildRows(data) : []), [data]);
-  const sortParam = params.get("sort") === "power" ? "power" : "seed";
+  // Until every team has played there is no standings order to show (a pile of unseeded 0s): lead with the power rating.
+  const everyTeamSeeded = rows.length > 0 && rows.every((row) => row.seed > 0);
+  const sortParam = params.get("sort") === "power" || !everyTeamSeeded ? "power" : "seed";
 
   if (failed) {
     return (
@@ -339,7 +341,7 @@ function TeamsTable({
         </span>
       ),
     },
-    { key: "seed", label: "Seed", value: (row) => row.seed, numeric: true, firstDir: "asc" },
+    { key: "seed", label: "Seed", value: (row) => row.seed, numeric: true, firstDir: "asc", render: (row) => (row.seed === 0 ? "—" : row.seed) },
     { key: "record", label: "W-L", value: (row) => `${row.wins}-${row.losses}` },
     {
       key: "gb",
@@ -471,7 +473,9 @@ function TeamsTable({
             ) : (
               <p className="text-sm text-pr-text-faint">No game scheduled.</p>
             )}
-            <h3 className="mb-1 mt-3 text-xs uppercase tracking-wide text-pr-text-dim">Top scorers</h3>
+            {topPlayers(row.team).length > 0 && (
+              <h3 className="mb-1 mt-3 text-xs uppercase tracking-wide text-pr-text-dim">Top scorers</h3>
+            )}
             <ul className="text-sm">
               {topPlayers(row.team).map((player) => (
                 <li key={player.player_id}>

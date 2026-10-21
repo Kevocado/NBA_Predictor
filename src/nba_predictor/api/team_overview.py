@@ -70,7 +70,8 @@ def last_games_for_team(schedule: list[dict], team: str, before: str | None = No
             "game_date": game.get("game_date"),
             "opponent": game.get("away_team") if home else game.get("home_team"),
             "home": home,
-            "score": f"{game.get('home_pts')}–{game.get('away_pts')}",
+            # His own score first, so it agrees with the W/L beside it (home-away read as a loss for an away win).
+            "score": f"{game.get('home_pts')}–{game.get('away_pts')}" if home else f"{game.get('away_pts')}–{game.get('home_pts')}",
             "result": _result(game, team),
         })
     return out

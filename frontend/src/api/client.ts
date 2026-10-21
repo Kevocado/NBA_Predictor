@@ -157,6 +157,8 @@ export interface SeasonBounds {
 export interface PlayerProp {
   player_id: string;
   player_name: string;
+  /** His team now, for an upcoming game; absent for a finished one (the hub feed has it). */
+  team?: string | null;
   stat: string;
   predicted_value: number;
   actual_value: number | null;

@@ -88,6 +88,8 @@ class GameDetailOut(GameOut):
 class PlayerPropOut(BaseModel):
     player_id: str
     player_name: str
+    # The team he is on NOW for an upcoming game (ESPN roster); None for a finished game, where the hub feed has it.
+    team: str | None = None
     stat: str
     # A projection, in the stat's own unit -- points, rebounds, assists, made
     # threes. Deliberately not a probability: models/player_props.py is an

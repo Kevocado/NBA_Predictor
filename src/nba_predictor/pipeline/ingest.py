@@ -1027,6 +1027,10 @@ def compute_player_hub(games: list[dict], player_boxscores: dict[str, list[dict]
                 "points_per_game": round(_avg([e["points"] for e in entries]), 1),
                 "rebounds_per_game": round(_avg([e["rebounds"] for e in entries]), 1),
                 "assists_per_game": round(_avg([e["assists"] for e in entries]), 1),
+                # Threes made a game: the Players page's fourth leader board.
+                # A rate (three_pt_pct) is not a count, and the leader board wants
+                # the count.
+                "threes_per_game": round(_avg([e["fg3m"] for e in entries]), 1),
                 "fg_pct": round(total_fgm / total_fga, 3) if total_fga else 0.0,
                 "three_pt_pct": round(total_fg3m / total_fg3a, 3) if total_fg3a else 0.0,
                 "ft_pct": round(total_ftm / total_fta, 3) if total_fta else 0.0,

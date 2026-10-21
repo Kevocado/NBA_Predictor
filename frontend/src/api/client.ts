@@ -360,6 +360,39 @@ export interface PlayerHubRow {
   ft_pct: number;
   usage_rate: number;
   minutes_per_game: number;
+  /** Threes made per game. Absent until the hub cache is rewritten with it. */
+  threes_per_game?: number;
+}
+
+/** One game of a player's record: what happened, and what the model said. */
+export interface PlayerGame {
+  game_id: string;
+  game_date: string;
+  opponent: string;
+  home: boolean;
+  score: string;
+  actual: Record<string, number | null>;
+  projection: Record<string, number | null>;
+}
+
+/** A player's next game, with the model's projection for it. */
+export interface PlayerNextGame {
+  game_id: string;
+  game_date: string;
+  tip_off?: string | null;
+  opponent: string;
+  home: boolean;
+  projections: Record<string, number | null>;
+}
+
+/** One player's detail: their last ten games and their status. */
+export interface PlayerDetail {
+  player_id: string;
+  team: string | null;
+  games: PlayerGame[];
+  status: { status: string; source: string; dated: string } | null;
+  next_game?: PlayerNextGame | null;
+  averages?: Record<string, number | null>;
 }
 
 export interface PowerRankingRow {
@@ -460,6 +493,11 @@ export const api = {
   getSeasonFirstWeek: () => fetchJson<SeasonBounds>("/season/first-week"),
   getHubTeams: () => fetchJson<TeamHubRow[]>("/hub/teams"),
   getHubPlayers: () => fetchJson<PlayerHubRow[]>("/hub/players"),
+  /** Every player's next game, with the model's projection for it. The table's
+   *  last column. */
+  getHubPlayersNextGames: () => fetchJson<Record<string, PlayerNextGame>>("/hub/players/next-games"),
+  /** One player: their last ten games, their status, their next game. */
+  getHubPlayer: (playerId: string) => fetchJson<PlayerDetail>(`/hub/players/${playerId}`),
   getHubRankings: () => fetchJson<PowerRankingRow[]>("/hub/rankings"),
   getHubStandings: () => fetchJson<StandingsRow[]>("/hub/standings"),
   /** The Teams page's one payload: the league's ratings, every team's form,

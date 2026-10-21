@@ -632,6 +632,58 @@ def hub_players() -> list[dict]:
     return load_hub_cache(config.DATA_DIR / "cache" / "hub" / "players.json")
 
 
+@router.get("/hub/players/next-games")
+def hub_players_next_games(
+    schedule: list[dict] = Depends(get_schedule),
+    db_path: Path = Depends(get_db_path),
+    today: str = Depends(get_today),
+) -> dict:
+    """Every player's next game, with the model's projection for it.
+
+    The table's last column. A projection that is not there is null, never
+    zero: a player with no stored projection has no projection.
+    """
+    from ..api.player_details import next_game_projections
+
+    players = load_hub_cache(config.DATA_DIR / "cache" / "hub" / "players.json")
+    team_of = {str(p.get("player_id")): str(p.get("team") or "") for p in players if p.get("player_id")}
+    return next_game_projections(schedule, db_path, team_of, today)
+
+
+@router.get("/hub/players/{player_id}")
+def hub_player_detail(
+    player_id: str,
+    schedule: list[dict] = Depends(get_schedule),
+    db_path: Path = Depends(get_db_path),
+    injuries: list[dict] = Depends(get_injury_report_best_effort),
+    today: str = Depends(get_today),
+) -> dict:
+    """One player: their last ten games, their status, their next game."""
+    from ..api.player_details import next_game_projections, player_detail
+
+    players = load_hub_cache(config.DATA_DIR / "cache" / "hub" / "players.json")
+    row = next((p for p in players if str(p.get("player_id")) == str(player_id)), None)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Unknown player: {player_id}")
+    detail = player_detail(
+        schedule, db_path, str(player_id), str(row.get("team") or ""), injuries, today
+    )
+    detail["next_game"] = next_game_projections(
+        schedule, db_path, {str(player_id): str(row.get("team") or "")}, today
+    ).get(str(player_id))
+    detail["averages"] = {
+        "points_per_game": row.get("points_per_game"),
+        "rebounds_per_game": row.get("rebounds_per_game"),
+        "assists_per_game": row.get("assists_per_game"),
+        "fg_pct": row.get("fg_pct"),
+        "three_pt_pct": row.get("three_pt_pct"),
+        "ft_pct": row.get("ft_pct"),
+        "minutes_per_game": row.get("minutes_per_game"),
+        "rating": row.get("rating"),
+    }
+    return detail
+
+
 @router.get("/hub/rankings")
 def hub_rankings() -> list[dict]:
     return load_hub_cache(config.DATA_DIR / "cache" / "hub" / "rankings.json")

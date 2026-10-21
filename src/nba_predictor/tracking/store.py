@@ -580,6 +580,20 @@ def insert_player_outcome(
         return cur.lastrowid
 
 
+def get_player_outcomes_for_player(db_path: Path, player_id: str) -> list[sqlite3.Row]:
+    """Every recorded outcome for one player, oldest row first.
+
+    The drawer's last-ten-games chart reads the actuals from here: what a
+    player actually did, as recorded, rather than what a cache says.
+    """
+    with get_connection(db_path) as conn:
+        cur = conn.execute(
+            "SELECT * FROM game_player_outcomes WHERE player_id = ? ORDER BY recorded_at, id",
+            (str(player_id),),
+        )
+        return cur.fetchall()
+
+
 def get_player_outcomes_for_game(db_path: Path, game_id: str) -> list[sqlite3.Row]:
     with get_connection(db_path) as conn:
         cur = conn.execute(

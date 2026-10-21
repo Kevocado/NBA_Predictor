@@ -396,6 +396,10 @@ def test_a_row_serves_no_probability_field(client, tmp_path):
     assert set(row) == {
         "player_id", "player_name", "stat", "predicted_value",
         "actual_value", "rebuilt", "mae", "mae_pre_tip", "mae_n", "mae_n_pre_tip",
+        # The team the player plays for, so the box score can place a player on
+        # a side for a game that has not been played yet (#119). It is the
+        # player's own team, not a status and not a probability.
+        "team",
     }
     assert not any(
         token in field.lower() for field in row for token in ("prob", "pct", "percent", "chance", "odds")
@@ -631,6 +635,10 @@ def test_the_props_row_carries_no_availability_field(client, tmp_path):
     assert set(row) == {
         "player_id", "player_name", "stat", "predicted_value",
         "actual_value", "rebuilt", "mae", "mae_pre_tip", "mae_n", "mae_n_pre_tip",
+        # The team the player plays for, so the box score can place a player on
+        # a side for a game that has not been played yet (#119). It is the
+        # player's own team, not a status and not a probability.
+        "team",
     }
     assert not any(
         token in field.lower() for field in row

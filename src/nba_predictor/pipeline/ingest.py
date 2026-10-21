@@ -251,6 +251,9 @@ GUARD_MIN_AVERAGE = 0.25
 #: A clamp is a quality signal, not a fix: when more than this share of a run's projections needed one, the model is
 #: wrong and publishing a pile of "0.4 x average" as if it were modelled would be worse than publishing nothing.
 MAX_CLAMP_SHARE = 0.10
+# The trip-wire judges rotation players (rolling minutes at or above this): a broken model misses them by a lot, while
+# a deep-bench player with two prior games has a rolling average of noise and trips the band on any model.
+ROTATION_MINUTES = 15.0
 
 
 def guard_player_prediction(stat: str, predicted: float, rolling_average: float | None) -> float:
@@ -308,19 +311,24 @@ def score_upcoming_player_props(
     predictions = {stat: predict_player_stat(model, upcoming_frame[feature_cols]) for stat, model in models.items()}
 
     guarded: list[tuple] = []
-    clamped = 0
+    clamped = rot_clamped = rot_total = 0
     for i, row in upcoming_frame.iterrows():
+        rotation = float(row.get("minutes_trend", 0) or 0) >= ROTATION_MINUTES
         for stat in models:
             raw = float(predictions[stat][i])
             value = guard_player_prediction(stat, raw, row.get(f"{PLAYER_STAT_TARGET_COLUMNS[stat]}_roll"))
             clamped += value != raw
+            rot_total += rotation
+            rot_clamped += rotation and value != raw
             guarded.append((row, stat, value))
-    if guarded and clamped / len(guarded) > MAX_CLAMP_SHARE:
+    if guarded and rot_total and rot_clamped / rot_total > MAX_CLAMP_SHARE:
         logger.error(
-            "player props NOT published: %d of %d projections (%.0f%%) fell outside the sanity band around the player's own "
-            "rolling average; the player models are not trustworthy, retrain them", clamped, len(guarded), 100 * clamped / len(guarded),
+            "player props NOT published: %d of %d rotation-player projections (%.0f%%; %d of %d overall) fell outside the sanity "
+            "band around the player's own rolling average; the player models are not trustworthy, retrain them",
+            rot_clamped, rot_total, 100 * rot_clamped / rot_total, clamped, len(guarded),
         )
         return 0
+    logger.info("player prop guard: %d of %d rotation projections and %d of %d overall clamped", rot_clamped, rot_total, clamped, len(guarded))
 
     created_at = datetime.now(timezone.utc).isoformat()
     store.insert_player_predictions(db_path, [

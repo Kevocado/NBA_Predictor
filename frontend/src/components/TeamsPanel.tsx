@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
   api,
+  type FormEntry,
   type PlayerHubRow,
   type PowerRankingRow,
   type StandingsRow,
@@ -52,7 +53,7 @@ interface Row {
   off: { value: number | null; rank: number | null };
   def: { value: number | null; rank: number | null };
   pace: { value: number | null; rank: number | null };
-  form: string[];
+  form: FormEntry[];
   streak: number;
 }
 
@@ -211,14 +212,29 @@ function buildRows(data: {
 }
 
 /** The last ten results, oldest first: a dot per game, green or red. */
-function FormDots({ form }: { form: string[] }) {
+/**
+ * The last ten results, oldest first: a dot per game, green or red.
+ *
+ * **Last season's games are dimmed.** Early in a season a team has played one
+ * or two games, so its last ten are mostly last season's -- and a row of
+ * full-coloured dots reads as this season's form when it is not. The cell says
+ * how many of them are from last season.
+ */
+function FormDots({ form }: { form: FormEntry[] }) {
   if (form.length === 0) return <span className="text-pr-text-faint">—</span>;
+  const fromLastSeason = form.filter((entry) => !entry.this_season).length;
+  const label = `${form.map((entry) => entry.result).join(" ")}${
+    fromLastSeason > 0 ? ` — ${fromLastSeason} from last season` : ""
+  }`;
   return (
-    <span className="inline-flex items-center gap-0.5" aria-label={form.join(" ")}>
-      {form.map((result, i) => (
+    <span className="inline-flex items-center gap-0.5" aria-label={label} title={label}>
+      {form.map((entry, i) => (
         <span
           key={i}
-          className={`inline-block h-2 w-2 rounded-full ${result === "W" ? "bg-pr-win" : "bg-pr-loss"}`}
+          data-last-season={entry.this_season ? undefined : "true"}
+          className={`inline-block h-2 w-2 rounded-full ${
+            entry.result === "W" ? "bg-pr-win" : "bg-pr-loss"
+          } ${entry.this_season ? "" : "opacity-40"}`}
           aria-hidden="true"
         />
       ))}

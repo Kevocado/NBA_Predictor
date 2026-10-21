@@ -3,7 +3,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import TeamsPanel from "./TeamsPanel";
-import { api, type PlayerHubRow, type PowerRankingRow, type StandingsRow, type TeamHubRow, type TeamOverview } from "../api/client";
+import { api, type FormEntry, type PlayerHubRow, type PowerRankingRow, type StandingsRow, type TeamHubRow, type TeamOverview } from "../api/client";
 
 vi.mock("../api/client", () => ({
   api: {
@@ -80,6 +80,14 @@ const RANKS: Record<string, Record<string, number>> = {
 
 const ratingFigure = (value: number, rank: number) => ({ value, rank });
 
+/** A form: the results, and the season each was played in. */
+const form = (results: ("W" | "L")[], thisSeason: boolean): FormEntry[] =>
+  results.map((result, i) => ({
+    result,
+    game_date: thisSeason ? `2026-10-${10 + i}` : `2026-05-${10 + i}`,
+    this_season: thisSeason,
+  }));
+
 const overview: TeamOverview = {
   as_of: "2026-11-01",
   n_teams: 30,
@@ -93,7 +101,7 @@ const overview: TeamOverview = {
       ),
     ]),
   ),
-  form: { BOS: ["W", "W", "L"], MIA: ["W", "L"], LAL: ["L", "W", "W"] },
+  form: { BOS: form(["W", "W", "L"], true), MIA: form(["W", "L"], true), LAL: form(["L", "W", "W"], true) },
   last_games: {
     BOS: [{ game_id: "g1", game_date: "2026-10-30", opponent: "MIA", home: true, score: "110–100", result: "W" }],
     MIA: [],
@@ -226,6 +234,27 @@ describe("TeamsPanel", () => {
     // The same eleven metrics the game detail shows.
     expect(within(ratings).getByText("eFG%")).toBeInTheDocument();
     expect(within(ratings).getByText("3P% allowed")).toBeInTheDocument();
+  });
+
+  it("dims the dots from last season, and leaves this season's alone", async () => {
+    vi.mocked(api.getHubTeamOverview).mockResolvedValue({
+      ...overview,
+      form: {
+        BOS: form(Array(10).fill("W"), false),
+        MIA: form(Array(10).fill("L"), true),
+      },
+    } as never);
+
+    renderPanel();
+    await screen.findByTestId("teams-panel");
+
+    const table = within(screen.getByRole("table"));
+    // A team that has not played this season: every dot is last season's.
+    const lastSeason = table.getByLabelText(/10 from last season/);
+    expect(lastSeason.querySelectorAll('[data-last-season="true"]')).toHaveLength(10);
+    // A team that has: none of them is.
+    const thisSeason = table.getByLabelText(/^L L L/);
+    expect(thisSeason.querySelectorAll('[data-last-season="true"]')).toHaveLength(0);
   });
 
   it("does not call a four-game lead 'clinched' before the league has settled", async () => {

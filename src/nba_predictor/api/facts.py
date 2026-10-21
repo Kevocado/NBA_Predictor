@@ -63,6 +63,12 @@ BOX_LOOKBACK_MAX_DAYS = 400
 
 _BOX_HISTORY: dict = {}
 
+#: How many of the kept windows are for dates that have ALREADY been played.
+#: A finished game is read for the form it was won or lost on, and that form
+#: is the window of the games before it -- so the warmer keeps a few past
+#: dates, not only the ones still to come.
+BOX_HISTORY_PAST = 3
+
 #: How many `as_of` windows to keep. A game page asks for one and the explainer's
 #: pre-generation walks the week's games, so a handful covers a full pass; more
 #: than that and the oldest entries have gone cold anyway.
@@ -236,9 +242,23 @@ def start_box_history_warmer(
                     str(g["game_date"]) for g in schedule
                     if not g.get("completed") and g.get("game_date")
                 })
-                if not upcoming:
-                    logger.info("no upcoming games to warm duel history for")
-                dates = set(upcoming[:BOX_HISTORY_KEEP]) | pending
+                # The last few PLAYED dates as well: a finished game's pre-game
+                # window is the one a reader opens it for, and the warmer only
+                # had the dates that have not been played yet.
+                played = sorted(
+                    {
+                        str(g["game_date"]) for g in schedule
+                        if g.get("completed") and g.get("game_date")
+                    },
+                    reverse=True,
+                )
+                if not upcoming and not played:
+                    logger.info("no games to warm duel history for")
+                dates = (
+                    set(upcoming[:BOX_HISTORY_KEEP - BOX_HISTORY_PAST])
+                    | set(played[:BOX_HISTORY_PAST])
+                    | pending
+                )
                 seen_state = state
             elif pending:
                 # Same schedule, but a date failed last time: retry only that.
@@ -302,7 +322,7 @@ def _rating_value(row, key: str) -> dict:
     }
 
 
-def _window_caption(history: pd.DataFrame, as_of: str) -> str:
+def _window_caption(history: pd.DataFrame, as_of: str, before_game: bool = False) -> str:
     """What the window is, in words, for the reader under the table.
 
     "Last 15 games each" is the claim the duels make. Early in a season a team
@@ -312,14 +332,14 @@ def _window_caption(history: pd.DataFrame, as_of: str) -> str:
     """
     from ..features.four_factors import season_of
 
-    caption = f"Last {BOX_WINDOW} games each"
+    caption = f"{'Before the game. ' if before_game else ''}Last {BOX_WINDOW} games each"
     dates = sorted({str(d) for d in history.get("game_date", []) if d})
     if dates and season_of(dates[0]) != season_of(str(as_of)):
         caption += ". Early season includes last season's games"
     return caption + "."
 
 
-def ratings_payload(as_of: str, teams: list[str]) -> dict | None:
+def ratings_payload(as_of: str, teams: list[str], before_game: bool = False) -> dict | None:
     """These teams' ratings, their league ranks and the window they came from.
 
     None when the league is not ranked yet -- no history, or a team that has
@@ -336,7 +356,7 @@ def ratings_payload(as_of: str, teams: list[str]) -> dict | None:
     return {
         "as_of": str(as_of),
         "n_teams": int(len(ratings)),
-        "caption": _window_caption(history, as_of),
+        "caption": _window_caption(history, as_of, before_game),
         "metrics": [
             {
                 "key": key,
@@ -574,7 +594,7 @@ def _players(game_id: str, teams: set[str]) -> list[dict]:
 
 
 
-def _context(game: dict, schedule: list[dict], started: bool = False, pick: dict | None = None) -> dict:
+def _context(game: dict, schedule: list[dict], pick: dict | None = None) -> dict:
     """Rest, back-to-back and the four-factors rank duels.
 
     Rest and back-to-back come from the schedule and only when it already
@@ -590,22 +610,26 @@ def _context(game: dict, schedule: list[dict], started: bool = False, pick: dict
     if game.get("home_back_to_back") is not None:
         context["back_to_back"] = bool(game.get("home_back_to_back") or game.get("away_back_to_back"))
 
-    if not started:
-        home, away = game["home_team"], game["away_team"]
-        pick_side = None
-        if pick:
-            # The duel's `toward` is "home"/"away", so the pick has to be read as
-            # a side rather than as the team name `_favourite` returns.
-            pick_side = "home" if pick.get("label") == home else "away" if pick.get("label") == away else None
-        try:
-            matchups = _matchup_rows(home, away, game["game_date"], pick_side)
-        except Exception:
-            # A duel is an enhancement on a game page, and the page has to
-            # survive its absence -- the same rule the signals endpoint follows.
-            logger.exception("matchup duels unavailable for %s", game.get("game_id"))
-            matchups = []
-        if matchups:
-            context["matchups"] = matchups
+    # The duels are the form as it stood BEFORE the game, and the window is
+    # built from the games before the game's own date -- so the game itself is
+    # not in it, and a finished game's duels are the form it was won or lost
+    # on. A finished game used to answer with no duels at all, which left the
+    # summary of a played game with nothing to read.
+    home, away = game["home_team"], game["away_team"]
+    pick_side = None
+    if pick:
+        # The duel's `toward` is "home"/"away", so the pick has to be read as
+        # a side rather than as the team name `_favourite` returns.
+        pick_side = "home" if pick.get("label") == home else "away" if pick.get("label") == away else None
+    try:
+        matchups = _matchup_rows(home, away, game["game_date"], pick_side)
+    except Exception:
+        # A duel is an enhancement on a game page, and the page has to
+        # survive its absence -- the same rule the signals endpoint follows.
+        logger.exception("matchup duels unavailable for %s", game.get("game_id"))
+        matchups = []
+    if matchups:
+        context["matchups"] = matchups
     return context
 
 
@@ -717,7 +741,7 @@ def get_facts(game_id: str) -> dict:
         "pick": pick,
         "markets": [] if (started and chosen is None) else _markets(game, prediction),
         "drivers": [],
-        "context": _context(game, schedule, started=started, pick=pick),
+        "context": _context(game, schedule, pick=pick),
         "players": _players(str(game_id), {home_team, away_team}),
         "record": _record(),
         "result": _result(game, status, pick_timing, home_prob),

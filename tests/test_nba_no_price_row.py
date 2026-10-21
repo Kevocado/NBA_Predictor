@@ -70,7 +70,7 @@ def _bundles(offline):
             "pick": None,
             "markets": facts_mod._markets(game, rows[0] if rows else None),
             "drivers": [],
-            "context": facts_mod._context(game, schedule, started=game["completed"], pick=None),
+            "context": facts_mod._context(game, schedule, pick=None),
             "players": [],
             "record": None,
         }
@@ -105,7 +105,7 @@ def test_an_nba_context_never_carries_a_price_flavoured_key(offline):
     from tests.test_facts import _game
 
     game = _game()
-    context = facts_mod._context(game, [game], started=False, pick={"label": "BOS", "prob": 0.62})
+    context = facts_mod._context(game, [game], pick={"label": "BOS", "prob": 0.62})
     for key in context:
         assert key in {"rest", "back_to_back", "matchups"}, (
             f"context carries {key!r}: an unexpected key on an NBA facts bundle"

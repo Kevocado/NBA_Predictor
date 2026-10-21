@@ -287,18 +287,32 @@ def test_facts_carry_matchups_for_an_upcoming_game(api, monkeypatch):
     assert body["context"]["matchups"] == DUEL_ROWS
 
 
-def test_a_started_game_has_no_matchups(api, monkeypatch):
-    """A duel ranks form that has already been played out. Quoting one after
-    tip-off is hindsight wearing a prediction's clothes."""
-    monkeypatch.setattr(facts_mod, "_matchup_rows", lambda *a, **k: DUEL_ROWS)
+def test_a_finished_game_carries_its_matchups(api, monkeypatch):
+    """The duels of a finished game are the form it was won or lost on.
+
+    The window is built from the games BEFORE the game's own date, so the game
+    itself is not in it. A finished game's duels are therefore not hindsight --
+    they are what a reader wants about a game that is over: how each side
+    looked going in. A finished game used to answer with no duels at all,
+    which left the summary of a played game with nothing to read.
+    """
+    seen: dict = {}
+
+    def rows(home, away, as_of, pick_side):
+        seen["as_of"] = as_of
+        return DUEL_ROWS
+
+    monkeypatch.setattr(facts_mod, "_matchup_rows", rows)
     monkeypatch.setattr(
         facts_mod, "_schedule",
-        lambda: [_game(completed=True, home_pts=110, away_pts=100, tip_off="2026-01-15T12:00:00Z")],
+        lambda: [_game(completed=True, home_pts=110, away_pts=100)],
     )
 
     body = api.get(f"/facts/{GAME_ID}").json()
 
-    assert "matchups" not in body["context"]
+    assert body["context"]["matchups"] == DUEL_ROWS
+    # As of the game's own date, so the game is not in its own window.
+    assert seen["as_of"] == "2026-01-16"
 
 
 def test_matchups_are_omitted_rather_than_an_empty_row(api, monkeypatch):

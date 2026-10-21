@@ -266,7 +266,9 @@ def _game_ratings(game: dict) -> dict | None:
 
     try:
         return facts_mod.ratings_payload(
-            str(game["game_date"]), [game["home_team"], game["away_team"]]
+            str(game["game_date"]),
+            [game["home_team"], game["away_team"]],
+            before_game=bool(game.get("completed")),
         )
     except Exception:  # noqa: BLE001 - a rating is an enhancement, never the page
         logger.exception("ratings unavailable for %s", game.get("game_id"))

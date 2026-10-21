@@ -151,3 +151,27 @@ def test_the_game_detail_serves_the_ratings(tmp_path, monkeypatch):
     assert body["ratings"] is not None
     assert body["ratings"]["n_teams"] == 30
     assert set(body["ratings"]["teams"]) == {"T29", "T00"}
+
+
+def test_a_finished_game_serves_the_ratings_as_they_stood_before_it(monkeypatch):
+    """A finished game shows the form each side took into it.
+
+    The window is built from the games before the game's own date, so the game
+    is not in its own window, and the caption says which is which.
+    """
+    monkeypatch.setattr(facts_mod, "_box_score_history", lambda as_of: _league())
+
+    payload = facts_mod.ratings_payload("2026-10-20", ["T00", "T29"], before_game=True)
+
+    assert payload is not None
+    assert payload["caption"].startswith("Before the game.")
+    assert "Last 15 games each" in payload["caption"]
+
+
+def test_a_game_still_to_come_does_not_say_before_the_game(monkeypatch):
+    monkeypatch.setattr(facts_mod, "_box_score_history", lambda as_of: _league())
+
+    payload = facts_mod.ratings_payload("2026-10-21", ["T00", "T29"])
+
+    assert payload is not None
+    assert not payload["caption"].startswith("Before the game.")

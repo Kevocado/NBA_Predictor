@@ -334,11 +334,41 @@ def test_the_warmer_warms_only_as_many_dates_as_the_cache_holds(offline, monkeyp
     ).join(timeout=5)
 
     assert warmed == sorted(warmed), f"the warmer warmed {warmed} out of order"
-    assert len(warmed) == facts_mod.BOX_HISTORY_KEEP, (
-        f"the warmer warmed {len(warmed)} dates into a {facts_mod.BOX_HISTORY_KEEP}-entry "
-        "cache: the earliest would be evicted before being served"
+    assert len(warmed) == facts_mod.BOX_HISTORY_KEEP - facts_mod.BOX_HISTORY_PAST, (
+        f"the warmer warmed {len(warmed)} dates; the rest of the cache is for the "
+        "dates that have already been played"
     )
     assert warmed[0] == "2026-03-18", f"the warmer skipped the earliest date: {warmed[0]}"
+
+
+def test_the_warmer_covers_the_dates_that_have_already_been_played(offline, monkeypatch):
+    """A finished game is read for the form it was won or lost on, and that form
+    is the window of the games BEFORE it -- so the warmer keeps a few played
+    dates, not only the ones still to come."""
+    warmed: list[str] = []
+    monkeypatch.setattr(
+        facts_mod, "_schedule",
+        lambda: [
+            _game("played0", "2026-03-16", "BOS", "MIA", completed=True),
+            _game("played1", "2026-03-17", "BOS", "MIA", completed=True),
+            *[_game(f"g{i}", f"2026-03-{18 + i:02d}", "BOS", "MIA", completed=False) for i in range(12)],
+        ],
+    )
+    monkeypatch.setattr(facts_mod, "warm_box_history", lambda as_of: warmed.append(as_of) or True)
+
+    ticked = {"n": 0}
+    facts_mod.start_box_history_warmer(
+        __import__("pathlib").Path("/nonexistent/schedule.json"),
+        sleep=lambda _: ticked.__setitem__("n", ticked["n"] + 1),
+        should_stop=lambda: ticked["n"] >= 1,
+    ).join(timeout=5)
+
+    assert "2026-03-17" in warmed, f"the warmer skipped the last played date: {warmed}"
+    assert "2026-03-16" in warmed, f"the warmer skipped the second-to-last played date: {warmed}"
+    assert len(warmed) <= facts_mod.BOX_HISTORY_KEEP, (
+        f"the warmer warmed {len(warmed)} dates into a {facts_mod.BOX_HISTORY_KEEP}-entry cache: "
+        "the earliest would be evicted before being served"
+    )
 
 
 def test_a_date_whose_warm_fails_is_retried(offline, monkeypatch):

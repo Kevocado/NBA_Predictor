@@ -46,6 +46,8 @@ export interface Game {
   completed: boolean;
   home_pts: number | null;
   away_pts: number | null;
+  /** Reported-Out players who normally play real minutes; upcoming games only. */
+  key_out?: { team: string; player_name: string }[];
 }
 
 export interface MarketPrediction {

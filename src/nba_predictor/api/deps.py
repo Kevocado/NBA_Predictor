@@ -58,6 +58,13 @@ def get_roster_index() -> dict[str, set[str]] | None:
     return {team: {p["player_id"] for p in players} for team, players in cached.items()}
 
 
+def get_roster_cache() -> dict[str, list[dict]] | None:
+    """The ingest's cached rosters (names and injury status), never the network; None if there is no cache."""
+    from nba_predictor.data import rosters
+
+    return rosters.cached_rosters()
+
+
 def get_injury_report_best_effort() -> list[dict]:
     """Best-effort injury report for game detail: returns empty list on failure.
 

@@ -536,7 +536,8 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
               state={flowState}
               bundle={flowBundle}
               request={() => api.explainGame(gameId)}
-              loadContext={api.loadContext}
+              // No loadContext: the kit's rank-only Matchup table would sit beside the site's own ratings table
+              // (value + rank, below) and say the same thing with less. The AI read still gets the facts server-side.
               fixtureId={gameId}
               extras={{ tiles: panel.tiles, segments: panel.segments, moment: "tip-off" }}
             />

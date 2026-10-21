@@ -565,11 +565,12 @@ describe("GameDetailModal and the plain-English panel", () => {
     expect(explain).toHaveBeenCalledTimes(1);
   });
 
-  it("hands the context loader this game's id as the fixtureId", async () => {
+  it("does not load the kit's rank-only matchup table: the site's own ratings table says it with figures", async () => {
     openPregame();
     render(<GameDetailModal gameId="g1" onClose={() => {}} />);
     await screen.findByTestId("fixture-flow");
-    await waitFor(() => expect(api.loadContext).toHaveBeenCalledWith("g1"));
+    expect(api.loadContext).not.toHaveBeenCalled();
+    expect(screen.queryByText(/^matchup$/i)).toBeNull();
   });
 
   it("leaves every figure to the block once the summary is in", async () => {

@@ -31,7 +31,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           # 3.13, because that is what `requires-python = ">=3.13"` asks for and
           # what the Dockerfile's `python:3.13-slim` serves. A gate on any other

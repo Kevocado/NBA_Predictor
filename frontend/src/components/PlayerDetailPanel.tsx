@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, type PlayerHubRow, type PlayerNextGame, type PlayerDetail } from "../api/client";
 import { STAT_LABELS, type StatKey } from "../lib/boxScore";
 import PlayerAvatar from "./PlayerAvatar";
@@ -22,6 +22,30 @@ export function PlayerDetailPanel({
   bands?: Record<string, number> | null;
 }) {
   const [detail, setDetail] = useState<PlayerDetail | null>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  // **The focus moves into the record when it opens.** A reader who opened a
+  // player's record should be reading it, not the table they came from, and a
+  // screen reader says nothing about a panel that opened below the button.
+  useEffect(() => {
+    rootRef.current?.focus();
+  }, []);
+
+  /**
+   * Close the record.
+   *
+   * The shared table owns the open row, and the only way to close it is the
+   * toggle it drew. This finds that toggle -- the button in the row above,
+   * the one that says it is expanded -- presses it, and puts the focus back
+   * where the reader left it.
+   */
+  const close = () => {
+    const toggle = rootRef.current
+      ?.closest("table")
+      ?.querySelector<HTMLButtonElement>('button[aria-expanded="true"]');
+    toggle?.click();
+    toggle?.focus();
+  };
 
   useEffect(() => {
     let stale = false;
@@ -42,11 +66,26 @@ export function PlayerDetailPanel({
   const games = detail?.games ?? [];
 
   return (
-    <div className="grid gap-4 sm:grid-cols-[auto_1fr]" data-testid={`player-detail-${player.player_id}`}>
+    <div
+      ref={rootRef}
+      tabIndex={-1}
+      className="grid gap-4 sm:grid-cols-[auto_1fr]"
+      data-testid={`player-detail-${player.player_id}`}
+    >
       <div className="flex items-start gap-3">
         <PlayerAvatar playerId={player.player_id} name={player.player_name} size={64} />
         <div>
-          <div className="text-base font-semibold">{player.player_name}</div>
+          <div className="flex items-start justify-between gap-3">
+            <div className="text-base font-semibold">{player.player_name}</div>
+            <button
+              type="button"
+              onClick={close}
+              data-testid="player-record-close"
+              className="shrink-0 rounded border border-pr-rule px-2 py-1 text-xs text-pr-text-dim hover:border-pr-accent"
+            >
+              Close
+            </button>
+          </div>
           <div className="flex items-center gap-1 text-xs text-pr-text-dim">
             <TeamLogo team={player.team} size={20} ariaHidden />
             {player.team} · {player.position || "—"}

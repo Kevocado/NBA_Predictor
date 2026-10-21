@@ -200,6 +200,35 @@ def test_a_collapsed_model_publishes_nothing(tmp_path):
     assert store.get_player_predictions_for_game(db_path, "next") == []
 
 
+def test_clamps_on_deep_bench_players_alone_do_not_block_publication(tmp_path):
+    """A 6-minute player's rolling average is noise: a model that misses it must not take the whole slate down."""
+    import joblib
+    from sklearn.dummy import DummyRegressor
+
+    from nba_predictor.pipeline import ingest
+    from nba_predictor.tracking import store
+
+    games, boxes = [], {}
+    for i in range(3):
+        gid = f"c{i}"
+        games.append(_game(gid, f"2026-10-1{i}", "DET", "MIA", True))
+        bench = _box("scrub", "Scrub", "DET", 2.0)
+        bench["minutes"] = 6.0
+        boxes[gid] = [bench]
+    games.append(_game("next", "2026-10-21", "DET", "CHI", False))
+
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    for stat in ingest.PLAYER_STAT_TARGET_COLUMNS:
+        m = DummyRegressor(strategy="constant", constant=30.0)
+        m.fit([[0.0] * 12], [30.0])
+        joblib.dump(m, models_dir / f"player_{stat}_model.pkl")
+
+    db_path = tmp_path / "t.db"
+    store.init_db(db_path)
+    assert ingest.score_upcoming_player_props(games, boxes, models_dir, db_path, "v-test") > 0
+
+
 # ---------------------------------------------------------------------------
 # Current rosters (ESPN) are the authority; Out players get no projection
 # ---------------------------------------------------------------------------

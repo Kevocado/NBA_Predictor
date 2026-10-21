@@ -66,3 +66,14 @@ def test_a_finished_game_with_results_shows_only_the_players_who_played(client):
     app.dependency_overrides[deps.get_roster_index] = lambda: None
     _record_outcome(client, "done", "tatum")                      # Brown never appeared
     assert _names(client, "done") == ["Jayson Tatum"]
+
+
+def test_an_upcoming_projection_carries_the_team_he_is_on_now(client):
+    app.dependency_overrides[deps.get_roster_index] = lambda: {"BOS": {"tatum"}, "DET": {"brown"}, "PHI": set()}
+    rows = client.get("/games/up/players").json()
+    assert {row["player_name"]: row["team"] for row in rows} == {"Jayson Tatum": "BOS", "Jaylen Brown": "DET"}
+
+
+def test_a_finished_game_projection_has_no_team_claim(client):
+    app.dependency_overrides[deps.get_roster_index] = lambda: {"BOS": {"tatum"}, "DET": set()}
+    assert {row["team"] for row in client.get("/games/done/players").json()} == {None}

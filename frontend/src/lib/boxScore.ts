@@ -58,7 +58,7 @@ export function pivotProps(props: PlayerProp[]): BoxScoreRow[] {
       row = {
         player_id: prop.player_id,
         player_name: prop.player_name,
-        team: "",
+        team: prop.team ?? "",
         position: "",
         predicted: {},
         actual: {},
@@ -80,12 +80,12 @@ export function pivotProps(props: PlayerProp[]): BoxScoreRow[] {
   return [...rows.values()];
 }
 
-/** Attach each player's real team and position from the season hub feed. */
+/** Attach each player's position (and team, unless the projection already carries his current one) from the season hub feed. */
 export function attachHubRows(rows: BoxScoreRow[], hub: PlayerHubRow[]): BoxScoreRow[] {
   const byId = new Map(hub.map((p) => [p.player_id, p]));
   return rows.map((row) => {
     const match = byId.get(row.player_id);
-    return match ? { ...row, team: match.team, position: match.position } : row;
+    return match ? { ...row, team: row.team || match.team, position: match.position } : row;
   });
 }
 

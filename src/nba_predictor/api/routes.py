@@ -509,10 +509,12 @@ def get_game_players(
     # An UPCOMING game shows only players on the two teams' current rosters: older scoring runs assigned players from
     # box scores, so a traded player's stale rows (Jaylen Brown on BOS, opening week 2026) can still sit in the store.
     # A finished game keeps whoever played in it. Unknown rosters filter nothing.
+    team_by_player: dict[str, str] = {}
     if roster_index is not None and not game.get("completed"):
-        on_roster = roster_index.get(game.get("home_team"), set()) | roster_index.get(game.get("away_team"), set())
-        if on_roster:
-            picks = {key: value for key, value in picks.items() if key[0] in on_roster}
+        for team in (game.get("home_team"), game.get("away_team")):
+            team_by_player.update({player_id: team for player_id in roster_index.get(team, set())})
+        if team_by_player:
+            picks = {key: value for key, value in picks.items() if key[0] in team_by_player}
 
     # A FINISHED game with recorded results shows the players who played: a projection for someone who never
     # appeared (scored from an old roster guess, or a rested star) has nothing to be judged against.
@@ -538,6 +540,7 @@ def get_game_players(
             PlayerPropOut(
                 player_id=player_id,
                 player_name=name_by_id.get(player_id, player_id),
+                team=team_by_player.get(player_id),
                 stat=stat,
                 predicted_value=pick["predicted_value"],
                 actual_value=actual_by_key.get((player_id, stat)),

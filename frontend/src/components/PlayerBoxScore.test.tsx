@@ -105,6 +105,14 @@ describe("boxScore team split", () => {
     expect(unattributed).toHaveLength(0);
   });
 
+  it("places an upcoming-game player by the team on his projection when the hub feed has not seen him play", () => {
+    const props = propsFor("new1", "New Guy", [10, 4, 3, 1]).map((p) => ({ ...p, team: "BOS" }));
+    const rows = attachHubRows(pivotProps(props), []);
+    const { home, unattributed } = splitByTeam(rows, "BOS", "MIA");
+    expect(home.map((r) => r.player_id)).toEqual(["new1"]);
+    expect(unattributed).toHaveLength(0);
+  });
+
   it("returns a player it cannot place instead of guessing a side", () => {
     const hub = [...allHub.filter((p) => p.player_id !== "a2")];
     const rows = attachHubRows(pivotProps(allProps), hub);

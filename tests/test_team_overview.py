@@ -59,7 +59,7 @@ def test_the_last_five_games_carry_the_score_and_the_result():
 
     assert len(games) <= DETAIL_GAMES
     assert games[-1]["opponent"] == "MIA"
-    assert games[-1]["score"] == "120–118"
+    assert games[-1]["score"] == "118–120"      # BOS (away) scored 118: his own score first, beside the L
     assert games[-1]["result"] == "L"
     assert games[-1]["home"] is False
 

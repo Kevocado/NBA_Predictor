@@ -332,6 +332,30 @@ def insert_prediction(
         return cur.lastrowid
 
 
+def insert_predictions(db_path: Path, rows: Sequence[dict], attempts: int = 4) -> int:
+    """Many team predictions in ONE transaction with a retry, like `insert_player_predictions` (same VPS disk-I/O failure)."""
+    batch = [(r["game_id"], r["created_at"], r["model_version"], r["home_win_prob"], r["predicted_margin"], r["predicted_total"]) for r in rows]
+    for attempt in range(attempts):
+        try:
+            with get_connection(db_path) as conn:
+                conn.executemany(
+                    """
+                    INSERT INTO predictions
+                        (game_id, created_at, model_version, home_win_prob, predicted_margin, predicted_total)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    batch,
+                )
+                conn.commit()
+            return len(batch)
+        except sqlite3.OperationalError as exc:
+            if attempt == attempts - 1:
+                raise
+            logger.warning("bulk prediction insert failed (%s); retrying %d/%d", exc, attempt + 1, attempts - 1)
+            time.sleep(2 * (attempt + 1))
+    return 0
+
+
 def get_predictions_for_game(db_path: Path, game_id: str) -> list[sqlite3.Row]:
     with get_connection(db_path) as conn:
         cur = conn.execute(

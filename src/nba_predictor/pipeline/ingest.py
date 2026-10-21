@@ -389,20 +389,13 @@ def score_and_store_player_predictions(training_df: pd.DataFrame, models_dir: Pa
     predictions = {stat: predict_player_stat(model, frame[feature_cols]) for stat, model in models.items()}
 
     created_at = datetime.now(timezone.utc).isoformat()
-    stored = 0
-    for i, row in frame.iterrows():
-        for stat in models:
-            store.insert_player_prediction(
-                db_path,
-                game_id=row["game_id"],
-                player_id=row["player_id"],
-                stat=stat,
-                predicted_value=float(predictions[stat][i]),
-                created_at=created_at,
-                position=row.get("position"),
-            )
-            stored += 1
-    return stored
+    rows = [
+        dict(game_id=row["game_id"], player_id=row["player_id"], stat=stat, predicted_value=float(predictions[stat][i]),
+             created_at=created_at, position=row.get("position"))
+        for i, row in frame.iterrows()
+        for stat in models
+    ]
+    return store.insert_player_predictions(db_path, rows)
 
 
 def fetch_schedule_range(start_date: str, end_date: str) -> list[dict]:

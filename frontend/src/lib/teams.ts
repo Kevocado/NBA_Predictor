@@ -35,3 +35,8 @@ export const TEAMS: Record<string, { name: string; color: string }> = {
 
 export const teamName = (code: string) => TEAMS[code]?.name ?? code;
 export const teamColor = (code: string): string | undefined => TEAMS[code]?.color;
+
+// The league's own alignment, which does not change mid-season. A team that has not played yet has no standings row to
+// say which conference it is in, and an East view that lists only the teams that have played is wrong.
+const EAST = new Set(["ATL", "BKN", "BOS", "CHA", "CHI", "CLE", "DET", "IND", "MIA", "MIL", "NYK", "ORL", "PHI", "TOR", "WAS"]);
+export const conferenceOf = (code: string): "East" | "West" | "" => (code in TEAMS ? (EAST.has(code) ? "East" : "West") : "");

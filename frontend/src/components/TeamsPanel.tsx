@@ -13,7 +13,7 @@ import { StatTable, type Column, type Separator } from "../predictor-ui";
 import { rankTier } from "../predictor-ui/lib/rankTier";
 import { RatingList, RatingValue } from "./ratings";
 import { standingsStatus } from "../lib/seasonCaption";
-import { teamName } from "../lib/teams";
+import { teamName, conferenceOf } from "../lib/teams";
 import TeamLogo from "./TeamLogo";
 
 /**
@@ -193,7 +193,7 @@ function playInLines(rows: Row[], conferenceSeeded: boolean): Separator[] {
 }
 
 function teamConference(standings: StandingsRow[], team: string): string {
-  return standings.find((row) => row.abbreviation === team)?.conference ?? "";
+  return standings.find((row) => row.abbreviation === team)?.conference ?? conferenceOf(team);
 }
 
 /** One row per team, from the four feeds joined on the team code. */

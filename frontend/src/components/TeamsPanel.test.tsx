@@ -187,6 +187,18 @@ describe("TeamsPanel", () => {
     expect(within(table()).getByText("Lakers")).toBeInTheDocument();
   });
 
+  it("lists a team that has not played yet under its own conference", async () => {
+    // Early season: the standings only hold the teams that have played, but the East view is all fifteen East teams.
+    vi.mocked(api.getHubTeams).mockResolvedValue([...teams, { abbreviation: "ORL", conference: "East", division: "Southeast", wins: 0, losses: 0, points_per_game: 0, opp_points_per_game: 0, net_rating: 0, pace: 0, streak: 0 }] as never);
+    renderPanel();
+    await screen.findByTestId("teams-panel");
+    const group = screen.getByRole("group", { name: "Conference" });
+    await userEvent.click(within(group).getByRole("button", { name: "East" }));
+    expect(within(screen.getByRole("table")).getByText("Magic")).toBeInTheDocument();
+    await userEvent.click(within(group).getByRole("button", { name: "West" }));
+    expect(within(screen.getByRole("table")).queryByText("Magic")).toBeNull();
+  });
+
   it("names the league's best at each thing", async () => {
     renderPanel();
     await screen.findByTestId("teams-panel");

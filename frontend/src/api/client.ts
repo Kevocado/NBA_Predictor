@@ -15,6 +15,9 @@ export interface Prediction {
   home_win_probability: number;
   predicted_margin: number;
   predicted_total: number;
+  // The market line the cover probability is priced against (None when no line).
+  market_point?: number | null;
+  market_total_point?: number | null;
   // Spread cover probability (None when no line available)
   cover_prob_spread?: number | null;
   // Total over probability (None when no line available)

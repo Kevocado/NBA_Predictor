@@ -11,6 +11,7 @@ import { teamName } from "../lib/teams";
 import { ErrorState, FixtureExplainer, SignalRows, Skeleton, StatusBadge, kickoff, pct, signalIsDrawn, stat, statusWords, type Signal } from "../predictor-ui";
 import { panelFacts } from "../predictor-ui/lib/panelFacts";
 import PlayerBoxScore from "./PlayerBoxScore";
+import { signedLine } from "../lib/lines";
 
 interface GameDetailModalProps {
   gameId: string;
@@ -588,11 +589,10 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
               Other model markets
             </h3>
             <div className="grid gap-2 sm:grid-cols-2">
-              {detail.prediction.cover_prob_spread !== null && detail.prediction.cover_prob_spread !== undefined && (
+              {detail.prediction.cover_prob_spread !== null && detail.prediction.cover_prob_spread !== undefined && detail.prediction.market_point != null && (
                 <div className="p-2 rounded border border-[var(--color-line)] bg-[var(--color-court-950)]">
-                  <div className="text-sm text-[var(--color-net-faint)]">Spread cover chance</div>
-                  <div className="text-lg font-pr-display font-semibold">
-                    {pct(detail.prediction.cover_prob_spread)}
+                  <div className="text-sm text-[var(--color-net-faint)]">
+                    {detail.home_team} {signedLine(detail.prediction.market_point)} · {pct(detail.prediction.cover_prob_spread)}
                   </div>
                   {detail.prediction.margin_sigma && (
                     <div className="text-sm text-[var(--color-net-dim)]">
@@ -601,13 +601,10 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
                   )}
                 </div>
               )}
-              {detail.prediction.cover_prob_total !== null && detail.prediction.cover_prob_total !== undefined && (
+              {detail.prediction.cover_prob_total !== null && detail.prediction.cover_prob_total !== undefined && detail.prediction.market_total_point != null && (
                 <div className="p-2 rounded border border-[var(--color-line)] bg-[var(--color-court-950)]">
                   <div className="text-sm text-[var(--color-net-faint)]">
-                    Over {detail.prediction.predicted_total.toFixed(1)} chance
-                  </div>
-                  <div className="text-lg font-pr-display font-semibold">
-                    {pct(detail.prediction.cover_prob_total)}
+                    Over {detail.prediction.market_total_point.toFixed(1)} · {pct(detail.prediction.cover_prob_total)}
                   </div>
                   {detail.prediction.total_sigma && (
                     <div className="text-sm text-[var(--color-net-dim)]">

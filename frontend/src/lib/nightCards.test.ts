@@ -58,6 +58,79 @@ describe("toCardModel", () => {
     expect(card.meta).toBe("Toss-up · Total 220.0");
   });
 
+  it("shows the total over probability when a market line exists", () => {
+    const card = toCardModel(
+      game({
+        prediction: {
+          home_win_probability: 0.62,
+          predicted_margin: 3.5,
+          predicted_total: 224.5,
+          market_total_point: 224.5,
+          cover_prob_total: 0.57,
+        },
+      }),
+      false,
+      TZ,
+      0,
+    );
+    expect(card.meta).toBe("BOS by 3.5 · Over 224.5 · 57%");
+  });
+
+  it("shows the spread cover probability when a market line exists", () => {
+    const card = toCardModel(
+      game({
+        prediction: {
+          home_win_probability: 0.62,
+          predicted_margin: 3.5,
+          predicted_total: 224.5,
+          market_point: -3.5,
+          cover_prob_spread: 0.53,
+        },
+      }),
+      false,
+      TZ,
+      0,
+    );
+    expect(card.meta).toBe("BOS by 3.5 · BOS −3.5 · 53% · Total 224.5");
+  });
+
+  it("shows both spread cover and total over when both lines exist", () => {
+    const card = toCardModel(
+      game({
+        prediction: {
+          home_win_probability: 0.62,
+          predicted_margin: 3.5,
+          predicted_total: 224.5,
+          market_point: -3.5,
+          cover_prob_spread: 0.53,
+          market_total_point: 224.5,
+          cover_prob_total: 0.57,
+        },
+      }),
+      false,
+      TZ,
+      0,
+    );
+    expect(card.meta).toBe("BOS by 3.5 · BOS −3.5 · 53% · Over 224.5 · 57%");
+  });
+
+  it("omits the over probability when no market total line exists", () => {
+    const card = toCardModel(
+      game({
+        prediction: {
+          home_win_probability: 0.62,
+          predicted_margin: 3.5,
+          predicted_total: 224.5,
+          cover_prob_total: 0.57,
+        },
+      }),
+      false,
+      TZ,
+      0,
+    );
+    expect(card.meta).toBe("BOS by 3.5 · Total 224.5");
+  });
+
   it("marks the next game up only when asked", () => {
     expect(toCardModel(game(), true, TZ, TIP_MS - 60_000).status).toBe("next");
   });

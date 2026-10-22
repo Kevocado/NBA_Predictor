@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, type TrackRecord, type VsMarket } from "../api/client";
 import {
-  CalibrationChart,
+  CalibrationBlock,
   EmptyState,
   ErrorState,
   HowCounted,
@@ -82,6 +82,9 @@ export default function TrackRecordPanel() {
 
   return (
     <div className="flex flex-col gap-8">
+      {/* Calibration chart as hero: full width under the tabs, above the record. */}
+      <CalibrationBlock series={model.calibration ?? []} markets={model.markets} />
+
       <RecordBlock id="tr-record" title="Picks made before tip-off">
         {model.markets.some((m) => m.preKickoff) ? (
           <RecordHeadline markets={model.markets} mode={model.headline} lead={model.lead} moment={moment} />
@@ -90,14 +93,9 @@ export default function TrackRecordPanel() {
         )}
       </RecordBlock>
 
-      <div className="grid gap-8 lg:grid-cols-2">
-        <RecordBlock id="tr-week" title="Week by week">
-          <WeekStrip weeks={model.weeks ?? []} />
-        </RecordBlock>
-        <RecordBlock id="tr-calibration" title="Does 70% mean 70%?">
-          <CalibrationChart series={model.calibration ?? []} />
-        </RecordBlock>
-      </div>
+      <RecordBlock id="tr-week" title="Week by week">
+        <WeekStrip weeks={model.weeks ?? []} />
+      </RecordBlock>
 
       <div className="grid gap-8 lg:grid-cols-2">
         <RecordBlock id="tr-market" title="Against the odds">

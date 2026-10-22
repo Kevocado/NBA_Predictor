@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
-import { api, REQUEST_TIMEOUT_MS } from "./client";
+import { api, REQUEST_TIMEOUT_MS, RETRY_DELAYS_MS } from "./client";
 
 function mockFetchOnce(body: unknown, ok = true, status = 200) {
   globalThis.fetch = vi.fn().mockResolvedValue({
@@ -107,6 +107,56 @@ describe("request timeout", () => {
       const assertion = expect(api.getTeams()).rejects.toThrow();
       await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS + 1);
       await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("retrying a read through a redeploy", () => {
+  const ok = (body: unknown) => ({ ok: true, status: 200, json: async () => body }) as Response;
+  const status = (code: number) => ({ ok: false, status: code, json: async () => ({}) }) as Response;
+
+  it("tries again after a 502 and returns the answer", async () => {
+    vi.useFakeTimers();
+    try {
+      globalThis.fetch = vi.fn().mockResolvedValueOnce(status(502)).mockResolvedValueOnce(ok([{ game_id: "g1" }]));
+      const result = api.getGamesWeek("2026-10-19");
+      await vi.advanceTimersByTimeAsync(RETRY_DELAYS_MS[0] + 1);
+      expect(await result).toEqual([{ game_id: "g1" }]);
+      expect(fetch).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("tries again after a refused connection", async () => {
+    vi.useFakeTimers();
+    try {
+      globalThis.fetch = vi.fn().mockRejectedValueOnce(new TypeError("Failed to fetch")).mockResolvedValueOnce(ok([]));
+      const result = api.getGamesWeek("2026-10-19");
+      await vi.advanceTimersByTimeAsync(RETRY_DELAYS_MS[0] + 1);
+      expect(await result).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("gives up after the last wait, and does not retry a 404 or a 500", async () => {
+    vi.useFakeTimers();
+    try {
+      globalThis.fetch = vi.fn().mockResolvedValue(status(503));
+      const failing = expect(api.getGamesWeek("2026-10-19")).rejects.toThrow(/503/);
+      await vi.advanceTimersByTimeAsync(RETRY_DELAYS_MS[0] + RETRY_DELAYS_MS[1] + 10);
+      await failing;
+      expect(fetch).toHaveBeenCalledTimes(1 + RETRY_DELAYS_MS.length);
+
+      globalThis.fetch = vi.fn().mockResolvedValue(status(404));
+      await expect(api.getGamesWeek("2026-10-19")).rejects.toThrow(/404/);
+      expect(fetch).toHaveBeenCalledTimes(1);
+      globalThis.fetch = vi.fn().mockResolvedValue(status(500));
+      await expect(api.getGamesWeek("2026-10-19")).rejects.toThrow(/500/);
+      expect(fetch).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }

@@ -443,7 +443,7 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
               )}
             </h2>
             {detail && (
-              <p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-pr-text-dim">
+              <p className="mt-1 flex flex-wrap items-center gap-2 text-sm text-pr-text-dim">
                 <span>{kickoff(detail.tip_off ?? detail.game_date)}</span>
                 <GameStatusChip
                   completed={detail.completed}
@@ -464,7 +464,7 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
           <div className="mb-5 flex items-center justify-center gap-6 border-b border-[var(--color-line)] pb-5">
             <div className="text-center">
               <div className="stat-display text-3xl leading-none">{detail.away_pts}</div>
-              <div className="mt-1 flex items-center justify-center gap-1 text-xs text-[var(--color-net-faint)]">
+              <div className="mt-1 flex items-center justify-center gap-1 text-sm text-[var(--color-net-faint)]">
                 <TeamLogo team={detail.away_team} size={16} />
                 {detail.away_team}
               </div>
@@ -472,7 +472,7 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
             <div className="text-xs uppercase text-[var(--color-net-faint)]">Final</div>
             <div className="text-center">
               <div className="stat-display text-3xl leading-none">{detail.home_pts}</div>
-              <div className="mt-1 flex items-center justify-center gap-1 text-xs text-[var(--color-net-faint)]">
+              <div className="mt-1 flex items-center justify-center gap-1 text-sm text-[var(--color-net-faint)]">
                 <TeamLogo team={detail.home_team} size={16} />
                 {detail.home_team}
               </div>
@@ -498,11 +498,11 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
             <div className="mb-5 grid grid-cols-2 gap-4 border-b border-[var(--color-line)] pb-5">
               <div>
                 <div className="stat-display text-2xl leading-none">{marginLabel}</div>
-                <div className="mt-1 text-xs text-[var(--color-net-dim)]">Projected margin</div>
+                <div className="mt-1 text-sm text-[var(--color-net-dim)]">Projected margin</div>
               </div>
               <div>
                 <div className="stat-display text-2xl leading-none">{detail.prediction?.predicted_total.toFixed(1)}</div>
-                <div className="mt-1 text-xs text-[var(--color-net-dim)]">Projected total points</div>
+                <div className="mt-1 text-sm text-[var(--color-net-dim)]">Projected total points</div>
               </div>
             </div>
           )
@@ -563,7 +563,7 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
         {detail && (detail.home_recent_form.length > 0 || detail.away_recent_form.length > 0) && (
           <div className="mb-5 flex items-center justify-between border-b border-[var(--color-line)] pb-5 text-sm">
             <div>
-              <div className="mb-1 text-xs text-[var(--color-net-faint)]">{detail.away_team} form</div>
+              <div className="mb-1 text-sm text-[var(--color-net-faint)]">{detail.away_team} form</div>
               <div className="flex gap-1">
                 {detail.away_recent_form.map((r, i) => (
                   <FormBadge key={i} result={r} />
@@ -571,7 +571,7 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
               </div>
             </div>
             <div className="text-right">
-              <div className="mb-1 text-xs text-[var(--color-net-faint)]">{detail.home_team} form</div>
+              <div className="mb-1 text-sm text-[var(--color-net-faint)]">{detail.home_team} form</div>
               <div className="flex justify-end gap-1">
                 {detail.home_recent_form.map((r, i) => (
                   <FormBadge key={i} result={r} />
@@ -590,12 +590,12 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
             <div className="grid gap-2 sm:grid-cols-2">
               {detail.prediction.cover_prob_spread !== null && detail.prediction.cover_prob_spread !== undefined && (
                 <div className="p-2 rounded border border-[var(--color-line)] bg-[var(--color-court-950)]">
-                  <div className="text-xs text-[var(--color-net-faint)]">Spread cover chance</div>
+                  <div className="text-sm text-[var(--color-net-faint)]">Spread cover chance</div>
                   <div className="text-lg font-pr-display font-semibold">
                     {pct(detail.prediction.cover_prob_spread)}
                   </div>
                   {detail.prediction.margin_sigma && (
-                    <div className="text-xs text-[var(--color-net-dim)]">
+                    <div className="text-sm text-[var(--color-net-dim)]">
                       σ = {detail.prediction.margin_sigma.toFixed(1)} pts
                     </div>
                   )}
@@ -603,39 +603,39 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
               )}
               {detail.prediction.cover_prob_total !== null && detail.prediction.cover_prob_total !== undefined && (
                 <div className="p-2 rounded border border-[var(--color-line)] bg-[var(--color-court-950)]">
-                  <div className="text-xs text-[var(--color-net-faint)]">
+                  <div className="text-sm text-[var(--color-net-faint)]">
                     Over {detail.prediction.predicted_total.toFixed(1)} chance
                   </div>
                   <div className="text-lg font-pr-display font-semibold">
                     {pct(detail.prediction.cover_prob_total)}
                   </div>
                   {detail.prediction.total_sigma && (
-                    <div className="text-xs text-[var(--color-net-dim)]">
+                    <div className="text-sm text-[var(--color-net-dim)]">
                       σ = {detail.prediction.total_sigma.toFixed(1)} pts
                     </div>
                   )}
                 </div>
               )}
               <div className="p-2 rounded border border-[var(--color-line)] bg-[var(--color-court-950)]">
-                <div className="text-xs text-[var(--color-net-faint)]">Projected margin ±</div>
+                <div className="text-sm text-[var(--color-net-faint)]">Projected margin ±</div>
                 <div className="text-lg font-pr-display font-semibold">
                   {detail.prediction.predicted_margin >= 0
                     ? `${detail.home_team} +${detail.prediction.predicted_margin.toFixed(1)}`
                     : `${detail.away_team} +${Math.abs(detail.prediction.predicted_margin).toFixed(1)}`}
                 </div>
                 {detail.prediction.margin_sigma && (
-                  <div className="text-xs text-[var(--color-net-dim)]">
+                  <div className="text-sm text-[var(--color-net-dim)]">
                     ±{detail.prediction.margin_sigma.toFixed(1)} pts (1 σ)
                   </div>
                 )}
               </div>
               <div className="p-2 rounded border border-[var(--color-line)] bg-[var(--color-court-950)]">
-                <div className="text-xs text-[var(--color-net-faint)]">Projected total ±</div>
+                <div className="text-sm text-[var(--color-net-faint)]">Projected total ±</div>
                 <div className="text-lg font-pr-display font-semibold">
                   {detail.prediction.predicted_total.toFixed(1)}
                 </div>
                 {detail.prediction.total_sigma && (
-                  <div className="text-xs text-[var(--color-net-dim)]">
+                  <div className="text-sm text-[var(--color-net-dim)]">
                     ±{detail.prediction.total_sigma.toFixed(1)} pts (1 σ)
                   </div>
                 )}
@@ -647,7 +647,7 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
         {/* Injury report line */}
         {detail && detail.injury_summary && (
           <div className="mb-5 border-b border-[var(--color-line)] pb-5 text-sm">
-            <div className="text-xs text-[var(--color-net-faint)]">{detail.injury_summary}</div>
+            <div className="text-sm text-[var(--color-net-faint)]">{detail.injury_summary}</div>
           </div>
         )}
 
@@ -742,7 +742,7 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
         {players && players.length > 0 && !outPlayers && (
           // No "0 players out", and no empty ranking: see `outPlayers` for why
           // an unreadable feed is not an empty report.
-          <p data-testid="top-calls-unavailable" className="mt-4 text-xs text-pr-text-dim">
+          <p data-testid="top-calls-unavailable" className="mt-4 text-sm text-pr-text-dim">
             The model's top calls are hidden for this game: we could not read the availability report, so we can't
             confirm who is fit to be ranked.
           </p>
@@ -754,7 +754,7 @@ export default function GameDetailModal({ gameId, onClose }: GameDetailModalProp
               Projected box score
             </h3>
             {players.some((p) => p.rebuilt) && (
-              <p className="mb-2 text-xs text-pr-text-dim">
+              <p className="mb-2 text-sm text-pr-text-dim">
                 Rows marked Rebuilt were built after tip-off, by a later retrain. They are shown for reference and never
                 judged.
               </p>

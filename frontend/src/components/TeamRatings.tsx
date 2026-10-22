@@ -35,7 +35,7 @@ export function TeamRatings({
       >
         Team ratings vs the league
       </h3>
-      <p className="mb-2 text-xs text-pr-text-dim">{ratings.caption}</p>
+      <p className="mb-2 text-sm text-pr-text-dim">{ratings.caption}</p>
       <div className="pr-matchup-table-wrapper">
         <table className="pr-matchup-table">
           <caption className="sr-only" data-testid="team-ratings-caption">

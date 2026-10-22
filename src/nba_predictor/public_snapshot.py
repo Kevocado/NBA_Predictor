@@ -274,6 +274,8 @@ def append_pick_history(
     return len(new_rows)
 
 
+INITIAL_LOOKBACK_DAYS = 14
+
 PICK_FIELDS = (
     "game_id", "game_date", "home_team", "away_team", "home_win_prob", "predicted_margin", "predicted_total",
     "total_sigma", "margin_sigma", "model_version", "created_at",
@@ -329,7 +331,9 @@ def fetch_and_append_picks(picks_api: str, history_path: Path, timeout: float = 
     import urllib.request
 
     existing = _read_history(history_path)
-    since = max((created for _, created in existing), default="")
+    # With no history yet the API would hand back every pick it ever stored (23k rows, mostly rebuilt backtests of
+    # games long gone): start two weeks back, which is further than any price the ledger has seen.
+    since = max((created for _, created in existing), default=(datetime.now(timezone.utc) - timedelta(days=INITIAL_LOOKBACK_DAYS)).isoformat())
     url = f"{picks_api.rstrip('/')}/picks/history" + (f"?since={urllib.parse.quote(since)}" if since else "")
     with urllib.request.urlopen(urllib.request.Request(url), timeout=timeout) as resp:
         data = json.loads(resp.read().decode())

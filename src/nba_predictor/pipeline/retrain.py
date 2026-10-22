@@ -23,6 +23,42 @@ from nba_predictor.models.manifest import append_manifest_history, build_manifes
 from nba_predictor.models.probability import MAE_TO_SIGMA, win_prob
 
 
+logger = logging.getLogger(__name__)
+
+#: Games the league-wide scoring drift is read over, and the most it may move a total. League scoring rose every season
+#: since 2020 and a model fitted on all earlier seasons lags it: its totals were low by +2.6 pts in each of 2020-2025
+#: (nba-eval/calib_audit.py, race8_totals.py). Adding the model's own recent league-wide residual to each total removed
+#: the bias (+2.59 -> +0.08 out of sample; MAE 15.07 -> 14.99, interval excluding zero).
+TOTAL_DRIFT_WINDOW = 300
+TOTAL_DRIFT_CAP = 4.0
+
+
+def compute_total_drift(train_df: pd.DataFrame, total_model, feature_cols: list[str]) -> float:
+    """Mean (actual - predicted) total over the league's most recent `TOTAL_DRIFT_WINDOW` games, capped.
+
+    Read in-sample on the games the model was just fitted on: the recent ones still carry the drift because the fit
+    averages over all of history. 0.0 when there is nothing to read; never raises.
+    """
+    try:
+        recent = train_df.sort_values("game_date").tail(TOTAL_DRIFT_WINDOW)
+        if len(recent) < 30:
+            return 0.0
+        resid = (recent["home_pts"] + recent["away_pts"]) - total_model.predict(recent[feature_cols])
+        drift = float(np.mean(resid))
+    except Exception:  # noqa: BLE001 - a drift that cannot be read is no correction, not a failed retrain
+        logger.exception("total drift not computed")
+        return 0.0
+    if not np.isfinite(drift):
+        return 0.0
+    return float(np.clip(drift, -TOTAL_DRIFT_CAP, TOTAL_DRIFT_CAP))
+
+
+def manifest_total_drift(manifest: dict) -> float:
+    """The drift a scorer adds to every predicted total: the manifest's, or 0.0 when it has none (an older manifest)."""
+    drift = (manifest.get("metrics", {}).get("total", {}) or {}).get("drift")
+    return float(drift) if isinstance(drift, (int, float)) and np.isfinite(drift) else 0.0
+
+
 def _publish_sigma(block: dict, pooled_mae: float) -> None:
     """Write `residual_sigma` only when it is a usable number.
 
@@ -174,6 +210,8 @@ def run_retrain_pipeline(
         metrics["total"] = {"mae": float(np.mean(np.abs(total_preds - actual_total)))}
     else:
         metrics = {"win_probability": {"accuracy": None}, "margin": {"mae": None}, "total": {"mae": None}}
+
+    metrics.setdefault("total", {})["drift"] = compute_total_drift(train_df, total_model, feature_cols)
 
     joblib.dump(win_model, models_dir / "win_probability_model.pkl")
     joblib.dump(margin_model, models_dir / "margin_model.pkl")

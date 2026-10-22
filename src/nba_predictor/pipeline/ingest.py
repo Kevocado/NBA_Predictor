@@ -27,7 +27,7 @@ from nba_predictor.features.early_season import shrunk_projections
 from nba_predictor.features.prop_model_frame import build_prop_model_frame
 from nba_predictor.models.prop_holdout import MARKETS, prop_holdout_metrics
 from nba_predictor.pipeline.history import merge_history
-from nba_predictor.pipeline.retrain import run_retrain_pipeline
+from nba_predictor.pipeline.retrain import manifest_total_drift, run_retrain_pipeline
 from nba_predictor.tracking import store
 
 BOX_FIELDS = ["fgm", "fga", "fg3m", "tov", "oreb", "dreb", "fta"]
@@ -591,7 +591,7 @@ def score_upcoming_games(
         raise ValueError(f"manifest missing positive finite margin_sigma; cannot serve win-from-margin. Got: {margin_sigma!r}")
 
     margins = margin_model.predict(upcoming_frame[feature_cols])
-    totals = total_model.predict(upcoming_frame[feature_cols])
+    totals = total_model.predict(upcoming_frame[feature_cols]) + manifest_total_drift(manifest)
 
     created_at = datetime.now(timezone.utc).isoformat()
     store.insert_predictions(db_path, [
@@ -1093,7 +1093,7 @@ def score_and_store_predictions(
         return 0
 
     margins = margin_model.predict(frame[feature_cols])
-    totals = total_model.predict(frame[feature_cols])
+    totals = total_model.predict(frame[feature_cols]) + manifest_total_drift(manifest)
 
     created_at = datetime.now(timezone.utc).isoformat()
     store.insert_predictions(db_path, [

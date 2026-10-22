@@ -166,16 +166,15 @@ function PlayerTable({ rows }: { rows: PlayerHubRow[] }) {
   ];
 
   const setFilter = (patch: Partial<PlayerFilters>) => {
-    setFilters((current) => {
-      const next = { ...current, ...patch };
-      const q = new URLSearchParams(params);
-      if (next.search) q.set("search", next.search); else q.delete("search");
-      if (next.team) q.set("team", next.team); else q.delete("team");
-      if (next.position !== "All") q.set("position", next.position); else q.delete("position");
-      if (!next.minMinutes) q.set("minMinutes", "false"); else q.delete("minMinutes");
-      setParams(q, { replace: true });
-      return next;
-    });
+    const next = { ...filters, ...patch };
+    setFilters(next);
+    // The URL is updated here, not inside the state updater: a side effect in an updater runs during render.
+    const q = new URLSearchParams(params);
+    if (next.search) q.set("search", next.search); else q.delete("search");
+    if (next.team) q.set("team", next.team); else q.delete("team");
+    if (next.position !== "All") q.set("position", next.position); else q.delete("position");
+    if (!next.minMinutes) q.set("minMinutes", "false"); else q.delete("minMinutes");
+    setParams(q, { replace: true });
     setPage(0);
   };
 
@@ -197,46 +196,22 @@ function PlayerTable({ rows }: { rows: PlayerHubRow[] }) {
           placeholder="Name or team"
           className="rounded border border-pr-rule bg-pr-panel px-2 py-1 text-sm"
         />
-        <label className={!narrow ? "text-pr-text-dim" : "sr-only"} htmlFor="player-hub-team">
+        <label htmlFor="player-hub-team" className="text-pr-text-dim">
           Team
         </label>
-        {narrow ? (
-          <div className="inline-flex rounded border border-pr-rule gap-1" role="group" aria-label="Team">
-            <button
-              type="button"
-              aria-pressed={filters.team === ""}
-              onClick={() => setFilter({ team: "" })}
-              className={`px-2 py-1 text-xs ${filters.team === "" ? "bg-pr-accent font-semibold text-pr-accent-ink" : "text-pr-text-dim"}`}
-            >
-              All teams
-            </button>
-            {teams.map((t) => (
-              <button
-                key={t}
-                type="button"
-                aria-pressed={filters.team === t}
-                onClick={() => setFilter({ team: t })}
-                className={`px-2 py-1 text-xs ${filters.team === t ? "bg-pr-accent font-semibold text-pr-accent-ink" : "text-pr-text-dim"}`}
-              >
-                {t}
-              </button>
-            ))}
-          </div>
-        ) : (
-          <select
-            id="player-hub-team"
-            value={filters.team}
-            onChange={(e) => setFilter({ team: e.target.value })}
-            className="rounded border border-pr-rule bg-pr-panel px-2 py-1 text-sm"
-          >
-            <option value="">All teams</option>
-            {teams.map((t) => (
-              <option key={t} value={t}>
-                {t}
-              </option>
-            ))}
-          </select>
-        )}
+        <select
+          id="player-hub-team"
+          value={filters.team}
+          onChange={(e) => setFilter({ team: e.target.value })}
+          className="rounded border border-pr-rule bg-pr-panel px-2 py-1 text-sm"
+        >
+          <option value="">All teams</option>
+          {teams.map((t) => (
+            <option key={t} value={t}>
+              {t}
+            </option>
+          ))}
+        </select>
         <div className="inline-flex rounded border border-pr-rule" role="group" aria-label="Position">
           {POSITIONS.map((position: Position) => (
             <button

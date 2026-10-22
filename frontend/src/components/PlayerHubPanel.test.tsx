@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, afterEach, beforeEach } from "vitest";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import PlayerHubPanel from "./PlayerHubPanel";
 import { api } from "../api/client";
 
@@ -64,6 +65,14 @@ function setNarrow(narrow: boolean) {
   }));
 }
 
+function Where() {
+  return <span data-testid="where">{useLocation().search}</span>;
+}
+
+function renderPanel(initialEntry = "/") {
+  return render(<MemoryRouter initialEntries={[initialEntry]}><PlayerHubPanel /><Where /></MemoryRouter>);
+}
+
 const playerNames = () =>
   screen
     .getAllByRole("row")
@@ -79,7 +88,7 @@ describe("PlayerHubPanel", () => {
   it("shows the first 20 players and paginates to the next page", async () => {
     vi.mocked(api.getHubPlayers).mockResolvedValue(Array.from({ length: 25 }, (_, i) => makePlayer(i)));
 
-    render(<PlayerHubPanel />);
+    renderPanel();
 
     await waitFor(() => expect(inTable("Player 0")).toBeInTheDocument());
     expect(within(screen.getByRole("table")).queryByText("Player 20")).not.toBeInTheDocument();
@@ -91,7 +100,7 @@ describe("PlayerHubPanel", () => {
   it("says which page it is on, and disables the pager at the ends", async () => {
     vi.mocked(api.getHubPlayers).mockResolvedValue(Array.from({ length: 25 }, (_, i) => makePlayer(i)));
 
-    render(<PlayerHubPanel />);
+    renderPanel();
     await waitFor(() => expect(inTable("Player 0")).toBeInTheDocument());
 
     // The first page: there is no page before it.
@@ -113,7 +122,7 @@ describe("PlayerHubPanel", () => {
       makePlayer(1, { player_name: "Shai Gilgeous-Alexander" }),
     ]);
 
-    render(<PlayerHubPanel />);
+    renderPanel();
     await waitFor(() => expect(inTable("Shai Gilgeous-Alexander")).toBeInTheDocument());
 
     // The leader board's name: it wraps, it is not cut short.
@@ -130,7 +139,7 @@ describe("PlayerHubPanel", () => {
       games: [],
     });
 
-    render(<PlayerHubPanel />);
+    renderPanel();
     await waitFor(() => expect(inTable("Player 1")).toBeInTheDocument());
 
     await userEvent.click(screen.getByRole("button", { name: /Player 1/i }));
@@ -147,7 +156,7 @@ describe("PlayerHubPanel", () => {
 
   it("shows an empty state when no player data is cached yet", async () => {
     vi.mocked(api.getHubPlayers).mockResolvedValue([]);
-    render(<PlayerHubPanel />);
+    renderPanel();
     await waitFor(() => expect(screen.getByText(/no player data/i)).toBeInTheDocument());
   });
 
@@ -158,7 +167,7 @@ describe("PlayerHubPanel", () => {
       makePlayer(3, { rating: 80, points_per_game: 19 }),
     ]);
 
-    render(<PlayerHubPanel />);
+    renderPanel();
 
     await waitFor(() => expect(inTable("Player 2")).toBeInTheDocument());
     expect(playerNames()).toEqual(["Player 2", "Player 3", "Player 1"]);
@@ -174,7 +183,7 @@ describe("PlayerHubPanel", () => {
       Array.from({ length: 22 }, (_, i) => makePlayer(i, { team: i < 20 ? "BOS" : "LAL" })),
     );
 
-    render(<PlayerHubPanel />);
+    renderPanel();
     await waitFor(() => expect(inTable("Player 0")).toBeInTheDocument());
     await userEvent.click(screen.getByTestId("player-hub-next"));
     expect(await screen.findByText("Player 20")).toBeInTheDocument();
@@ -190,7 +199,7 @@ describe("PlayerHubPanel", () => {
     setNarrow(true);
     vi.mocked(api.getHubPlayers).mockResolvedValue([makePlayer(1)]);
 
-    render(<PlayerHubPanel />);
+    renderPanel();
     await waitFor(() => expect(inTable("Player 1")).toBeInTheDocument());
 
     // The six the spec names: Player, Team, PPG, RPG, APG and Next.
@@ -216,7 +225,7 @@ describe("PlayerHubPanel", () => {
       makePlayer(2, { player_name: "Jaylen Brown" }),
     ]);
 
-    render(<PlayerHubPanel />);
+    renderPanel();
     await waitFor(() => expect(inTable("Jayson Tatum")).toBeInTheDocument());
 
     await userEvent.type(screen.getByLabelText("Search"), "tatum");
@@ -231,7 +240,7 @@ describe("PlayerHubPanel", () => {
       makePlayer(2, { position: "C" }),
     ]);
 
-    render(<PlayerHubPanel />);
+    renderPanel();
     await waitFor(() => expect(inTable("Player 1")).toBeInTheDocument());
 
     await userEvent.click(screen.getByRole("button", { name: "C" }));
@@ -246,7 +255,7 @@ describe("PlayerHubPanel", () => {
       makePlayer(2, { minutes_per_game: 4 }),
     ]);
 
-    render(<PlayerHubPanel />);
+    renderPanel();
     await waitFor(() => expect(inTable("Player 1")).toBeInTheDocument());
     expect(screen.queryByText("Player 2")).not.toBeInTheDocument();
 
@@ -267,7 +276,7 @@ describe("PlayerHubPanel", () => {
       },
     });
 
-    render(<PlayerHubPanel />);
+    renderPanel();
     await waitFor(() => expect(inTable("Player 1")).toBeInTheDocument());
 
     const next = await screen.findByTestId("player-next");
@@ -298,7 +307,7 @@ describe("PlayerHubPanel", () => {
       averages: {},
     });
 
-    render(<PlayerHubPanel />);
+    renderPanel();
     await waitFor(() => expect(inTable("Player 1")).toBeInTheDocument());
 
     await userEvent.click(screen.getByRole("button", { name: /Player 1/i }));
@@ -313,10 +322,36 @@ describe("PlayerHubPanel", () => {
     setNarrow(false);
     vi.mocked(api.getHubPlayers).mockResolvedValue([makePlayer(1)]);
 
-    render(<PlayerHubPanel />);
+    renderPanel();
     await waitFor(() => expect(inTable("Player 1")).toBeInTheDocument());
 
     expect(screen.getByRole("columnheader", { name: /FG%/ })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "More stats" })).toBeNull();
+  });
+
+  it("reads the team filter from the URL query, so a link keeps its filters", async () => {
+    vi.mocked(api.getHubPlayers).mockResolvedValue([
+      makePlayer(1, { team: "BOS" }),
+      makePlayer(2, { team: "LAL" }),
+    ]);
+    renderPanel("/hub?team=LAL");
+    await waitFor(() => expect(inTable("Player 2")).toBeInTheDocument());
+    expect(screen.queryByText("Player 1")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Team")).toHaveValue("LAL");
+  });
+
+  it("writes the filters to the URL as they change, without a render-time update", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.mocked(api.getHubPlayers).mockResolvedValue([
+      makePlayer(1, { team: "BOS" }),
+      makePlayer(2, { team: "LAL" }),
+    ]);
+    renderPanel();
+    await waitFor(() => expect(inTable("Player 1")).toBeInTheDocument());
+
+    await userEvent.selectOptions(screen.getByLabelText("Team"), "LAL");
+    await waitFor(() => expect(screen.getByTestId("where")).toHaveTextContent("team=LAL"));
+    expect(screen.queryByText("Player 1")).not.toBeInTheDocument();
+    expect(errors.mock.calls.filter((c) => String(c[0]).includes("while rendering"))).toHaveLength(0);
   });
 });

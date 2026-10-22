@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { api, type PlayerHubRow, type PlayerNextGame } from "../api/client";
 import { StatTable, type Column } from "../predictor-ui";
 import HubRows from "./HubRows";
@@ -6,7 +7,7 @@ import TeamLogo from "./TeamLogo";
 import PlayerAvatar from "./PlayerAvatar";
 import PlayerLeaders from "./PlayerLeaders";
 import PlayerDetailPanel from "./PlayerDetailPanel";
-import { DEFAULT_FILTERS, POSITIONS, filterPlayers, type PlayerFilters, type Position } from "../lib/playerFilters";
+import { POSITIONS, filterPlayers, type PlayerFilters, type Position } from "../lib/playerFilters";
 
 const PAGE_SIZE = 20;
 
@@ -38,11 +39,23 @@ export default function PlayerHubPanel() {
 
 function PlayerTable({ rows }: { rows: PlayerHubRow[] }) {
   const [page, setPage] = useState(0);
-  const [filters, setFilters] = useState<PlayerFilters>(DEFAULT_FILTERS);
   const [more, setMore] = useState(false);
   const [nextGames, setNextGames] = useState<Record<string, PlayerNextGame>>({});
   const [bands, setBands] = useState<Record<string, number> | null>(null);
   const narrow = useNarrow();
+  // The filters live in the URL query so a link keeps its filters: opening a
+  // page someone sent you shows the same team, position, search and minutes
+  // filter they saw when they copied the link.
+  const [params, setParams] = useSearchParams();
+  const initial = useMemo<PlayerFilters>(() => ({
+    search: params.get("search") ?? "",
+    team: params.get("team") ?? "",
+    position: (POSITIONS.includes(params.get("position") as Position)
+      ? params.get("position")
+      : "All") as Position,
+    minMinutes: params.get("minMinutes") !== "false",
+  }), [params]);
+  const [filters, setFilters] = useState<PlayerFilters>(initial);
 
   // The next games and the bands are the page's extras; neither may stop the
   // table from drawing.
@@ -153,7 +166,15 @@ function PlayerTable({ rows }: { rows: PlayerHubRow[] }) {
   ];
 
   const setFilter = (patch: Partial<PlayerFilters>) => {
-    setFilters((current) => ({ ...current, ...patch }));
+    const next = { ...filters, ...patch };
+    setFilters(next);
+    // The URL is updated here, not inside the state updater: a side effect in an updater runs during render.
+    const q = new URLSearchParams(params);
+    if (next.search) q.set("search", next.search); else q.delete("search");
+    if (next.team) q.set("team", next.team); else q.delete("team");
+    if (next.position !== "All") q.set("position", next.position); else q.delete("position");
+    if (!next.minMinutes) q.set("minMinutes", "false"); else q.delete("minMinutes");
+    setParams(q, { replace: true });
     setPage(0);
   };
 

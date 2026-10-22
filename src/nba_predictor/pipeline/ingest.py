@@ -799,9 +799,16 @@ def compute_standings(games: list[dict], today: date | None = None) -> list[dict
     racing calculation but remain visible in the win/loss columns during
     offseason/preseason when the page explicitly labels them as prior-season.
     """
-    completed = _completed_with_box(games)
-    # The preseason is not a game in the race: BOS showed 4-0 on opening night
-    # because a preseason win counted. Same rule as the player hub's.
+    completed = [
+        g
+        for g in games
+        if g.get("completed") and g.get("home_pts") is not None and g.get("away_pts") is not None
+    ]
+    # Standings need a score, not box scores: the schedule cache carries
+    # completed flags and points but not box fields, so a game is counted when
+    # it is completed and scored. Box scores are required by the ratings and
+    # form feeds (compute_team_hub), not by standings, which only reads
+    # home_team / away_team / home_pts / away_pts.
     completed = [g for g in completed if not is_preseason(g)]
     state = season_state(games, today=today)
     racing = state in ("regular", "postseason")

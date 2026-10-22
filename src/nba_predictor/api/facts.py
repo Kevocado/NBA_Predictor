@@ -135,6 +135,40 @@ def _build_box_history(as_of: str) -> pd.DataFrame:
     return to_training_frame(enrich_with_boxscores(_select_window(candidates)))
 
 
+def _box_history_disk_dir() -> Path:
+    d = config.CACHE_DIR / "box_history"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _box_history_disk_path(as_of: str) -> Path:
+    return _box_history_disk_dir() / f"{as_of}.json"
+
+
+def _read_box_history_disk(as_of: str):
+    """Read a persisted history from disk, or None when none / unreadable."""
+    try:
+        path = _box_history_disk_path(as_of)
+        if not path.exists():
+            return None
+        frame = pd.read_json(path, orient="split")
+        if not isinstance(frame, pd.DataFrame):
+            return None
+        return frame
+    except (OSError, ValueError):
+        return None
+
+
+def _write_box_history_disk(as_of: str, frame) -> None:
+    """Persist a history to disk. Never raises."""
+    try:
+        path = _box_history_disk_path(as_of)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        frame.to_json(path, orient="split")
+    except (OSError, ValueError):  # noqa: BLE001
+        logger.exception("box history disk write failed for %s", as_of)
+
+
 def _box_score_history(as_of: str) -> pd.DataFrame:
     """The warmed history for `as_of`, or an empty frame when it is not warm.
 
@@ -153,14 +187,26 @@ def _box_score_history(as_of: str) -> pd.DataFrame:
     the same shape `routes._db_state` uses for the MAE cache, and an unchanged
     file costs one stat().
     """
-    state = _schedule_state(deps.get_schedule_path())
-    key = (state, str(as_of))
+    key = str(as_of)
     frame = _BOX_HISTORY.get(key)
     if frame is None:
+        # Serve the last good copy: any in-memory entry for this as_of.
+        for k, v in _BOX_HISTORY.items():
+            if k == key or (isinstance(k, tuple) and len(k) == 2 and k[1] == key):
+                frame = v
+                break
+    if frame is None:
+        # Then a persisted copy from the cache volume (container restart).
+        frame = _read_box_history_disk(key)
+        if frame is not None:
+            _BOX_HISTORY[key] = frame
+            while len(_BOX_HISTORY) > BOX_HISTORY_KEEP:
+                del _BOX_HISTORY[next(iter(_BOX_HISTORY))]
+    if frame is None or (isinstance(frame, pd.DataFrame) and not len(frame)):
         logger.info(
             "box-score history for %s is not warm; no matchup duels on this request", as_of
         )
-        return pd.DataFrame()
+        return pd.DataFrame() if frame is None else frame
     return frame
 
 
@@ -191,12 +237,13 @@ def warm_box_history(as_of: str) -> bool:
 
 
 def _store_box_history(as_of: str, frame: pd.DataFrame) -> None:
-    """Put `frame` in the cache for `as_of`, evicting the coldest entry."""
-    state = _schedule_state(deps.get_schedule_path())
-    _BOX_HISTORY[(state, str(as_of))] = frame
+    """Put `frame` in the cache for `as_of`, evicting the coldest entry, and persist to disk."""
+    key = str(as_of)
+    _BOX_HISTORY[key] = frame
     # dicts keep insertion order, so the first key is the coldest one.
     while len(_BOX_HISTORY) > BOX_HISTORY_KEEP:
         del _BOX_HISTORY[next(iter(_BOX_HISTORY))]
+    _write_box_history_disk(key, frame)
 
 
 def start_box_history_warmer(
@@ -447,27 +494,20 @@ def _enrich_from_cache(games: list[dict]) -> list[dict]:
 
 
 def _compute_ratings_for_game(game: dict) -> dict | None:
-    """Build this finished game's ratings from box scores in the cache volume.
+    """Build this finished game's ratings from the shared box-score history.
 
-    A 15-game window per team (each team's last `BOX_WINDOW` completed,
-    non-preseason games before this one), box scores read from cached files,
-    and `league_ratings` ranking the teams out of the league. None when a team
-    has no usable history -- no table, never a made-up one.
+    Uses the single cached history for `as_of` (in memory or on disk) so N
+    games share one build. Falls back to building it once when cold. None when
+    a team has no usable history -- no table, never a made-up one.
     """
-    from ..pipeline.ingest import is_preseason, to_training_frame
-
     as_of = str(game["game_date"])
     teams = [game["home_team"], game["away_team"]]
-    start = (pd.Timestamp(as_of) - pd.Timedelta(days=BOX_LOOKBACK_MAX_DAYS)).date().isoformat()
-    candidates = [
-        g
-        for g in _schedule()
-        if start <= str(g.get("game_date", "")) < str(as_of)
-        and g.get("completed")
-        and not is_preseason(g)
-    ]
-    windowed = _select_window(candidates, BOX_WINDOW)
-    history = to_training_frame(_enrich_from_cache(windowed))
+
+    history = _box_score_history(as_of)
+    if not len(history):
+        # Build once (off-thread only); subsequent games reuse the cached copy.
+        if warm_box_history(as_of):
+            history = _box_score_history(as_of)
     if not len(history):
         return None
     return ratings_payload(as_of, teams, before_game=True, history=history)

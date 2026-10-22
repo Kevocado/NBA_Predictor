@@ -42,8 +42,12 @@ def test_the_request_asks_since_the_newest_pick_already_held_not_since_now(tmp_p
     history = tmp_path / "picks_history.jsonl.gz"
     seen = []
     monkeypatch.setattr("urllib.request.urlopen", lambda req, timeout=None: (seen.append(req.full_url), _api([])(req))[1])
-    ps.fetch_and_append_picks("https://api.test/", history)                      # empty history: no since filter, everything
-    assert seen[-1] == "https://api.test/picks/history"
+    ps.fetch_and_append_picks("https://api.test/", history)                      # empty history: a two-week lookback, not everything
+    assert "/picks/history?since=" in seen[-1]
+    from urllib.parse import unquote
+    from datetime import datetime, timedelta, timezone
+    asked = datetime.fromisoformat(unquote(seen[-1].split("since=")[1]))
+    assert timedelta(days=13) < datetime.now(timezone.utc) - asked < timedelta(days=15)
     monkeypatch.setattr("urllib.request.urlopen", _api([_row("g1", "2026-10-22T10:00:00+00:00")]))
     ps.fetch_and_append_picks("https://api.test", history)
     monkeypatch.setattr("urllib.request.urlopen", lambda req, timeout=None: (seen.append(req.full_url), _api([])(req))[1])

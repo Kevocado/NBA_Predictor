@@ -22,6 +22,7 @@ import math
 import os
 import threading
 import time
+import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -341,15 +342,22 @@ def _window_caption(history: pd.DataFrame, as_of: str, before_game: bool = False
     return caption + "."
 
 
-def ratings_payload(as_of: str, teams: list[str], before_game: bool = False) -> dict | None:
+def ratings_payload(
+    as_of: str, teams: list[str], before_game: bool = False, history: pd.DataFrame | None = None,
+) -> dict | None:
     """These teams' ratings, their league ranks and the window they came from.
 
     None when the league is not ranked yet -- no history, or a team that has
     not played enough. A section with no numbers is not a section.
+
+    `history` is injected for the on-demand path (a finished game whose window
+    was not warmed): it is built once from box scores in the cache volume and
+    never re-read on a request thread.
     """
     from ..signals.team_matchups import RATING_HELP, RATING_METRICS, league_ratings
 
-    history = _box_score_history(as_of)
+    if history is None:
+        history = _box_score_history(as_of)
     if not len(history):
         return None
     ratings = league_ratings(history, as_of)
@@ -374,6 +382,143 @@ def ratings_payload(as_of: str, teams: list[str], before_game: bool = False) -> 
             for team in teams
         },
     }
+
+
+# --- on-demand ratings for a finished game, cached on disk ----------------
+
+#: game_id -> payload. Mirrors the disk cache so a hot entry is served without a file read on every request. Keyed by the
+#: game alone: a finished game's PRE-GAME ratings do not change when the schedule file is rewritten (the scores timer does
+#: that every few minutes on a game day), and keying on the schedule state would recompute them each time and leave a file
+#: behind for every state.
+_RATINGS_MEMORY: dict[str, dict] = {}
+#: Games whose ratings are being computed right now, so a burst of requests for one game starts one computation.
+_RATINGS_INFLIGHT: set[str] = set()
+_RATINGS_LOCK = threading.Lock()
+
+
+def _ratings_disk_dir() -> Path:
+    d = config.CACHE_DIR / "ratings"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _ratings_disk_path(game_id: str) -> Path:
+    return _ratings_disk_dir() / f"{game_id}.json"
+
+
+def _read_ratings_disk(game_id: str) -> dict | None:
+    try:
+        return json.loads(_ratings_disk_path(game_id).read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def _write_ratings_disk(game_id: str, payload: dict) -> None:
+    try:
+        _ratings_disk_path(game_id).write_text(json.dumps(payload))
+    except OSError:  # noqa: BLE001 - a cache that cannot be written is just cold
+        logger.exception("ratings disk cache write failed for %s", game_id)
+
+
+def _enrich_from_cache(games: list[dict]) -> list[dict]:
+    """Add box-score fields from cached ESPN files only: never the network.
+
+    A game whose box score was never cached contributes nothing to the window,
+    so the window stays bounded and no request thread (or warm thread) calls
+    ESPN. Each box score is one file read.
+    """
+    from ..data import espn
+    from ..pipeline.ingest import BOX_FIELDS
+
+    enriched = []
+    for game in games:
+        game = dict(game)
+        if game.get("completed"):
+            box = espn._load_cache("boxscore", str(game["game_id"]))
+            home_box = box.get(game["home_team"]) if box else None
+            away_box = box.get(game["away_team"]) if box else None
+            if home_box and away_box:
+                for field in BOX_FIELDS:
+                    if field in home_box and field in away_box:
+                        game[f"home_{field}"] = home_box[field]
+                        game[f"away_{field}"] = away_box[field]
+        enriched.append(game)
+    return enriched
+
+
+def _compute_ratings_for_game(game: dict) -> dict | None:
+    """Build this finished game's ratings from box scores in the cache volume.
+
+    A 15-game window per team (each team's last `BOX_WINDOW` completed,
+    non-preseason games before this one), box scores read from cached files,
+    and `league_ratings` ranking the teams out of the league. None when a team
+    has no usable history -- no table, never a made-up one.
+    """
+    from ..pipeline.ingest import is_preseason, to_training_frame
+
+    as_of = str(game["game_date"])
+    teams = [game["home_team"], game["away_team"]]
+    start = (pd.Timestamp(as_of) - pd.Timedelta(days=BOX_LOOKBACK_MAX_DAYS)).date().isoformat()
+    candidates = [
+        g
+        for g in _schedule()
+        if start <= str(g.get("game_date", "")) < str(as_of)
+        and g.get("completed")
+        and not is_preseason(g)
+    ]
+    windowed = _select_window(candidates, BOX_WINDOW)
+    history = to_training_frame(_enrich_from_cache(windowed))
+    if not len(history):
+        return None
+    return ratings_payload(as_of, teams, before_game=True, history=history)
+
+
+def _warm_ratings_for_game(game: dict) -> None:
+    """Off the request thread: compute and cache this game's ratings on disk.
+
+    Never raises: a failed warm leaves the game cold (no table) until the next request retries it.
+    """
+    game_id = str(game.get("game_id"))
+    try:
+        payload = _compute_ratings_for_game(game)
+        if payload is not None:
+            _RATINGS_MEMORY[game_id] = payload
+            _write_ratings_disk(game_id, payload)
+    except Exception:  # noqa: BLE001 - reported, not raised
+        logger.exception("ratings on-demand warm failed for %s", game_id)
+    finally:
+        with _RATINGS_LOCK:
+            _RATINGS_INFLIGHT.discard(game_id)
+
+
+def ratings_for_game(game: dict) -> dict | None:
+    """Ratings for one FINISHED game, on demand.
+
+    Fast path: the warmed box-history window is already in memory (recently played games) -- computed synchronously from
+    it, as before, with no disk or network. Cold: the disk cache, keyed by the game. A disk miss returns None (no table,
+    no blocking) and starts ONE off-thread computation for that game, so the next visitor finds it. A finished game with
+    no usable history shows no table, never a made-up one.
+    """
+    as_of = str(game["game_date"])
+    teams = [game["home_team"], game["away_team"]]
+
+    history = _box_score_history(as_of)
+    if len(history):
+        return ratings_payload(as_of, teams, before_game=True, history=history)
+
+    game_id = str(game.get("game_id"))
+    cached = _RATINGS_MEMORY.get(game_id)
+    if cached is not None:
+        return cached
+    disk = _read_ratings_disk(game_id)
+    if disk is not None:
+        _RATINGS_MEMORY[game_id] = disk
+        return disk
+    with _RATINGS_LOCK:
+        if game_id not in _RATINGS_INFLIGHT:
+            _RATINGS_INFLIGHT.add(game_id)
+            threading.Thread(target=_warm_ratings_for_game, args=(game,), daemon=True).start()
+    return None
 
 
 def _db_path() -> Path:

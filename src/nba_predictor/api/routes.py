@@ -25,6 +25,7 @@ from nba_predictor.api.deps import (
     get_training_games_path,
     require_admin,
 )
+from nba_predictor.api import facts as facts_mod
 from nba_predictor.api.schemas import (
     DoubtfulPlayerOut,
     GameDetailOut,
@@ -261,15 +262,17 @@ def _game_ratings(game: dict) -> dict | None:
     Read from the same warmed box history the duels read, as of the game's own
     date: a rating is the form going INTO the game, so a game that has been
     played is not allowed to borrow the form that came after it.
-    """
-    from ..api import facts as facts_mod
 
+    When the window was not warmed (a finished game older than the warmer's few
+    kept dates), the ratings are computed on demand from box scores in the cache
+    volume and cached on disk keyed by the game. A cold game
+    shows no table rather than blocking the request, and a game with no usable
+    history shows no table, never a made-up one.
+    """
     try:
-        return facts_mod.ratings_payload(
-            str(game["game_date"]),
-            [game["home_team"], game["away_team"]],
-            before_game=bool(game.get("completed")),
-        )
+        if game.get("completed"):
+            return facts_mod.ratings_for_game(game)
+        return facts_mod.ratings_payload(str(game["game_date"]), [game["home_team"], game["away_team"]])
     except Exception:  # noqa: BLE001 - a rating is an enhancement, never the page
         logger.exception("ratings unavailable for %s", game.get("game_id"))
         return None

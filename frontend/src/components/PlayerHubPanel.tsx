@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { api, type PlayerHubRow, type PlayerNextGame } from "../api/client";
 import { StatTable, type Column } from "../predictor-ui";
 import HubRows from "./HubRows";
@@ -6,7 +7,7 @@ import TeamLogo from "./TeamLogo";
 import PlayerAvatar from "./PlayerAvatar";
 import PlayerLeaders from "./PlayerLeaders";
 import PlayerDetailPanel from "./PlayerDetailPanel";
-import { DEFAULT_FILTERS, POSITIONS, filterPlayers, type PlayerFilters, type Position } from "../lib/playerFilters";
+import { POSITIONS, filterPlayers, type PlayerFilters, type Position } from "../lib/playerFilters";
 
 const PAGE_SIZE = 20;
 
@@ -38,11 +39,23 @@ export default function PlayerHubPanel() {
 
 function PlayerTable({ rows }: { rows: PlayerHubRow[] }) {
   const [page, setPage] = useState(0);
-  const [filters, setFilters] = useState<PlayerFilters>(DEFAULT_FILTERS);
   const [more, setMore] = useState(false);
   const [nextGames, setNextGames] = useState<Record<string, PlayerNextGame>>({});
   const [bands, setBands] = useState<Record<string, number> | null>(null);
   const narrow = useNarrow();
+  // The filters live in the URL query so a link keeps its filters: opening a
+  // page someone sent you shows the same team, position, search and minutes
+  // filter they saw when they copied the link.
+  const [params, setParams] = useSearchParams();
+  const initial = useMemo<PlayerFilters>(() => ({
+    search: params.get("search") ?? "",
+    team: params.get("team") ?? "",
+    position: (POSITIONS.includes(params.get("position") as Position)
+      ? params.get("position")
+      : "All") as Position,
+    minMinutes: params.get("minMinutes") !== "false",
+  }), [params]);
+  const [filters, setFilters] = useState<PlayerFilters>(initial);
 
   // The next games and the bands are the page's extras; neither may stop the
   // table from drawing.
@@ -153,7 +166,16 @@ function PlayerTable({ rows }: { rows: PlayerHubRow[] }) {
   ];
 
   const setFilter = (patch: Partial<PlayerFilters>) => {
-    setFilters((current) => ({ ...current, ...patch }));
+    setFilters((current) => {
+      const next = { ...current, ...patch };
+      const q = new URLSearchParams(params);
+      if (next.search) q.set("search", next.search); else q.delete("search");
+      if (next.team) q.set("team", next.team); else q.delete("team");
+      if (next.position !== "All") q.set("position", next.position); else q.delete("position");
+      if (!next.minMinutes) q.set("minMinutes", "false"); else q.delete("minMinutes");
+      setParams(q, { replace: true });
+      return next;
+    });
     setPage(0);
   };
 
@@ -175,22 +197,46 @@ function PlayerTable({ rows }: { rows: PlayerHubRow[] }) {
           placeholder="Name or team"
           className="rounded border border-pr-rule bg-pr-panel px-2 py-1 text-sm"
         />
-        <label htmlFor="player-hub-team" className="text-pr-text-dim">
+        <label className={!narrow ? "text-pr-text-dim" : "sr-only"} htmlFor="player-hub-team">
           Team
         </label>
-        <select
-          id="player-hub-team"
-          value={filters.team}
-          onChange={(e) => setFilter({ team: e.target.value })}
-          className="rounded border border-pr-rule bg-pr-panel px-2 py-1 text-sm"
-        >
-          <option value="">All teams</option>
-          {teams.map((t) => (
-            <option key={t} value={t}>
-              {t}
-            </option>
-          ))}
-        </select>
+        {narrow ? (
+          <div className="inline-flex rounded border border-pr-rule gap-1" role="group" aria-label="Team">
+            <button
+              type="button"
+              aria-pressed={filters.team === ""}
+              onClick={() => setFilter({ team: "" })}
+              className={`px-2 py-1 text-xs ${filters.team === "" ? "bg-pr-accent font-semibold text-pr-accent-ink" : "text-pr-text-dim"}`}
+            >
+              All teams
+            </button>
+            {teams.map((t) => (
+              <button
+                key={t}
+                type="button"
+                aria-pressed={filters.team === t}
+                onClick={() => setFilter({ team: t })}
+                className={`px-2 py-1 text-xs ${filters.team === t ? "bg-pr-accent font-semibold text-pr-accent-ink" : "text-pr-text-dim"}`}
+              >
+                {t}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <select
+            id="player-hub-team"
+            value={filters.team}
+            onChange={(e) => setFilter({ team: e.target.value })}
+            className="rounded border border-pr-rule bg-pr-panel px-2 py-1 text-sm"
+          >
+            <option value="">All teams</option>
+            {teams.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+        )}
         <div className="inline-flex rounded border border-pr-rule" role="group" aria-label="Position">
           {POSITIONS.map((position: Position) => (
             <button

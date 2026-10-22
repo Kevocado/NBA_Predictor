@@ -2,7 +2,7 @@
 
 The warmer keeps only a few played dates, so an older finished game's ratings
 are computed on demand from box scores in the cache volume, cached on disk keyed
-by (game_id, schedule state), and never block a request thread.
+by the game, and never block a request thread.
 """
 from __future__ import annotations
 
@@ -13,10 +13,6 @@ import pandas as pd
 import pytest
 
 from nba_predictor.api import facts as facts_mod
-
-
-def _state() -> tuple[int, int]:
-    return (123456789, 100)
 
 
 def _game(game_id="g-old", game_date="2026-01-15"):
@@ -45,17 +41,17 @@ def test_cold_ratings_return_none_without_blocking(monkeypatch):
     warmed = {"called": False}
     monkeypatch.setattr(facts_mod, "_box_score_history", lambda as_of: pd.DataFrame())
     monkeypatch.setattr(
-        facts_mod, "_warm_ratings_for_game", lambda game, state: warmed.__setitem__("called", True),
+        facts_mod, "_warm_ratings_for_game", lambda game: warmed.__setitem__("called", True),
     )
 
-    payload = facts_mod.ratings_for_game(_game(), _state())
+    payload = facts_mod.ratings_for_game(_game())
 
     assert payload is None, "a cold cache serves no table, it does not block"
     assert warmed["called"], "the warm happens off the request thread"
 
 
 def test_disk_cache_serves_ratings_without_re_warming(monkeypatch, tmp_path):
-    """A disk-cached payload (keyed by game_id + schedule state) is served and
+    """A disk-cached payload (keyed by the game) is served and
     never re-warmed on a request thread."""
     _clear_memory(monkeypatch)
     disk_dir = tmp_path / "ratings"
@@ -63,7 +59,6 @@ def test_disk_cache_serves_ratings_without_re_warming(monkeypatch, tmp_path):
     disk_dir.mkdir(parents=True, exist_ok=True)
 
     game = _game()
-    state = _state()
     payload = {
         "as_of": game["game_date"],
         "n_teams": 2,
@@ -72,40 +67,82 @@ def test_disk_cache_serves_ratings_without_re_warming(monkeypatch, tmp_path):
         "teams": {"T29": {}, "T00": {}},
     }
     # As the off-thread warm would have written it.
-    facts_mod._write_ratings_disk(game["game_id"], state, payload)
+    facts_mod._write_ratings_disk(game["game_id"], payload)
 
     warmed = {"called": False}
     monkeypatch.setattr(facts_mod, "_box_score_history", lambda as_of: pd.DataFrame())
     monkeypatch.setattr(
-        facts_mod, "_warm_ratings_for_game", lambda game, state: warmed.__setitem__("called", True),
+        facts_mod, "_warm_ratings_for_game", lambda game: warmed.__setitem__("called", True),
     )
 
-    out = facts_mod.ratings_for_game(game, state)
+    out = facts_mod.ratings_for_game(game)
 
     assert out == payload, "the disk-cached payload is served"
     assert not warmed["called"], "a disk hit does not warm again"
 
 
-def test_disk_cache_keyed_by_game_and_schedule_state(monkeypatch, tmp_path):
-    """The same game under a different schedule state is a different cache entry:
-    a schedule change invalidates the old rating rather than serving it stale."""
+def test_a_schedule_rewrite_does_not_invalidate_a_finished_games_ratings(monkeypatch, tmp_path):
+    """The scores timer rewrites the schedule file every few minutes on a game day; a finished game's pre-game ratings do not
+    change with it, so the cache is keyed by the game alone (no recompute, no file left behind per schedule state)."""
     _clear_memory(monkeypatch)
     disk_dir = tmp_path / "ratings"
     monkeypatch.setattr(facts_mod, "_ratings_disk_dir", lambda: disk_dir)
     disk_dir.mkdir(parents=True, exist_ok=True)
-
     game = _game()
-    payload_a = {"as_of": game["game_date"], "n_teams": 2, "caption": "a.", "metrics": [], "teams": {}}
-    payload_b = {"as_of": game["game_date"], "n_teams": 2, "caption": "b.", "metrics": [], "teams": {}}
-
-    facts_mod._write_ratings_disk(game["game_id"], _state(), payload_a)
-    facts_mod._write_ratings_disk(game["game_id"], (999, 999), payload_b)
-
+    payload = {"as_of": game["game_date"], "n_teams": 2, "caption": "a.", "metrics": [], "teams": {}}
+    facts_mod._write_ratings_disk(game["game_id"], payload)
     monkeypatch.setattr(facts_mod, "_box_score_history", lambda as_of: pd.DataFrame())
-    monkeypatch.setattr(facts_mod, "_warm_ratings_for_game", lambda game, state: None)
+    monkeypatch.setattr(facts_mod, "_warm_ratings_for_game", lambda game: pytest.fail("re-warmed"))
 
-    assert facts_mod.ratings_for_game(game, _state()) == payload_a
-    assert facts_mod.ratings_for_game(game, (999, 999)) == payload_b
+    assert facts_mod.ratings_for_game(game) == payload
+    assert facts_mod.ratings_for_game(game) == payload
+    assert [p.name for p in disk_dir.iterdir()] == [f"{game['game_id']}.json"]
+
+
+def test_a_burst_of_requests_for_one_cold_game_starts_one_computation(monkeypatch):
+    _clear_memory(monkeypatch)
+    monkeypatch.setattr(facts_mod, "_RATINGS_INFLIGHT", set())
+    monkeypatch.setattr(facts_mod, "_box_score_history", lambda as_of: pd.DataFrame())
+    monkeypatch.setattr(facts_mod, "_read_ratings_disk", lambda game_id: None)
+    started = []
+
+    class _Thread:
+        def __init__(self, target, args, daemon):
+            started.append(args)
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(facts_mod.threading, "Thread", _Thread)
+    for _ in range(5):
+        assert facts_mod.ratings_for_game(_game()) is None
+    assert len(started) == 1
+
+
+def test_a_failure_in_the_ratings_never_takes_the_game_page_down(monkeypatch):
+    from nba_predictor.api import routes
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("box history exploded")
+
+    monkeypatch.setattr(routes.facts_mod, "ratings_for_game", boom)
+    monkeypatch.setattr(routes.facts_mod, "ratings_payload", boom)
+    assert routes._game_ratings(_game()) is None
+    assert routes._game_ratings({**_game(), "completed": False}) is None
+
+
+def test_an_upcoming_game_does_not_get_the_before_the_game_wording(monkeypatch):
+    from nba_predictor.api import routes
+
+    seen = {}
+
+    def fake(as_of, teams, before_game=False, history=None):
+        seen["before_game"] = before_game
+        return {}
+
+    monkeypatch.setattr(routes.facts_mod, "ratings_payload", fake)
+    routes._game_ratings({**_game(), "completed": False})
+    assert seen["before_game"] is False
 
 
 def test_compute_reads_box_files_not_the_network(monkeypatch, tmp_path):

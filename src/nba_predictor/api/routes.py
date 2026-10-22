@@ -265,14 +265,17 @@ def _game_ratings(game: dict) -> dict | None:
 
     When the window was not warmed (a finished game older than the warmer's few
     kept dates), the ratings are computed on demand from box scores in the cache
-    volume and cached on disk keyed by (game_id, schedule state). A cold game
+    volume and cached on disk keyed by the game. A cold game
     shows no table rather than blocking the request, and a game with no usable
     history shows no table, never a made-up one.
     """
-    from ..api import deps
-
-    state = facts_mod._schedule_state(deps.get_schedule_path())
-    return facts_mod.ratings_for_game(game, state)
+    try:
+        if game.get("completed"):
+            return facts_mod.ratings_for_game(game)
+        return facts_mod.ratings_payload(str(game["game_date"]), [game["home_team"], game["away_team"]])
+    except Exception:  # noqa: BLE001 - a rating is an enhancement, never the page
+        logger.exception("ratings unavailable for %s", game.get("game_id"))
+        return None
 
 
 # The MAE is a property of the tracking database and the schedule, not of the request:

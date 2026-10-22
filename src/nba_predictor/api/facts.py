@@ -386,9 +386,14 @@ def ratings_payload(
 
 # --- on-demand ratings for a finished game, cached on disk ----------------
 
-#: (game_id, (schedule mtime_ns, size)) -> payload. Mirrors the disk cache so a
-#: hot entry is served without a stat() or a file read on every request.
-_RATINGS_MEMORY: dict[tuple[str, tuple[int, int]], dict] = {}
+#: game_id -> payload. Mirrors the disk cache so a hot entry is served without a file read on every request. Keyed by the
+#: game alone: a finished game's PRE-GAME ratings do not change when the schedule file is rewritten (the scores timer does
+#: that every few minutes on a game day), and keying on the schedule state would recompute them each time and leave a file
+#: behind for every state.
+_RATINGS_MEMORY: dict[str, dict] = {}
+#: Games whose ratings are being computed right now, so a burst of requests for one game starts one computation.
+_RATINGS_INFLIGHT: set[str] = set()
+_RATINGS_LOCK = threading.Lock()
 
 
 def _ratings_disk_dir() -> Path:
@@ -397,20 +402,20 @@ def _ratings_disk_dir() -> Path:
     return d
 
 
-def _ratings_disk_path(game_id: str, state: tuple[int, int]) -> Path:
-    return _ratings_disk_dir() / f"{game_id}_{state[0]}_{state[1]}.json"
+def _ratings_disk_path(game_id: str) -> Path:
+    return _ratings_disk_dir() / f"{game_id}.json"
 
 
-def _read_ratings_disk(game_id: str, state: tuple[int, int]) -> dict | None:
+def _read_ratings_disk(game_id: str) -> dict | None:
     try:
-        return json.loads(_ratings_disk_path(game_id, state).read_text())
+        return json.loads(_ratings_disk_path(game_id).read_text())
     except (OSError, ValueError):
         return None
 
 
-def _write_ratings_disk(game_id: str, state: tuple[int, int], payload: dict) -> None:
+def _write_ratings_disk(game_id: str, payload: dict) -> None:
     try:
-        _ratings_disk_path(game_id, state).write_text(json.dumps(payload))
+        _ratings_disk_path(game_id).write_text(json.dumps(payload))
     except OSError:  # noqa: BLE001 - a cache that cannot be written is just cold
         logger.exception("ratings disk cache write failed for %s", game_id)
 
@@ -468,35 +473,31 @@ def _compute_ratings_for_game(game: dict) -> dict | None:
     return ratings_payload(as_of, teams, before_game=True, history=history)
 
 
-def _warm_ratings_for_game(game: dict, state: tuple[int, int]) -> None:
+def _warm_ratings_for_game(game: dict) -> None:
     """Off the request thread: compute and cache this game's ratings on disk.
 
-    Never raises: a failed warm leaves the game cold (no table) until the next
-    request retries it.
+    Never raises: a failed warm leaves the game cold (no table) until the next request retries it.
     """
+    game_id = str(game.get("game_id"))
     try:
         payload = _compute_ratings_for_game(game)
+        if payload is not None:
+            _RATINGS_MEMORY[game_id] = payload
+            _write_ratings_disk(game_id, payload)
     except Exception:  # noqa: BLE001 - reported, not raised
-        logger.exception("ratings on-demand warm failed for %s", game.get("game_id"))
-        return
-    if payload is None:
-        return
-    game_id = str(game.get("game_id"))
-    _RATINGS_MEMORY[(game_id, state)] = payload
-    _write_ratings_disk(game_id, state, payload)
+        logger.exception("ratings on-demand warm failed for %s", game_id)
+    finally:
+        with _RATINGS_LOCK:
+            _RATINGS_INFLIGHT.discard(game_id)
 
 
-def ratings_for_game(game: dict, state: tuple[int, int]) -> dict | None:
-    """Ratings for one finished game, on demand.
+def ratings_for_game(game: dict) -> dict | None:
+    """Ratings for one FINISHED game, on demand.
 
-    Fast path: the warmed box-history window is already in memory (recently
-    played games) -- the ratings are computed from it synchronously, exactly as
-    before, with no disk or network.
-
-    Cold: disk cache keyed by (game_id, schedule state) → serve. Disk miss →
-    return None (no table, no blocking) and warm off the request thread so the
-    next visitor finds it. A finished game with no usable history shows no
-    table, never a made-up one.
+    Fast path: the warmed box-history window is already in memory (recently played games) -- computed synchronously from
+    it, as before, with no disk or network. Cold: the disk cache, keyed by the game. A disk miss returns None (no table,
+    no blocking) and starts ONE off-thread computation for that game, so the next visitor finds it. A finished game with
+    no usable history shows no table, never a made-up one.
     """
     as_of = str(game["game_date"])
     teams = [game["home_team"], game["away_team"]]
@@ -506,15 +507,17 @@ def ratings_for_game(game: dict, state: tuple[int, int]) -> dict | None:
         return ratings_payload(as_of, teams, before_game=True, history=history)
 
     game_id = str(game.get("game_id"))
-    key = (game_id, state)
-    cached = _RATINGS_MEMORY.get(key)
+    cached = _RATINGS_MEMORY.get(game_id)
     if cached is not None:
         return cached
-    disk = _read_ratings_disk(game_id, state)
+    disk = _read_ratings_disk(game_id)
     if disk is not None:
-        _RATINGS_MEMORY[key] = disk
+        _RATINGS_MEMORY[game_id] = disk
         return disk
-    threading.Thread(target=_warm_ratings_for_game, args=(game, state), daemon=True).start()
+    with _RATINGS_LOCK:
+        if game_id not in _RATINGS_INFLIGHT:
+            _RATINGS_INFLIGHT.add(game_id)
+            threading.Thread(target=_warm_ratings_for_game, args=(game,), daemon=True).start()
     return None
 
 

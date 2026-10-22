@@ -21,7 +21,7 @@ describe("key out on the card", () => {
 
   it("lists the reported-out players by surname after the margin and total", () => {
     const card = toCardModel(game({ key_out: out }), false, TZ, TIP_MS - 3600_000);
-    expect(card.meta).toBe("BOS by 3.5 · Out: Tatum, Adebayo");
+    expect(card.meta).toBe("BOS by 3.5 · Total 224.5 · Out: Tatum, Adebayo");
   });
 
   it("says nothing on a finished game or when nobody is out", () => {
@@ -43,19 +43,19 @@ describe("toCardModel", () => {
     expect(card.when).toBe("Tue 21 Oct");
     expect(card.pick).toEqual({ label: "BOS", prob: 0.62 });
     expect(card.bar!.map((s) => s.label)).toEqual(["MIA", "BOS"]);
-    expect(card.meta).toBe("BOS by 3.5");
+    expect(card.meta).toBe("BOS by 3.5 · Total 224.5");
     expect(card.status).toBeUndefined();
   });
 
   it("leads with the away team when it is favoured", () => {
     const card = toCardModel(game({ prediction: { home_win_probability: 0.47, predicted_margin: -4.8, predicted_total: 220 } }), false, TZ, 0);
     expect(card.pick).toEqual({ label: "MIA", prob: 0.53 });
-    expect(card.meta).toBe("MIA by 4.8");
+    expect(card.meta).toBe("MIA by 4.8 · Total 220.0");
   });
 
   it("never prints a margin that contradicts the pick", () => {
     const card = toCardModel(game({ prediction: { home_win_probability: 0.55, predicted_margin: -0.6, predicted_total: 220 } }), false, TZ, 0);
-    expect(card.meta).toBe("Toss-up");
+    expect(card.meta).toBe("Toss-up · Total 220.0");
   });
 
   it("shows the total over probability when a market line exists", () => {
@@ -91,7 +91,7 @@ describe("toCardModel", () => {
       TZ,
       0,
     );
-    expect(card.meta).toBe("BOS by 3.5 · Cover −3.5 · 53%");
+    expect(card.meta).toBe("BOS by 3.5 · BOS −3.5 · 53% · Total 224.5");
   });
 
   it("shows both spread cover and total over when both lines exist", () => {
@@ -111,7 +111,7 @@ describe("toCardModel", () => {
       TZ,
       0,
     );
-    expect(card.meta).toBe("BOS by 3.5 · Cover −3.5 · 53% · Over 224.5 · 57%");
+    expect(card.meta).toBe("BOS by 3.5 · BOS −3.5 · 53% · Over 224.5 · 57%");
   });
 
   it("omits the over probability when no market total line exists", () => {
@@ -128,7 +128,7 @@ describe("toCardModel", () => {
       TZ,
       0,
     );
-    expect(card.meta).toBe("BOS by 3.5");
+    expect(card.meta).toBe("BOS by 3.5 · Total 224.5");
   });
 
   it("marks the next game up only when asked", () => {

@@ -10,7 +10,7 @@ import pandas as pd
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 
 from nba_predictor.api.availability import for_teams, resolve_doubtful_players, resolve_out_players
-from nba_predictor.models.probability import cover_prob
+from nba_predictor.models.probability import cover_prob, over_prob
 from nba_predictor.models.manifest import build_manifest
 from nba_predictor.api.deps import (
     get_db_path,
@@ -115,6 +115,26 @@ def _cover_and_sigma_from_manifest(manifest: dict | None) -> tuple[float | None,
     return margin.get("residual_sigma"), total.get("residual_sigma"), win.get("auc")
 
 
+def _market_lines(db_path: Path, g: dict) -> tuple[float | None, float | None]:
+    """(home spread point, total line) the books are quoting for this game, or None for each with no quote.
+
+    The predictions table carries no lines (they live in game_market_predictions, written by the odds pass), so the API
+    never had a line to price a cover or over chance against and showed none. Taken from the latest odds batch: the
+    line most books agree on (the mode), the home point in the books' own sign (home -3.5 = home favoured by 3.5).
+    """
+    from collections import Counter
+
+    rows = [r for r in store.get_market_predictions_for_game(db_path, g["game_id"]) if r["market"] in ("spread", "total") and r["point"] is not None]
+    if not rows:
+        return None, None
+    latest = max(r["created_at"] for r in rows)
+    rows = [r for r in rows if r["created_at"] == latest]
+    totals = [float(r["point"]) for r in rows if r["market"] == "total" and r["selection"] == "over"]
+    spreads = [float(r["point"]) for r in rows if r["market"] == "spread" and r["selection"] == g["home_team"]]
+    mode = lambda xs: Counter(xs).most_common(1)[0][0] if xs else None
+    return mode(spreads), mode(totals)
+
+
 def _prediction_out(db_path: Path, g: dict, manifest: dict | None = None) -> tuple[PredictionOut | None, bool]:
     """The pick to show and whether it was rebuilt after tip-off. The latest
     pick made before tip-off wins; a later backtest row only shows (labelled
@@ -126,15 +146,16 @@ def _prediction_out(db_path: Path, g: dict, manifest: dict | None = None) -> tup
     rebuilt = row is None
     row = row if row is not None else latest_by_instant(rows)
     margin_sigma, total_sigma, _ = _cover_and_sigma_from_manifest(manifest)
+    home_point, total_point = _market_lines(db_path, g)
     return (
         PredictionOut(
             home_win_probability=row["home_win_prob"],
             predicted_margin=row["predicted_margin"],
             predicted_total=row["predicted_total"],
-            market_point=row["market_point"] if "market_point" in row.keys() else None,
-            market_total_point=row["market_total_point"] if "market_total_point" in row.keys() else None,
-            cover_prob_spread=cover_prob(row["predicted_margin"], row["market_point"] if "market_point" in row.keys() else None, margin_sigma) if margin_sigma is not None else None,
-            cover_prob_total=cover_prob(row["predicted_total"], row["market_total_point"] if "market_total_point" in row.keys() else None, total_sigma) if total_sigma is not None else None,
+            market_point=home_point,
+            market_total_point=total_point,
+            cover_prob_spread=cover_prob(row["predicted_margin"], -home_point, margin_sigma) if home_point is not None and margin_sigma is not None else None,
+            cover_prob_total=over_prob(row["predicted_total"], total_point, total_sigma) if total_point is not None and total_sigma is not None else None,
             margin_sigma=margin_sigma,
             total_sigma=total_sigma,
         ),

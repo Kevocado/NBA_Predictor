@@ -432,3 +432,40 @@ def test_the_props_bands_are_null_without_a_manifest(tmp_path, monkeypatch):
     body = client.get("/games/g1").json()
 
     assert body["prop_bands"] is None
+
+
+def test_a_game_with_quoted_lines_gets_a_cover_and_an_over_chance(tmp_path):
+    """The predictions table has no lines, so the API never priced a cover/over chance. The lines come from the odds rows."""
+    from nba_predictor.api.routes import _prediction_out
+    from nba_predictor.tracking import store
+
+    db = tmp_path / "t.db"
+    store.init_db(db)
+    game = {"game_id": "g1", "home_team": "BOS", "away_team": "MIA", "game_date": "2099-01-01", "tip_off": "2099-01-01T23:00Z", "completed": False}
+    store.insert_prediction(db, game_id="g1", created_at="2098-12-31T12:00:00+00:00", model_version="v", home_win_prob=0.62, predicted_margin=5.0, predicted_total=230.0)
+    quote = dict(game_id="g1", model_probability=0.5, market_probability=0.5, edge=0.0, american_odds=-110, created_at="2098-12-31T13:00:00+00:00")
+    for book in ("A", "B", "C"):
+        store.insert_market_prediction(db, market="total", selection="over", point=224.5 if book != "C" else 225.5, bookmaker=book, **quote)
+        store.insert_market_prediction(db, market="total", selection="under", point=224.5 if book != "C" else 225.5, bookmaker=book, **quote)
+        store.insert_market_prediction(db, market="spread", selection="BOS", point=-3.5, bookmaker=book, **quote)
+        store.insert_market_prediction(db, market="spread", selection="MIA", point=3.5, bookmaker=book, **quote)
+    manifest = {"metrics": {"margin": {"residual_sigma": 13.0}, "total": {"residual_sigma": 18.0}}}
+
+    pred, _ = _prediction_out(db, game, manifest)
+
+    assert pred.market_point == -3.5 and pred.market_total_point == 224.5      # the line most books agree on
+    # home must win by more than 3.5: P(margin 5 > 3.5, sigma 13) just above 50%; over 224.5 with a 230 total: ~62%
+    assert 0.53 < pred.cover_prob_spread < 0.55
+    assert 0.60 < pred.cover_prob_total < 0.64
+
+
+def test_no_quoted_lines_means_no_cover_or_over_chance(tmp_path):
+    from nba_predictor.api.routes import _prediction_out
+    from nba_predictor.tracking import store
+
+    db = tmp_path / "t.db"
+    store.init_db(db)
+    game = {"game_id": "g1", "home_team": "BOS", "away_team": "MIA", "game_date": "2099-01-01", "tip_off": "2099-01-01T23:00Z", "completed": False}
+    store.insert_prediction(db, game_id="g1", created_at="2098-12-31T12:00:00+00:00", model_version="v", home_win_prob=0.62, predicted_margin=5.0, predicted_total=230.0)
+    pred, _ = _prediction_out(db, game, {"metrics": {"margin": {"residual_sigma": 13.0}, "total": {"residual_sigma": 18.0}}})
+    assert pred.market_point is None and pred.cover_prob_spread is None and pred.cover_prob_total is None

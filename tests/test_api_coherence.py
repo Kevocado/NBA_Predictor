@@ -194,3 +194,63 @@ def test_score_upcoming_games_fails_loud_without_margin_sigma(tmp_path):
 
             with pytest.raises(ValueError, match="margin_sigma"):
                 score_upcoming_games(games, models_dir, tmp_path / "tracking.db", "v20261007")
+
+def test_scored_totals_carry_the_manifests_league_drift(tmp_path):
+    """The total model under-predicted league scoring by ~2.6 pts every season since 2020; the manifest carries the recent
+    league-wide residual and every served total adds it. A manifest without one (an older one) adds nothing."""
+    import json
+    from unittest.mock import patch, MagicMock
+    import pandas as pd
+
+    from nba_predictor.pipeline.ingest import score_upcoming_games
+
+    def run(metrics):
+        models_dir = tmp_path / f"m{len(str(metrics))}"
+        models_dir.mkdir()
+        (models_dir / "manifest.json").write_text(json.dumps({"metrics": metrics}))
+        with patch("nba_predictor.pipeline.ingest.joblib.load") as mock_load, \
+             patch("nba_predictor.pipeline.ingest.build_feature_frame") as mock_build, \
+             patch("nba_predictor.pipeline.ingest.store.insert_predictions") as mock_insert:
+            margin, total = MagicMock(), MagicMock()
+            margin.predict.return_value = np.array([1.0])
+            total.predict.return_value = np.array([220.0])
+            mock_load.side_effect = lambda path: total if "total_model" in str(path) else margin if "margin_model" in str(path) else MagicMock()
+            mock_build.return_value = (pd.DataFrame({"game_id": ["g1"], "home_win": [np.nan], "f1": [1.0]}), ["f1"])
+            score_upcoming_games([{"game_id": "g1", "game_date": "2026-10-22", "home_team": "BOS", "away_team": "MIA"}],
+                                 models_dir, tmp_path / "t.db", "v1")
+            return mock_insert.call_args.args[1][0]["predicted_total"]
+
+    assert run({"margin": {"residual_sigma": 15.0}, "total": {"drift": 2.5}}) == 222.5
+    assert run({"margin": {"residual_sigma": 15.0}}) == 220.0
+
+
+def test_the_drift_is_the_recent_league_residual_and_is_capped():
+    import numpy as np
+    import pandas as pd
+    from nba_predictor.pipeline.retrain import TOTAL_DRIFT_CAP, compute_total_drift, manifest_total_drift
+
+    class Model:
+        def __init__(self, level):
+            self.level = level
+
+        def predict(self, X):
+            return np.full(len(X), self.level)
+
+    df = pd.DataFrame({"game_date": pd.date_range("2026-01-01", periods=400).astype(str),
+                       "home_pts": 115.0, "away_pts": 110.0, "f": 1.0})          # actual totals 225
+    assert compute_total_drift(df, Model(222.5), ["f"]) == 2.5
+    assert compute_total_drift(df, Model(180.0), ["f"]) == TOTAL_DRIFT_CAP         # a broken fit cannot move totals by 45
+    assert compute_total_drift(df.head(10), Model(222.5), ["f"]) == 0.0            # too little to read
+    assert manifest_total_drift({"metrics": {"total": {"drift": float("nan")}}}) == 0.0
+
+
+def test_a_drift_that_cannot_be_read_is_no_correction_not_a_failed_retrain():
+    import pandas as pd
+    from nba_predictor.pipeline.retrain import compute_total_drift
+
+    class Broken:
+        def predict(self, X):
+            raise RuntimeError("no model")
+
+    df = pd.DataFrame({"game_date": pd.date_range("2026-01-01", periods=100).astype(str), "home_pts": 110.0, "away_pts": 105.0, "f": 1.0})
+    assert compute_total_drift(df, Broken(), ["f"]) == 0.0

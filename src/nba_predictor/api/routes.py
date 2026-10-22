@@ -695,8 +695,47 @@ def hub_rankings() -> list[dict]:
 
 
 @router.get("/hub/standings")
-def hub_standings() -> list[dict]:
+def hub_standings(
+    season: str | None = None,
+    schedule: list[dict] = Depends(get_schedule),
+) -> list[dict]:
+    if season == "previous":
+        return previous_season_standings(schedule)
     return load_hub_cache(config.DATA_DIR / "cache" / "hub" / "standings.json")
+
+
+def previous_season_standings(schedule: list[dict]) -> list[dict]:
+    """Last season's standings, computed from the schedule cache.
+
+    Reuses `compute_standings` (no second standings function). The schedule
+    cache carries completed flags and scores but not box scores, and
+    `compute_standings` now counts a game when it is completed and scored --
+    standings need only W/L, box scores are a ratings/form requirement.
+    Preseason is excluded via `is_preseason`.
+    """
+    from nba_predictor.pipeline.ingest import (
+        compute_standings,
+        is_preseason,
+        _current_season_year,
+        _game_date,
+        _season_start_year,
+    )
+
+    current = _current_season_year(schedule)
+    if current is None:
+        return []
+    previous = current - 1
+
+    previous_games = [
+        g
+        for g in schedule
+        if _game_date(g) is not None
+        and _season_start_year(_game_date(g)) == previous
+        and not is_preseason(g)
+        and g.get("home_pts") is not None
+        and g.get("away_pts") is not None
+    ]
+    return compute_standings(previous_games)
 
 
 @router.get("/hub/team-overview")

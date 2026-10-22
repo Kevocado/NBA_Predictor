@@ -1,3 +1,5 @@
+import json
+
 def _client(tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
 
@@ -36,6 +38,46 @@ def test_hub_rankings_empty_when_no_cache(tmp_path, monkeypatch):
 def test_hub_standings_empty_when_no_cache(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     assert client.get("/hub/standings").json() == []
+
+
+def test_hub_standings_previous_season_excludes_preseason_and_current_season(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    sched_dir = tmp_path / "cache" / "schedule"
+    sched_dir.mkdir(parents=True)
+    (sched_dir / "games.json").write_text(json.dumps([
+        # Previous season (season start year 2025): regular games count.
+        {"game_id": "p1", "game_date": "2025-10-25", "home_team": "BOS", "away_team": "MIA",
+         "completed": True, "home_pts": 110, "away_pts": 100, "season_type": 2},
+        {"game_id": "p2", "game_date": "2025-11-01", "home_team": "LAL", "away_team": "GSW",
+         "completed": True, "home_pts": 95, "away_pts": 105, "season_type": 2},
+        # Preseason of the previous season: excluded via is_preseason.
+        {"game_id": "pr1", "game_date": "2025-10-02", "home_team": "BOS", "away_team": "PHI",
+         "completed": True, "home_pts": 99, "away_pts": 84, "season_type": 1},
+        # Current season (season start year 2026): not part of the previous season.
+        {"game_id": "c1", "game_date": "2026-10-25", "home_team": "BOS", "away_team": "MIA",
+         "completed": True, "home_pts": 110, "away_pts": 100, "season_type": 2},
+    ]))
+    body = client.get("/hub/standings?season=previous").json()
+    by_team = {row["abbreviation"]: row for row in body}
+    assert by_team["BOS"]["wins"] == 1 and by_team["BOS"]["losses"] == 0
+    assert by_team["MIA"]["wins"] == 0 and by_team["MIA"]["losses"] == 1
+    assert by_team["LAL"]["wins"] == 0 and by_team["LAL"]["losses"] == 1
+    assert by_team["GSW"]["wins"] == 1 and by_team["GSW"]["losses"] == 0
+    # Preseason and current-season teams do not appear.
+    assert "PHI" not in by_team
+
+
+def test_hub_standings_previous_season_empty_when_no_previous_season(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    sched_dir = tmp_path / "cache" / "schedule"
+    sched_dir.mkdir(parents=True)
+    (sched_dir / "games.json").write_text(json.dumps([
+        # Only current season (season start year 2026): no previous season.
+        {"game_id": "c1", "game_date": "2026-10-25", "home_team": "BOS", "away_team": "MIA",
+         "completed": True, "home_pts": 110, "away_pts": 100, "season_type": 2},
+    ]))
+    # No previous season in the cache: the control stays hidden.
+    assert client.get("/hub/standings?season=previous").json() == []
 
 
 def test_hub_track_record_empty_when_no_predictions(tmp_path, monkeypatch):

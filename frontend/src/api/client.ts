@@ -511,7 +511,11 @@ export const api = {
   /** One player: their last ten games, their status, their next game. */
   getHubPlayer: (playerId: string) => fetchJson<PlayerDetail>(`/hub/players/${playerId}`),
   getHubRankings: () => fetchJson<PowerRankingRow[]>("/hub/rankings"),
-  getHubStandings: () => fetchJson<StandingsRow[]>("/hub/standings"),
+  /** The season's standings, or the previous season's when `season` is
+   *  "previous" (computed from the schedule cache's completed games of the
+   *  previous season, preseason excluded). */
+  getHubStandings: (season?: "current" | "previous") =>
+    fetchJson<StandingsRow[]>(season ? `/hub/standings?season=${season}` : "/hub/standings"),
   /** The Teams page's one payload: the league's ratings, every team's form,
    *  its last five games and its next game with the model's pick. */
   getHubTeamOverview: () => fetchJson<TeamOverview>("/hub/team-overview"),

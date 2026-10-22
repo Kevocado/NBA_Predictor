@@ -63,7 +63,8 @@ export default function TeamsPanel() {
   const [params] = useSearchParams();
   const [data, setData] = useState<
     | {
-        standings: StandingsRow[];
+        currentStandings: StandingsRow[];
+        previousStandings: StandingsRow[];
         rankings: PowerRankingRow[];
         teams: TeamHubRow[];
         overview: TeamOverview;
@@ -74,6 +75,9 @@ export default function TeamsPanel() {
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const [conference, setConference] = useState<Conference>("League");
+  // "previous" only becomes selectable when the schedule cache actually holds
+  // a previous season (the route returns rows for it).
+  const [season, setSeason] = useState<"current" | "previous">("current");
 
   useEffect(() => {
     let stale = false;
@@ -81,13 +85,14 @@ export default function TeamsPanel() {
     setFailed(false);
     Promise.all([
       api.getHubStandings(),
+      api.getHubStandings("previous"),
       api.getHubRankings(),
       api.getHubTeams(),
       api.getHubTeamOverview(),
       api.getHubPlayers(),
     ])
-      .then(([standings, rankings, teams, overview, players]) => {
-        if (!stale) setData({ standings, rankings, teams, overview, players });
+      .then(([currentStandings, previousStandings, rankings, teams, overview, players]) => {
+        if (!stale) setData({ currentStandings, previousStandings, rankings, teams, overview, players });
       })
       .catch(() => {
         if (!stale) setFailed(true);
@@ -97,7 +102,20 @@ export default function TeamsPanel() {
     };
   }, [attempt]);
 
-  const rows = useMemo(() => (data ? buildRows(data) : []), [data]);
+  // data may be null on the first render; these reads are plain values, not hooks,
+  // so they are safe to compute before the loading guard below.
+  const currentStandings = data?.currentStandings ?? [];
+  const previousStandings = data?.previousStandings ?? [];
+  const standings = season === "previous" ? previousStandings : currentStandings;
+  // The control is only shown when the schedule cache holds a previous season.
+  const showToggle = previousStandings.length > 0;
+
+  // Kept unconditional (called every render) so the hook count stays stable; it
+  // returns an empty table while data is still loading.
+  const rows = useMemo(() => {
+    if (!data) return [];
+    return buildRows({ ...data, standings });
+  }, [data, standings]);
   // Until every team has played there is no standings order to show (a pile of unseeded 0s): lead with the power rating.
   const everyTeamSeeded = rows.length > 0 && rows.every((row) => row.seed > 0);
 
@@ -119,14 +137,14 @@ export default function TeamsPanel() {
     return <p className="text-sm text-pr-text-dim">No team data cached yet.</p>;
   }
 
-  const shown = rows.filter((row) => conference === "League" || teamConference(data.standings, row.team) === conference);
+  const shown = rows.filter((row) => conference === "League" || teamConference(standings, row.team) === conference);
   // A conference's seed order is only real once every team in it has a seed, and
   // only then do the cut lines mean anything: they mark where the playoffs stop.
   const conferenceSeeded =
     conference !== "League" && shown.length > 0 && shown.every((row) => row.seed > 0);
   const sortParam = params.get("sort") === "power" || (!everyTeamSeeded && !conferenceSeeded) ? "power" : "seed";
-  const mostGamesPlayed = Math.max(...data.standings.map((r) => r.wins + r.losses));
-  const state = data.standings[0]?.season_state;
+  const mostGamesPlayed = Math.max(...standings.map((r) => r.wins + r.losses));
+  const state = standings[0]?.season_state;
   const note =
     state === "regular" || state === "postseason"
       ? null
@@ -155,18 +173,44 @@ export default function TeamsPanel() {
             </button>
           ))}
         </div>
+        {showToggle && (
+          <>
+            <div className="inline-flex rounded-pr border border-pr-rule ml-3" role="group" aria-label="Season">
+              <button
+                type="button"
+                onClick={() => setSeason("current")}
+                aria-pressed={season === "current"}
+                className={`px-3 py-1.5 text-sm ${season === "current" ? "bg-pr-accent font-semibold text-pr-accent-ink" : "text-pr-text-dim"}`}
+              >
+                This season
+              </button>
+              <button
+                type="button"
+                onClick={() => setSeason("previous")}
+                aria-pressed={season === "previous"}
+                className={`px-3 py-1.5 text-sm ${season === "previous" ? "bg-pr-accent font-semibold text-pr-accent-ink" : "text-pr-text-dim"}`}
+              >
+                Last season
+              </button>
+            </div>
+            <span className="text-xs text-pr-text-faint ml-2">
+              {season === "previous" ? "Last season's standings" : "This season's standings"}
+            </span>
+          </>
+        )}
         {data.overview.caption && (
           <span className="text-xs text-pr-text-faint">{data.overview.caption}</span>
         )}
       </div>
 
       <TeamsTable
-        key={conference}
+        key={`${conference}-${season}`}
         rows={shown}
         overview={data.overview}
         players={data.players}
         initialSortKey={sortParam}
         separators={playInLines(shown, conferenceSeeded)}
+        isLastSeason={season === "previous"}
       />
     </div>
   );
@@ -246,7 +290,7 @@ function buildRows(data: {
  * full-coloured dots reads as this season's form when it is not. The cell says
  * how many of them are from last season.
  */
-function FormDots({ form }: { form: FormEntry[] }) {
+function FormDots({ form, isLastSeason }: { form: FormEntry[]; isLastSeason?: boolean }) {
   if (form.length === 0) return <span className="text-pr-text-faint">—</span>;
   const fromLastSeason = form.filter((entry) => !entry.this_season).length;
   const label = `${form.map((entry) => entry.result).join(" ")}${
@@ -260,7 +304,7 @@ function FormDots({ form }: { form: FormEntry[] }) {
           data-last-season={entry.this_season ? undefined : "true"}
           className={`inline-block h-2 w-2 rounded-full ${
             entry.result === "W" ? "bg-pr-win" : "bg-pr-loss"
-          } ${entry.this_season ? "" : "opacity-40"}`}
+          } ${entry.this_season || isLastSeason ? "" : "opacity-40"}`}
           aria-hidden="true"
         />
       ))}
@@ -338,12 +382,14 @@ function TeamsTable({
   players,
   initialSortKey,
   separators,
+  isLastSeason,
 }: {
   rows: Row[];
   overview: TeamOverview;
   players: PlayerHubRow[];
   initialSortKey: string;
   separators: Separator[];
+  isLastSeason: boolean;
 }) {
   const n = overview.n_teams || 30;
 
@@ -417,7 +463,7 @@ function TeamsTable({
       key: "form",
       label: "Last 10",
       value: (row) => row.form.join(""),
-      render: (row) => <FormDots form={row.form} />,
+      render: (row) => <FormDots form={row.form} isLastSeason={isLastSeason} />,
     },
     {
       key: "streak",

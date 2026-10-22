@@ -330,4 +330,70 @@ describe("TeamsPanel", () => {
     const firstRow = within(screen.getByRole("table")).getAllByRole("row")[1];
     expect(within(firstRow).getAllByRole("cell")[0].textContent).toContain("Lakers");
   });
+
+  const previous: StandingsRow[] = [
+    { conference: "West", seed: 1, abbreviation: "GSW", wins: 50, losses: 32, win_pct: 0.61, games_back: 0, playoff_status: "clinched", season_state: "offseason" },
+  ];
+
+  it("shows the season toggle only when the schedule cache holds a previous season", async () => {
+    vi.mocked(api.getHubStandings).mockImplementation((season) =>
+      Promise.resolve(season === "previous" ? previous : standings),
+    );
+    renderPanel();
+    await screen.findByTestId("teams-panel");
+
+    // Shown because the previous season has rows.
+    expect(screen.getByRole("button", { name: "This season" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Last season" })).toBeInTheDocument();
+    expect(screen.getByText("This season's standings")).toBeInTheDocument();
+  });
+
+  it("hides the season toggle when there is no previous season", async () => {
+    vi.mocked(api.getHubStandings).mockImplementation(() => Promise.resolve([]));
+    renderPanel();
+    await screen.findByTestId("teams-panel");
+    expect(screen.queryByRole("button", { name: "Last season" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "This season" })).toBeNull();
+  });
+
+  it("switches which standings the table shows and says which season is shown", async () => {
+    vi.mocked(api.getHubStandings).mockImplementation((season) =>
+      Promise.resolve(season === "previous" ? previous : standings),
+    );
+    renderPanel();
+    await screen.findByTestId("teams-panel");
+
+    // This season: Celtics (seed 1), not Warriors.
+    const celticsRow = within(screen.getByRole("table")).getByText("Celtics").closest("tr") as HTMLElement;
+    expect(celticsRow.querySelectorAll("td")[1]).toHaveTextContent("1");
+    expect(within(screen.getByRole("table")).queryByText("Warriors")).toBeNull();
+    expect(screen.getByText("This season's standings")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Last season" }));
+    expect(screen.getByText("Last season's standings")).toBeInTheDocument();
+    // Table now shows the previous season: Warriors seeded 1, Celtics (only in
+    // the teams feed, no previous-season record) unseeded.
+    expect(within(screen.getByRole("table")).getByText("Warriors")).toBeInTheDocument();
+    expect(within(screen.getByRole("table")).getByText("Celtics").closest("tr")!.querySelectorAll("td")[1]).toHaveTextContent("—");
+  });
+
+  it("does not dim the last-ten dots when viewing last season", async () => {
+    vi.mocked(api.getHubStandings).mockImplementation((season) =>
+      Promise.resolve(season === "previous" ? previous : standings),
+    );
+    // LAL's form is all last season's entries, which would normally be dimmed.
+    vi.mocked(api.getHubTeamOverview).mockResolvedValue({
+      ...overview,
+      form: { LAL: form(["W", "L"], false) },
+    } as never);
+
+    renderPanel();
+    await screen.findByTestId("teams-panel");
+    await userEvent.click(screen.getByRole("button", { name: "Last season" }));
+
+    const dots = within(screen.getByRole("table")).getByLabelText(/W L/).querySelectorAll("span");
+    expect(dots).toHaveLength(2);
+    // No dot is dimmed in last-season view.
+    expect([...dots].every((d) => !d.classList.contains("opacity-40"))).toBe(true);
+  });
 });

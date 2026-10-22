@@ -419,3 +419,26 @@ def test_the_lifespan_starts_the_warmer():
     assert "start_box_history_warmer" in inspect.getsource(app_mod.lifespan), (
         "the lifespan does not start the warmer"
     )
+
+
+def test_the_warmer_warms_today_and_warms_again_when_the_date_rolls_over(offline, monkeypatch):
+    """The Teams page reads the ratings as of TODAY. A date that rolls over with no schedule change used to leave it blank
+    until the next game finished."""
+    warmed: list[str] = []
+    monkeypatch.setattr(
+        facts_mod, "_schedule",
+        lambda: [_game(f"g{i}", f"2026-03-{18 + i:02d}", "BOS", "MIA", completed=False) for i in range(12)],
+    )
+    monkeypatch.setattr(facts_mod, "warm_box_history", lambda as_of: warmed.append(as_of) or True)
+    days = iter(["2026-03-19", "2026-03-19", "2026-03-20"])
+    monkeypatch.setattr(facts_mod.deps, "get_today", lambda: next(days))
+
+    ticked = {"n": 0}
+    facts_mod.start_box_history_warmer(
+        __import__("pathlib").Path("/nonexistent/schedule.json"),
+        sleep=lambda _: ticked.__setitem__("n", ticked["n"] + 1),
+        should_stop=lambda: ticked["n"] >= 3,
+    ).join(timeout=5)
+
+    assert warmed.count("2026-03-19") >= 2, f"the date rolling over did not trigger a second warm: {warmed}"
+    assert len(set(warmed)) <= facts_mod.BOX_HISTORY_KEEP

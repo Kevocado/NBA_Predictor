@@ -160,7 +160,7 @@ export default function PlayerBoxScore({ playerProps, hubPlayers, homeTeam, away
         }}
       </TeamSwitch>
       {unattributed.length > 0 && (
-        <p className="mt-2 text-xs text-pr-text-dim">
+        <p className="mt-2 text-sm text-pr-text-dim">
           {unattributed.length} player{unattributed.length === 1 ? "" : "s"} could not be matched to{" "}
           {teamName(awayTeam)} or {teamName(homeTeam)} and {unattributed.length === 1 ? "is" : "are"} left out
           rather than guessed onto a side.

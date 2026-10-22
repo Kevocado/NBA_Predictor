@@ -227,10 +227,13 @@ def start_box_history_warmer(
     schedule_path = Path(schedule_path)
 
     def _run() -> None:
-        seen_state: tuple[int, int] | None = None
+        seen_state: tuple | None = None
         pending: set[str] = set()
         while should_stop is None or not should_stop():
-            state = _schedule_state(schedule_path)
+            # The date is part of the state: the Teams page asks for the ratings as of TODAY, and a date that rolls over
+            # with no schedule change (7pm Central, the busiest hour of the day) was otherwise never warmed.
+            today = deps.get_today()
+            state = (_schedule_state(schedule_path), today)
             if state != seen_state:
                 # A schedule state this pass has not covered yet: warm the next
                 # `BOX_HISTORY_KEEP` dates. Only as many as the cache holds -- a
@@ -254,11 +257,10 @@ def start_box_history_warmer(
                 )
                 if not upcoming and not played:
                     logger.info("no games to warm duel history for")
-                dates = (
-                    set(upcoming[:BOX_HISTORY_KEEP - BOX_HISTORY_PAST])
-                    | set(played[:BOX_HISTORY_PAST])
-                    | pending
-                )
+                ahead = upcoming[:BOX_HISTORY_KEEP - BOX_HISTORY_PAST]
+                if today not in ahead:          # today always gets its own window; it takes the last upcoming slot
+                    ahead = ahead[:-1] + [today] if len(ahead) == BOX_HISTORY_KEEP - BOX_HISTORY_PAST else ahead + [today]
+                dates = set(ahead) | set(played[:BOX_HISTORY_PAST]) | pending
                 seen_state = state
             elif pending:
                 # Same schedule, but a date failed last time: retry only that.

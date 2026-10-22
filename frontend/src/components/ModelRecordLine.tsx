@@ -37,7 +37,7 @@ export function ModelRecordLine({
       ? `${Math.round((record.hits / record.settled) * 100)}%`
       : `${record.hits} of ${record.settled}`;
   return (
-    <p className={`text-xs text-pr-text-dim ${className}`.trim()}>
+    <p className={`text-sm text-pr-text-dim ${className}`.trim()}>
       Model, picks made before tip-off: <span className="font-semibold text-pr-text">{figure}</span> ·{" "}
       <a href="/track-record" className="underline underline-offset-2 hover:text-pr-text">
         Track record

@@ -61,7 +61,7 @@ export function PostGameReview({
             <span className="font-pr-display text-lg font-semibold tabular-nums">{review.onNumber}</span> of{" "}
             <span className="tabular-nums">{review.total}</span> player lines within range
           </p>
-          <p className="mt-1 text-xs text-pr-text-faint">
+          <p className="mt-1 text-sm text-pr-text-faint">
             A line is inside the range when the miss is no bigger than the model's own error for that stat.
           </p>
         </div>
@@ -92,7 +92,7 @@ function ReviewColumn({
               <PlayerAvatar playerId={row.player_id} name={row.player_name} size={32} />
               <span className="min-w-0">
                 <span className="block truncate text-sm font-semibold text-pr-text">{row.player_name}</span>
-                <span className="block text-xs text-pr-text-dim">
+                <span className="block text-sm text-pr-text-dim">
                   {row.actual} {statLabel(row.stat)} vs {row.projected.toFixed(1)} projected ({" "}
                   <span className={tone === "win" ? "text-pr-win" : "text-pr-loss"}>
                     {row.gap > 0 ? "+" : ""}

@@ -470,12 +470,34 @@ function fetchWithTimeout(url: string, init: RequestInit = {}): Promise<Response
   return fetch(url, { ...init, signal: controller.signal }).finally(() => clearTimeout(timer));
 }
 
+// A redeploy or a restart shows up to a reader as a few seconds of refused connections or 502/503/504. A read is safe to
+// repeat, so those (and only those) are tried again after a short wait instead of ending on the page's error state. A
+// timeout is NOT retried: a backend that hangs should reach the error state in 15s, not 45s.
+export const RETRY_DELAYS_MS = [1_000, 3_000];
+const RETRYABLE_STATUS = new Set([502, 503, 504]);
+
 async function fetchJson<T>(path: string): Promise<T> {
-  const response = await fetchWithTimeout(`${API_BASE}${path}`);
-  if (!response.ok) {
-    throw new Error(`Request to ${path} failed with status ${response.status}`);
+  for (let attempt = 0; ; attempt++) {
+    let response: Response;
+    try {
+      response = await fetchWithTimeout(`${API_BASE}${path}`);
+    } catch (error) {
+      // fetch rejects with a TypeError when the connection is refused or dropped; an abort is the timeout.
+      if (error instanceof TypeError && attempt < RETRY_DELAYS_MS.length) {
+        await new Promise((resolve) => setTimeout(resolve, RETRY_DELAYS_MS[attempt]));
+        continue;
+      }
+      throw error;
+    }
+    if (!response.ok) {
+      if (RETRYABLE_STATUS.has(response.status) && attempt < RETRY_DELAYS_MS.length) {
+        await new Promise((resolve) => setTimeout(resolve, RETRY_DELAYS_MS[attempt]));
+        continue;
+      }
+      throw new Error(`Request to ${path} failed with status ${response.status}`);
+    }
+    return response.json() as Promise<T>;
   }
-  return response.json() as Promise<T>;
 }
 
 export const api = {

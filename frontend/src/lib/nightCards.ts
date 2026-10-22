@@ -1,4 +1,4 @@
-import { contrast, kickoff, parseKickoff, stat, type Segment, type Side, type Status } from "../predictor-ui";
+import { contrast, kickoff, parseKickoff, pct, stat, type Segment, type Side, type Status } from "../predictor-ui";
 import type { Game } from "../api/client";
 import { favourite, marginLine, pickWon } from "./pick";
 import { teamColor, teamName } from "./teams";
@@ -64,7 +64,20 @@ export function toCardModel(game: Game, isNext: boolean, timeZone?: string, now:
       { label: game.away_team, prob: 1 - p.home_win_probability, color: awayColour },
       { label: game.home_team, prob: p.home_win_probability, color: homeColour },
     ];
-    model.meta = `${marginLine(p, game.home_team, game.away_team)} · Total ${stat(p.predicted_total)}`;
+    const parts: string[] = [];
+    const ml = marginLine(p, game.home_team, game.away_team);
+    parts.push(ml);
+    // Spread cover chance: only when the market line exists.
+    if (p.cover_prob_spread != null && p.market_point != null) {
+      parts.push(`Cover ${stat(p.market_point)} · ${pct(p.cover_prob_spread)}`);
+    }
+    // Total over chance: only when the market line exists. Replaces the old
+    // "Total {predicted_total}" line, which showed the model's own number
+    // rather than the line that is actually listed.
+    if (p.cover_prob_total != null && p.market_total_point != null) {
+      parts.push(`Over ${stat(p.market_total_point)} · ${pct(p.cover_prob_total)}`);
+    }
+    model.meta = parts.join(" · ");
   }
 
   // Who is out, in the card's own words: surnames, upcoming games only.

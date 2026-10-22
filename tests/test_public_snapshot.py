@@ -1,3 +1,4 @@
+import gzip
 import json
 from datetime import datetime, timedelta, timezone
 
@@ -100,4 +101,93 @@ def test_main_initializes_tracking_db_when_it_does_not_exist_yet(tmp_path, monke
     main()  # must not raise even though tracking.db has never been created
 
     assert (tmp_path / "tracking.db").exists()
-    assert (tmp_path / "public_snapshot.json").exists()
+    assert (tmp_path / "public_snapshot.json").exists()                        
+
+
+def test_main_appends_each_pick_to_history(tmp_path, monkeypatch):
+    from nba_predictor import config
+    from nba_predictor.public_snapshot import main
+    from nba_predictor.tracking import store
+
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(config, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(config, "TRACKING_DB_PATH", tmp_path / "tracking.db")
+
+    schedule_path = tmp_path / "cache" / "schedule" / "games.json"
+    schedule_path.parent.mkdir(parents=True)
+    schedule_path.write_text(
+        json.dumps([{"game_id": "g1", "game_date": "2026-11-01", "home_team": "BOS", "away_team": "MIA"}])
+    )
+
+    db_path = tmp_path / "tracking.db"
+    store.init_db(db_path)
+    store.insert_prediction(
+        db_path, game_id="g1", created_at="2026-10-18T12:00:00+00:00", model_version="v1",
+        home_win_prob=0.60, predicted_margin=3.0, predicted_total=220.0,
+    )
+    manifest_path = tmp_path / "models" / "manifest.json"
+    manifest_path.parent.mkdir(parents=True)
+    manifest_path.write_text(
+        json.dumps({"model_version": "v1", "trained_at": "2026-10-18T00:00:00+00:00",
+                    "models": [], "metrics": {"total": {"residual_sigma": 15.0}}})
+    )
+
+    main()
+
+    rows = [json.loads(line) for line in gzip.open(tmp_path / "picks_history.jsonl.gz", "rt")]
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["game_id"] == "g1"
+    assert row["game_date"] == "2026-11-01"
+    assert row["home_team"] == "BOS" and row["away_team"] == "MIA"
+    assert row["home_win_prob"] == 0.60
+    assert row["predicted_margin"] == 3.0
+    assert row["predicted_total"] == 220.0
+    assert row["total_sigma"] == 15.0
+    assert row["model_version"] == "v1"
+    assert row["created_at"] == "2026-10-18T12:00:00+00:00"
+
+
+def test_pick_history_keeps_every_version_and_never_overwrites(tmp_path, monkeypatch):
+    from nba_predictor import config
+    from nba_predictor.public_snapshot import main
+    from nba_predictor.tracking import store
+
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(config, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(config, "TRACKING_DB_PATH", tmp_path / "tracking.db")
+
+    schedule_path = tmp_path / "cache" / "schedule" / "games.json"
+    schedule_path.parent.mkdir(parents=True)
+    schedule_path.write_text(
+        json.dumps([{"game_id": "g1", "game_date": "2026-11-01", "home_team": "BOS", "away_team": "MIA"}])
+    )
+
+    db_path = tmp_path / "tracking.db"
+    store.init_db(db_path)
+    manifest_path = tmp_path / "models" / "manifest.json"
+    manifest_path.parent.mkdir(parents=True)
+    manifest_path.write_text(
+        json.dumps({"model_version": "v1", "trained_at": "2026-10-18T00:00:00+00:00",
+                    "models": [], "metrics": {"total": {"residual_sigma": 15.0}}})
+    )
+
+    store.insert_prediction(db_path, game_id="g1", created_at="2026-10-18T12:00:00+00:00",
+                            model_version="v1", home_win_prob=0.60, predicted_margin=3.0, predicted_total=220.0)
+    main()
+    rows = [json.loads(line) for line in gzip.open(tmp_path / "picks_history.jsonl.gz", "rt")]
+    assert len(rows) == 1
+    first = rows[0]["created_at"], rows[0]["home_win_prob"]
+
+    store.insert_prediction(db_path, game_id="g1", created_at="2026-10-19T12:00:00+00:00",
+                            model_version="v2", home_win_prob=0.55, predicted_margin=2.0, predicted_total=218.0)
+    main()
+    rows = [json.loads(line) for line in gzip.open(tmp_path / "picks_history.jsonl.gz", "rt")]
+    assert len(rows) == 2
+    assert rows[0]["created_at"] == first[0] and rows[0]["home_win_prob"] == first[1]
+    assert rows[1]["created_at"] == "2026-10-19T12:00:00+00:00"
+    assert rows[1]["home_win_prob"] == 0.55
+
+    main()
+    rows = [json.loads(line) for line in gzip.open(tmp_path / "picks_history.jsonl.gz", "rt")]
+    assert len(rows) == 2

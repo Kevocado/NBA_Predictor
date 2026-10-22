@@ -20,6 +20,7 @@ whole point is that they would not.
 
 from __future__ import annotations
 
+import gzip
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -27,6 +28,7 @@ from pathlib import Path
 from nba_predictor import config
 from nba_predictor.services.hub_service import compute_track_record, load_hub_cache
 from nba_predictor.services.schedule_repository import load_schedule
+from nba_predictor.tracking import store
 from nba_predictor.tracking.store import init_db
 
 #: How old a model may be at publish time. Fourteen days: the daily refresh runs
@@ -157,6 +159,97 @@ def write_snapshot(snapshot: dict, output_path: Path) -> None:
     output_path.write_text(json.dumps(snapshot, indent=2))
 
 
+def _manifest_total_sigma(manifest: dict | None) -> float | None:
+    """The model's total residual sigma, per model version.
+
+    The published manifest carries it under metrics.total.residual_sigma; it is
+    the sigma the total market is priced from. Missing or unreadable means the
+    total market cannot be priced from this snapshot.
+    """
+    try:
+        return float((manifest or {}).get("metrics", {}).get("total", {}).get("residual_sigma"))
+    except (TypeError, ValueError):
+        return None
+
+
+def append_pick_history(
+    schedule_path: Path,
+    db_path: Path,
+    history_path: Path,
+    total_sigma: float | None,
+) -> int:
+    """Append each game's current pick to the pick history.
+
+    Append-only and never overwritten: a pick row is keyed by (game_id,
+    created_at), so a later retrain adds a new row instead of replacing the one
+    that existed when a price was logged. Every version the model has published
+    stays in the file, which is what lets the ledger pair each price with the
+    pick that preceded it.
+
+    Returns the number of rows appended.
+    """
+    init_db(db_path)
+    schedule = load_schedule(schedule_path)
+    by_game = {g["game_id"]: g for g in schedule}
+
+    existing: dict[tuple[str, str], dict] = {}
+    if history_path.exists():
+        try:
+            with gzip.open(history_path, "rt", encoding="utf-8") as handle:
+                for line in handle:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        row = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(row, dict) and row.get("game_id") and row.get("created_at"):
+                        existing[(str(row["game_id"]), str(row["created_at"]))] = row
+        except (OSError, gzip.BadGzipFile):
+            existing = {}
+
+    new_rows: list[dict] = []
+    with store.get_connection(db_path) as conn:
+        for game_id, created_at, model_version, home_win_prob, predicted_margin, predicted_total in conn.execute(
+            "SELECT game_id, created_at, model_version, home_win_prob, predicted_margin, predicted_total "
+            "FROM predictions ORDER BY created_at"
+        ):
+            key = (str(game_id), str(created_at))
+            if key in existing:
+                continue
+            game = by_game.get(game_id)
+            if game is None:
+                continue
+            new_rows.append(
+                {
+                    "game_id": game_id,
+                    "game_date": game.get("game_date"),
+                    "home_team": game.get("home_team"),
+                    "away_team": game.get("away_team"),
+                    "home_win_prob": home_win_prob,
+                    "predicted_margin": predicted_margin,
+                    "predicted_total": predicted_total,
+                    "total_sigma": total_sigma,
+                    "model_version": model_version,
+                    "created_at": created_at,
+                }
+            )
+
+    if not new_rows:
+        return 0
+
+    all_rows = list(existing.values()) + new_rows
+    all_rows.sort(key=lambda r: str(r.get("created_at") or ""))
+    history_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = history_path.with_name(history_path.name + ".tmp")
+    with gzip.open(tmp_path, "wt", encoding="utf-8") as handle:
+        for row in all_rows:
+            handle.write(json.dumps(row) + "\n")
+    tmp_path.replace(history_path)
+    return len(new_rows)
+
+
 def main() -> None:
     init_db(config.TRACKING_DB_PATH)
     snapshot = generate_snapshot(
@@ -166,6 +259,18 @@ def main() -> None:
         db_path=config.TRACKING_DB_PATH,
     )
     write_snapshot(snapshot, config.DATA_DIR / "public_snapshot.json")
+
+    manifest = json.loads((config.PROJECT_ROOT / "models" / "manifest.json").read_text()) if (
+        config.PROJECT_ROOT / "models" / "manifest.json"
+    ).exists() else None
+    appended = append_pick_history(
+        schedule_path=config.DATA_DIR / "cache" / "schedule" / "games.json",
+        db_path=config.TRACKING_DB_PATH,
+        history_path=config.DATA_DIR / "picks_history.jsonl.gz",
+        total_sigma=_manifest_total_sigma(manifest),
+    )
+    if appended:
+        print(f"picks history: appended {appended} new pick rows")
 
 
 if __name__ == "__main__":

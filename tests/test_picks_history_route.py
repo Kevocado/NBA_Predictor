@@ -109,3 +109,13 @@ def test_a_manifest_with_no_margin_sigma_leaves_the_field_out(tmp_path, monkeypa
     client = TestClient(app)
     row = client.get("/picks/history").json()["rows"][0]
     assert "margin_sigma" not in row or row["margin_sigma"] is None
+
+
+def test_a_rebuilt_backtest_of_a_played_game_is_not_a_pregame_pick(tmp_path, monkeypatch):
+    db_path = _point_at(tmp_path, monkeypatch)            # g1 plays 2026-11-01; its pick was made 2026-10-18
+    store.insert_prediction(
+        db_path, game_id="g1", created_at="2026-11-03T12:00:00+00:00", model_version="v2",      # re-scored two days AFTER the game
+        home_win_prob=0.90, predicted_margin=9.0, predicted_total=230.0,
+    )
+    rows = TestClient(app).get("/picks/history").json()["rows"]
+    assert [r["created_at"] for r in rows] == ["2026-10-18T12:00:00+00:00"]

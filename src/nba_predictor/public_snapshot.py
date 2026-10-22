@@ -20,13 +20,17 @@ whole point is that they would not.
 
 from __future__ import annotations
 
+import gzip
 import json
+import os
+import warnings
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from nba_predictor import config
 from nba_predictor.services.hub_service import compute_track_record, load_hub_cache
 from nba_predictor.services.schedule_repository import load_schedule
+from nba_predictor.tracking import store
 from nba_predictor.tracking.store import init_db
 
 #: How old a model may be at publish time. Fourteen days: the daily refresh runs
@@ -157,6 +161,181 @@ def write_snapshot(snapshot: dict, output_path: Path) -> None:
     output_path.write_text(json.dumps(snapshot, indent=2))
 
 
+def _manifest_total_sigma(manifest: dict | None) -> float | None:
+    """The model's total residual sigma, per model version.
+
+    The published manifest carries it under metrics.total.residual_sigma; it is
+    the sigma the total market is priced from. Missing or unreadable means the
+    total market cannot be priced from this snapshot.
+    """
+    try:
+        return float((manifest or {}).get("metrics", {}).get("total", {}).get("residual_sigma"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _manifest_margin_sigma(manifest: dict | None) -> float | None:
+    """The model's MARGIN residual sigma, per model version.
+
+    The published manifest carries it under metrics.margin.residual_sigma. It is
+    what a spread market is priced from: a spread rung needs P(margin > line),
+    and that probability is computed from the margin's own sigma. A total's
+    sigma cannot stand in for it -- they are different quantities measured on
+    different scales -- so the margin's is published separately.
+
+    Missing or unreadable means the spread market cannot be priced from this
+    snapshot, and the field is left out rather than guessed.
+    """
+    try:
+        return float((manifest or {}).get("metrics", {}).get("margin", {}).get("residual_sigma"))
+    except (TypeError, ValueError):
+        return None
+
+
+def append_pick_history(
+    schedule_path: Path,
+    db_path: Path,
+    history_path: Path,
+    total_sigma: float | None,
+    margin_sigma: float | None = None,
+) -> int:
+    """Append each game's current pick to the pick history.
+
+    Append-only and never overwritten: a pick row is keyed by (game_id,
+    created_at), so a later retrain adds a new row instead of replacing the one
+    that existed when a price was logged. Every version the model has published
+    stays in the file, which is what lets the ledger pair each price with the
+    pick that preceded it.
+
+    Returns the number of rows appended.
+    """
+    init_db(db_path)
+    schedule = load_schedule(schedule_path)
+    by_game = {g["game_id"]: g for g in schedule}
+
+    existing: dict[tuple[str, str], dict] = {}
+    if history_path.exists():
+        try:
+            with gzip.open(history_path, "rt", encoding="utf-8") as handle:
+                for line in handle:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        row = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(row, dict) and row.get("game_id") and row.get("created_at"):
+                        existing[(str(row["game_id"]), str(row["created_at"]))] = row
+        except (OSError, gzip.BadGzipFile):
+            existing = {}
+
+    new_rows: list[dict] = []
+    with store.get_connection(db_path) as conn:
+        for game_id, created_at, model_version, home_win_prob, predicted_margin, predicted_total in conn.execute(
+            "SELECT game_id, created_at, model_version, home_win_prob, predicted_margin, predicted_total "
+            "FROM predictions ORDER BY created_at"
+        ):
+            key = (str(game_id), str(created_at))
+            if key in existing:
+                continue
+            game = by_game.get(game_id)
+            if game is None:
+                continue
+            new_rows.append(
+                {
+                    "game_id": game_id,
+                    "game_date": game.get("game_date"),
+                    "home_team": game.get("home_team"),
+                    "away_team": game.get("away_team"),
+                    "home_win_prob": home_win_prob,
+                    "predicted_margin": predicted_margin,
+                    "predicted_total": predicted_total,
+                    "total_sigma": total_sigma,
+                    # The margin's own sigma, for the spread market. Absent
+                    # rather than zero when the manifest does not publish one.
+                    **({"margin_sigma": margin_sigma} if margin_sigma is not None else {}),
+                    "model_version": model_version,
+                    "created_at": created_at,
+                }
+            )
+
+    if not new_rows:
+        return 0
+
+    all_rows = list(existing.values()) + new_rows
+    all_rows.sort(key=lambda r: str(r.get("created_at") or ""))
+    history_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = history_path.with_name(history_path.name + ".tmp")
+    with gzip.open(tmp_path, "wt", encoding="utf-8") as handle:
+        for row in all_rows:
+            handle.write(json.dumps(row) + "\n")
+    tmp_path.replace(history_path)
+    return len(new_rows)
+
+
+PICK_FIELDS = (
+    "game_id", "game_date", "home_team", "away_team", "home_win_prob", "predicted_margin", "predicted_total",
+    "total_sigma", "margin_sigma", "model_version", "created_at",
+)
+
+
+def _read_history(history_path: Path) -> dict[tuple[str, str], dict]:
+    existing: dict[tuple[str, str], dict] = {}
+    if not history_path.exists():
+        return existing
+    try:
+        with gzip.open(history_path, "rt", encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(row, dict) and row.get("game_id") and row.get("created_at"):
+                    existing[(str(row["game_id"]), str(row["created_at"]))] = row
+    except (OSError, gzip.BadGzipFile):
+        return {}
+    return existing
+
+
+def append_api_rows(history_path: Path, api_rows: list[dict]) -> int:
+    """Append API pick rows to the history, append-only and keyed by (game_id, created_at); returns the rows added."""
+    existing = _read_history(history_path)
+    new_rows = []
+    for row in api_rows:
+        key = (str(row.get("game_id") or ""), str(row.get("created_at") or ""))
+        if not key[0] or not key[1] or key in existing:
+            continue
+        new_rows.append({f: row[f] for f in PICK_FIELDS if row.get(f) is not None})
+    if not new_rows:
+        return 0
+    all_rows = sorted(list(existing.values()) + new_rows, key=lambda r: str(r.get("created_at") or ""))
+    history_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = history_path.with_name(history_path.name + ".tmp")
+    with gzip.open(tmp_path, "wt", encoding="utf-8") as handle:
+        for row in all_rows:
+            handle.write(json.dumps(row) + "\n")
+    tmp_path.replace(history_path)
+    return len(new_rows)
+
+
+def fetch_and_append_picks(picks_api: str, history_path: Path, timeout: float = 30.0) -> int:
+    """Fetch every pick the API has made since the last one in the history, and append them.
+
+    `since` is the newest created_at already in the history (all of the API's rows when there is none): asking for
+    rows since NOW, as an earlier version did, can only ever return nothing.
+    """
+    import urllib.parse
+    import urllib.request
+
+    existing = _read_history(history_path)
+    since = max((created for _, created in existing), default="")
+    url = f"{picks_api.rstrip('/')}/picks/history" + (f"?since={urllib.parse.quote(since)}" if since else "")
+    with urllib.request.urlopen(urllib.request.Request(url), timeout=timeout) as resp:
+        data = json.loads(resp.read().decode())
+    return append_api_rows(history_path, data.get("rows", []))
+
+
 def main() -> None:
     init_db(config.TRACKING_DB_PATH)
     snapshot = generate_snapshot(
@@ -166,6 +345,31 @@ def main() -> None:
         db_path=config.TRACKING_DB_PATH,
     )
     write_snapshot(snapshot, config.DATA_DIR / "public_snapshot.json")
+
+    manifest = json.loads((config.PROJECT_ROOT / "models" / "manifest.json").read_text()) if (
+        config.PROJECT_ROOT / "models" / "manifest.json"
+    ).exists() else None
+    appended = append_pick_history(
+        schedule_path=config.DATA_DIR / "cache" / "schedule" / "games.json",
+        db_path=config.TRACKING_DB_PATH,
+        history_path=config.DATA_DIR / "picks_history.jsonl.gz",
+        total_sigma=_manifest_total_sigma(manifest),
+        margin_sigma=_manifest_margin_sigma(manifest),
+    )
+
+    # In CI the tracking DB is empty (the real one lives on the VPS), so the picks come from the live API's
+    # /picks/history. Fail soft: a failed fetch warns and leaves the history as it was.
+    picks_api = os.environ.get("PICKS_API")
+    if picks_api:
+        try:
+            added = fetch_and_append_picks(picks_api, config.DATA_DIR / "picks_history.jsonl.gz")
+            print(f"picks history: appended {added} new pick rows from PICKS_API")
+        except Exception as exc:  # noqa: BLE001 - warned, not raised
+            warnings.warn(f"PICKS_API fetch failed: {exc}")
+            print(f"picks history: PICKS_API fetch failed: {exc}")
+
+    if appended:
+        print(f"picks history: appended {appended} new pick rows")
 
 
 if __name__ == "__main__":

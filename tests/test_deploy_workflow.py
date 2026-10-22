@@ -65,6 +65,8 @@ MUST_NOT_DEPLOY = [
     # The injury-report collector appends a gzip file four times a day; history for analysis, not part of the image.
     "data/injuries",
     "data/injuries/*",
+    # The snapshot refresher appends per-game model picks twice a day; history for the paper ledger, not part of the image.
+    "data/picks_history.jsonl.gz",
 ]
 
 # Paths a scheduled job commits that this filter deliberately DOES watch, with

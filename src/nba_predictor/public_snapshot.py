@@ -274,6 +274,68 @@ def append_pick_history(
     return len(new_rows)
 
 
+PICK_FIELDS = (
+    "game_id", "game_date", "home_team", "away_team", "home_win_prob", "predicted_margin", "predicted_total",
+    "total_sigma", "margin_sigma", "model_version", "created_at",
+)
+
+
+def _read_history(history_path: Path) -> dict[tuple[str, str], dict]:
+    existing: dict[tuple[str, str], dict] = {}
+    if not history_path.exists():
+        return existing
+    try:
+        with gzip.open(history_path, "rt", encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(row, dict) and row.get("game_id") and row.get("created_at"):
+                    existing[(str(row["game_id"]), str(row["created_at"]))] = row
+    except (OSError, gzip.BadGzipFile):
+        return {}
+    return existing
+
+
+def append_api_rows(history_path: Path, api_rows: list[dict]) -> int:
+    """Append API pick rows to the history, append-only and keyed by (game_id, created_at); returns the rows added."""
+    existing = _read_history(history_path)
+    new_rows = []
+    for row in api_rows:
+        key = (str(row.get("game_id") or ""), str(row.get("created_at") or ""))
+        if not key[0] or not key[1] or key in existing:
+            continue
+        new_rows.append({f: row[f] for f in PICK_FIELDS if row.get(f) is not None})
+    if not new_rows:
+        return 0
+    all_rows = sorted(list(existing.values()) + new_rows, key=lambda r: str(r.get("created_at") or ""))
+    history_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = history_path.with_name(history_path.name + ".tmp")
+    with gzip.open(tmp_path, "wt", encoding="utf-8") as handle:
+        for row in all_rows:
+            handle.write(json.dumps(row) + "\n")
+    tmp_path.replace(history_path)
+    return len(new_rows)
+
+
+def fetch_and_append_picks(picks_api: str, history_path: Path, timeout: float = 30.0) -> int:
+    """Fetch every pick the API has made since the last one in the history, and append them.
+
+    `since` is the newest created_at already in the history (all of the API's rows when there is none): asking for
+    rows since NOW, as an earlier version did, can only ever return nothing.
+    """
+    import urllib.parse
+    import urllib.request
+
+    existing = _read_history(history_path)
+    since = max((created for _, created in existing), default="")
+    url = f"{picks_api.rstrip('/')}/picks/history" + (f"?since={urllib.parse.quote(since)}" if since else "")
+    with urllib.request.urlopen(urllib.request.Request(url), timeout=timeout) as resp:
+        data = json.loads(resp.read().decode())
+    return append_api_rows(history_path, data.get("rows", []))
+
+
 def main() -> None:
     init_db(config.TRACKING_DB_PATH)
     snapshot = generate_snapshot(
@@ -295,80 +357,16 @@ def main() -> None:
         margin_sigma=_manifest_margin_sigma(manifest),
     )
 
-    # New: when PICKS_API is set (e.g. in CI, the workflow sets it to an ngrok
-    # tunnel), fetch pick history rows from the API route rather than relying
-    # solely on the local tracking DB, which may be empty. Fail soft: if the
-    # fetch cannot be performed, warn and continue with the existing DB-based
-    # append below.
+    # In CI the tracking DB is empty (the real one lives on the VPS), so the picks come from the live API's
+    # /picks/history. Fail soft: a failed fetch warns and leaves the history as it was.
     picks_api = os.environ.get("PICKS_API")
     if picks_api:
         try:
-            import urllib.request
-
-            ts = datetime.now(timezone.utc).isoformat()
-            url = f"{picks_api}/picks/history?since={ts}"
-            req = urllib.request.Request(url)
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                data = json.loads(resp.read().decode())
-            api_rows = data.get("rows", [])
-            if api_rows:
-                # Reuse the append-only logic keyed by (game_id, created_at).
-                # Deduplicate against existing history and append new rows.
-                history_path = config.DATA_DIR / "picks_history.jsonl.gz"
-                existing: dict[tuple[str, str], dict] = {}
-                if history_path.exists():
-                    try:
-                        with gzip.open(history_path, "rt", encoding="utf-8") as handle:
-                            for line in handle:
-                                line = line.strip()
-                                if not line:
-                                    continue
-                                try:
-                                    row = json.loads(line)
-                                except json.JSONDecodeError:
-                                    continue
-                                if isinstance(row, dict) and row.get("game_id") and row.get("created_at"):
-                                    existing[(str(row["game_id"]), str(row["created_at"]))] = row
-                    except (OSError, gzip.BadGzipFile):
-                        existing = {}
-                new_rows: list[dict] = []
-                for row in api_rows:
-                    key = (str(row.get("game_id", "")), str(row.get("created_at", "")))
-                    if key in existing:
-                        continue
-                    new_rows.append(
-                        {
-                            "game_id": row.get("game_id", ""),
-                            "game_date": row.get("game_date"),
-                            "home_team": row.get("home_team"),
-                            "away_team": row.get("away_team"),
-                            "home_win_prob": row.get("home_win_prob"),
-                            "predicted_margin": row.get("predicted_margin"),
-                            "predicted_total": row.get("predicted_total"),
-                            "total_sigma": row.get("total_sigma"),
-                            "model_version": row.get("model_version", ""),
-                            "created_at": row.get("created_at", ""),
-                        }
-                    )
-                if new_rows:
-                    all_rows = list(existing.values()) + new_rows
-                    all_rows.sort(key=lambda r: str(r.get("created_at") or ""))
-                    history_path.parent.mkdir(parents=True, exist_ok=True)
-                    tmp_path = history_path.with_name(history_path.name + ".tmp")
-                    with gzip.open(tmp_path, "wt", encoding="utf-8") as handle:
-                        for row in all_rows:
-                            handle.write(json.dumps(row) + "\n")
-                    tmp_path.replace(history_path)
-                    print(
-                        f"picks history: appended {len(new_rows)} new pick rows from PICKS_API"
-                    )
-                else:
-                    print("picks history: no new rows from PICKS_API (all deduplicated)")
-            else:
-                print("picks history: empty rows from PICKS_API")
+            added = fetch_and_append_picks(picks_api, config.DATA_DIR / "picks_history.jsonl.gz")
+            print(f"picks history: appended {added} new pick rows from PICKS_API")
         except Exception as exc:  # noqa: BLE001 - warned, not raised
             warnings.warn(f"PICKS_API fetch failed: {exc}")
-            print(f"picks history: PICKS_API fetch failed: {exc}; falling back to DB")
+            print(f"picks history: PICKS_API fetch failed: {exc}")
 
     if appended:
         print(f"picks history: appended {appended} new pick rows")

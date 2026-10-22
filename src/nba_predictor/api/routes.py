@@ -931,6 +931,10 @@ def picks_history(since: str = "", db_path: Path = Depends(get_db_path)) -> dict
     for row in all_rows:
         game_id = str(row[0])
         game = by_game.get(game_id)
+        # A pick stamped after its game's own date is a rebuilt backtest of a game already played (the daily scoring
+        # run re-scores every game in the window): it cannot be a pre-game call and would be ~90% of the feed.
+        if game is not None and str(game.get("game_date") or "9999") < str(row[1])[:10]:
+            continue
         rows_out.append(
             {
                 "game_id": game_id,

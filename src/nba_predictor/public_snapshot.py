@@ -174,11 +174,30 @@ def _manifest_total_sigma(manifest: dict | None) -> float | None:
         return None
 
 
+def _manifest_margin_sigma(manifest: dict | None) -> float | None:
+    """The model's MARGIN residual sigma, per model version.
+
+    The published manifest carries it under metrics.margin.residual_sigma. It is
+    what a spread market is priced from: a spread rung needs P(margin > line),
+    and that probability is computed from the margin's own sigma. A total's
+    sigma cannot stand in for it -- they are different quantities measured on
+    different scales -- so the margin's is published separately.
+
+    Missing or unreadable means the spread market cannot be priced from this
+    snapshot, and the field is left out rather than guessed.
+    """
+    try:
+        return float((manifest or {}).get("metrics", {}).get("margin", {}).get("residual_sigma"))
+    except (TypeError, ValueError):
+        return None
+
+
 def append_pick_history(
     schedule_path: Path,
     db_path: Path,
     history_path: Path,
     total_sigma: float | None,
+    margin_sigma: float | None = None,
 ) -> int:
     """Append each game's current pick to the pick history.
 
@@ -233,6 +252,9 @@ def append_pick_history(
                     "predicted_margin": predicted_margin,
                     "predicted_total": predicted_total,
                     "total_sigma": total_sigma,
+                    # The margin's own sigma, for the spread market. Absent
+                    # rather than zero when the manifest does not publish one.
+                    **({"margin_sigma": margin_sigma} if margin_sigma is not None else {}),
                     "model_version": model_version,
                     "created_at": created_at,
                 }
@@ -270,6 +292,7 @@ def main() -> None:
         db_path=config.TRACKING_DB_PATH,
         history_path=config.DATA_DIR / "picks_history.jsonl.gz",
         total_sigma=_manifest_total_sigma(manifest),
+        margin_sigma=_manifest_margin_sigma(manifest),
     )
 
     # New: when PICKS_API is set (e.g. in CI, the workflow sets it to an ngrok

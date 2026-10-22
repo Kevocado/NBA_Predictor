@@ -129,7 +129,8 @@ def test_main_appends_each_pick_to_history(tmp_path, monkeypatch):
     manifest_path.parent.mkdir(parents=True)
     manifest_path.write_text(
         json.dumps({"model_version": "v1", "trained_at": "2026-10-18T00:00:00+00:00",
-                    "models": [], "metrics": {"total": {"residual_sigma": 15.0}}})
+                    "models": [], "metrics": {"total": {"residual_sigma": 15.0},
+                                              "margin": {"residual_sigma": 12.0}}})
     )
 
     main()
@@ -144,8 +145,90 @@ def test_main_appends_each_pick_to_history(tmp_path, monkeypatch):
     assert row["predicted_margin"] == 3.0
     assert row["predicted_total"] == 220.0
     assert row["total_sigma"] == 15.0
+    # The margin's sigma, so the ledger can price a spread rung: a spread
+    # market needs P(margin > line) and the margin's residual sigma is what
+    # that is computed from.
+    assert row["margin_sigma"] == 12.0
     assert row["model_version"] == "v1"
     assert row["created_at"] == "2026-10-18T12:00:00+00:00"
+
+
+def test_the_pick_history_carries_the_margin_sigma_the_manifest_publishes(tmp_path, monkeypatch):
+    """The manifest publishes `metrics.margin.residual_sigma`; the feed must carry it.
+
+    Without it the ledger cannot price a spread rung at all, because a spread
+    needs P(margin > line) and that probability is computed from the margin's
+    own sigma. A missing sigma is not a zero and not a guess.
+    """
+    from nba_predictor import config
+    from nba_predictor.public_snapshot import main
+    from nba_predictor.tracking import store
+
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(config, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(config, "TRACKING_DB_PATH", tmp_path / "tracking.db")
+
+    schedule_path = tmp_path / "cache" / "schedule" / "games.json"
+    schedule_path.parent.mkdir(parents=True)
+    schedule_path.write_text(
+        json.dumps([{"game_id": "g1", "game_date": "2026-11-01", "home_team": "BOS", "away_team": "MIA"}])
+    )
+    db_path = tmp_path / "tracking.db"
+    store.init_db(db_path)
+    store.insert_prediction(
+        db_path, game_id="g1", created_at="2026-10-18T12:00:00+00:00", model_version="v1",
+        home_win_prob=0.60, predicted_margin=3.0, predicted_total=220.0,
+    )
+    manifest_path = tmp_path / "models" / "manifest.json"
+    manifest_path.parent.mkdir(parents=True)
+    manifest_path.write_text(
+        json.dumps({"model_version": "v1", "trained_at": "2026-10-18T00:00:00+00:00",
+                    "models": [], "metrics": {"total": {"residual_sigma": 15.0},
+                                              "margin": {"residual_sigma": 12.5}}})
+    )
+
+    main()
+
+    rows = [json.loads(line) for line in gzip.open(tmp_path / "picks_history.jsonl.gz", "rt")]
+    assert rows[0]["margin_sigma"] == 12.5
+
+
+def test_a_manifest_with_no_margin_sigma_leaves_it_absent(tmp_path, monkeypatch):
+    """A model that publishes no margin sigma leaves the field out.
+
+    Not zero: zero would be a claim that the margin is certain, which is a
+    different claim from "we do not know".
+    """
+    from nba_predictor import config
+    from nba_predictor.public_snapshot import main
+    from nba_predictor.tracking import store
+
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(config, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(config, "TRACKING_DB_PATH", tmp_path / "tracking.db")
+
+    schedule_path = tmp_path / "cache" / "schedule" / "games.json"
+    schedule_path.parent.mkdir(parents=True)
+    schedule_path.write_text(
+        json.dumps([{"game_id": "g1", "game_date": "2026-11-01", "home_team": "BOS", "away_team": "MIA"}])
+    )
+    db_path = tmp_path / "tracking.db"
+    store.init_db(db_path)
+    store.insert_prediction(
+        db_path, game_id="g1", created_at="2026-10-18T12:00:00+00:00", model_version="v1",
+        home_win_prob=0.60, predicted_margin=3.0, predicted_total=220.0,
+    )
+    manifest_path = tmp_path / "models" / "manifest.json"
+    manifest_path.parent.mkdir(parents=True)
+    manifest_path.write_text(
+        json.dumps({"model_version": "v1", "trained_at": "2026-10-18T00:00:00+00:00",
+                    "models": [], "metrics": {"total": {"residual_sigma": 15.0}}})
+    )
+
+    main()
+
+    rows = [json.loads(line) for line in gzip.open(tmp_path / "picks_history.jsonl.gz", "rt")]
+    assert "margin_sigma" not in rows[0] or rows[0]["margin_sigma"] is None
 
 
 def test_pick_history_keeps_every_version_and_never_overwrites(tmp_path, monkeypatch):

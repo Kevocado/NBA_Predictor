@@ -878,12 +878,25 @@ def picks_history(since: str = "", db_path: Path = Depends(get_db_path)) -> dict
     model_version, home_win_prob, predicted_margin, predicted_total, game_date,
     home_team, away_team, and total_sigma from the manifest.
     """
-    from nba_predictor.services.schedule_repository import load_schedule
-    from nba_predictor import config
     import json
 
-    rows: list[dict] = []
+    from nba_predictor import config
+
+    # The manifest's residual sigmas, for the total and spread markets. These
+    # are read here rather than at module scope because the manifest is a FILE
+    # that is rewritten by every retrain, and the route has to see the current
+    # one rather than the one that was there when the process started.
+    from nba_predictor.public_snapshot import (
+        _manifest_margin_sigma,
+        _manifest_total_sigma,
+    )
+    from nba_predictor.services.schedule_repository import load_schedule
+
     with store.get_connection(db_path) as conn:
+        # The parameter list is built from the filter, so a query with NO
+        # filter has NO parameters. Passing an empty tuple as the second
+        # argument to execute() is a ProgrammingError, not a no-op.
+        params: tuple = (since,) if since else ()
         cur = conn.execute(
             """
             SELECT p.game_id, p.created_at, p.model_version, p.home_win_prob,
@@ -892,31 +905,31 @@ def picks_history(since: str = "", db_path: Path = Depends(get_db_path)) -> dict
             """
             + ("WHERE p.created_at >= ? " if since else "")
             + "ORDER BY p.created_at DESC, p.id DESC",
-            (since,) if since else None,
+            params,
         )
         all_rows = cur.fetchall()
 
     if not all_rows:
         return {"rows": [], "note": "no pick rows in tracking DB"}
 
-    game_ids = {str(row[0]) for row in all_rows}
-
     schedule = load_schedule(get_schedule_path())
     manifest_path = config.PROJECT_ROOT / "models" / "manifest.json"
     total_sigma: float | None = None
+    margin_sigma: float | None = None
     if manifest_path.exists():
         try:
             manifest = json.loads(manifest_path.read_text())
             total_sigma = _manifest_total_sigma(manifest)  # type: ignore[arg-type]
+            margin_sigma = _manifest_margin_sigma(manifest)  # type: ignore[arg-type]
         except (ValueError, TypeError):
             total_sigma = None
+            margin_sigma = None
 
     by_game = {g["game_id"]: g for g in schedule}
 
     rows_out: list[dict] = []
     for row in all_rows:
         game_id = str(row[0])
-        key = (game_id, str(row[1]))
         game = by_game.get(game_id)
         rows_out.append(
             {
@@ -930,6 +943,10 @@ def picks_history(since: str = "", db_path: Path = Depends(get_db_path)) -> dict
                 "home_team": game.get("home_team") if game else None,
                 "away_team": game.get("away_team") if game else None,
                 "total_sigma": total_sigma,
+                # The margin's own sigma, so a spread rung can be priced at
+                # its own line. Absent rather than zero when the manifest
+                # publishes none.
+                **({"margin_sigma": margin_sigma} if margin_sigma is not None else {}),
             }
         )
 

@@ -26,6 +26,7 @@ from nba_predictor.api.deps import (
     require_admin,
 )
 from nba_predictor.api import facts as facts_mod
+from nba_predictor.services.schedule_repository import load_schedule
 from nba_predictor.api.schemas import (
     DoubtfulPlayerOut,
     GameDetailOut,
@@ -866,6 +867,73 @@ def value_picks(
             "profitable strategy, and nothing here places a bet."
         ),
     }
+
+
+@router.get("/picks/history")
+def picks_history(since: str = "", db_path: Path = Depends(get_db_path)) -> dict:
+    """Return pick history rows keyed by (game_id, created_at).
+
+    The `since` parameter filters to rows stamped at or after the given ISO-8601
+    timestamp. If omitted, all rows are returned. Rows carry game_id, created_at,
+    model_version, home_win_prob, predicted_margin, predicted_total, game_date,
+    home_team, away_team, and total_sigma from the manifest.
+    """
+    from nba_predictor.services.schedule_repository import load_schedule
+    from nba_predictor import config
+    import json
+
+    rows: list[dict] = []
+    with store.get_connection(db_path) as conn:
+        cur = conn.execute(
+            """
+            SELECT p.game_id, p.created_at, p.model_version, p.home_win_prob,
+                   p.predicted_margin, p.predicted_total
+            FROM predictions p
+            """
+            + ("WHERE p.created_at >= ? " if since else "")
+            + "ORDER BY p.created_at DESC, p.id DESC",
+            (since,) if since else None,
+        )
+        all_rows = cur.fetchall()
+
+    if not all_rows:
+        return {"rows": [], "note": "no pick rows in tracking DB"}
+
+    game_ids = {str(row[0]) for row in all_rows}
+
+    schedule = load_schedule(get_schedule_path())
+    manifest_path = config.PROJECT_ROOT / "models" / "manifest.json"
+    total_sigma: float | None = None
+    if manifest_path.exists():
+        try:
+            manifest = json.loads(manifest_path.read_text())
+            total_sigma = _manifest_total_sigma(manifest)  # type: ignore[arg-type]
+        except (ValueError, TypeError):
+            total_sigma = None
+
+    by_game = {g["game_id"]: g for g in schedule}
+
+    rows_out: list[dict] = []
+    for row in all_rows:
+        game_id = str(row[0])
+        key = (game_id, str(row[1]))
+        game = by_game.get(game_id)
+        rows_out.append(
+            {
+                "game_id": game_id,
+                "created_at": str(row[1]),
+                "model_version": str(row[2]) if row[2] is not None else "",
+                "home_win_prob": float(row[3]) if row[3] is not None else None,
+                "predicted_margin": float(row[4]) if row[4] is not None else None,
+                "predicted_total": float(row[5]) if row[5] is not None else None,
+                "game_date": game.get("game_date") if game else None,
+                "home_team": game.get("home_team") if game else None,
+                "away_team": game.get("away_team") if game else None,
+                "total_sigma": total_sigma,
+            }
+        )
+
+    return {"rows": rows_out}
 
 
 @router.get("/snapshot-meta")

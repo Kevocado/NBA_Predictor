@@ -107,11 +107,13 @@ def main() -> int:
     margin_y = np.asarray(margin_wf["pooled"]["y"])
     margin_mae = margin_wf["pooled"]["mae"]
     # Sigma from walk-forward POOLED TEST residuals (out-of-fold).
-    # Each test game's residual comes from a model that NEVER saw that game during training.
-    # This is the standard out-of-fold residual sigma estimation, matching production:
-    # retrain.py runs walk_forward_regression on training data, computes sigma from pooled MAE,
+    # CRITICAL: Each test game's residual comes from a model trained ONLY on strictly earlier games.
+    # walk_forward_regression uses expanding_windows which splits by DATE (train_max_date < test_min_date).
+    # The model_factory is called on each window's training data ONLY. The pooled residuals are therefore
+    # genuine out-of-fold residuals. This matches production exactly:
+    # retrain.py runs walk_forward_regression on training split, computes sigma = pooled_MAE * MAE_TO_SIGMA,
     # publishes in manifest; serving uses that sigma. Here we evaluate on all data via walk-forward,
-    # so the pooled test residuals ARE the out-of-fold residuals.
+    # so the pooled test residuals ARE the out-of-fold residuals for the full dataset.
     margin_sigma = margin_mae * MAE_TO_SIGMA
 
     # SERVED win probability = norm.cdf(predicted_margin / margin_sigma)

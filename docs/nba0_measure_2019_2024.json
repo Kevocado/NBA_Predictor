@@ -1,0 +1,141 @@
+{
+  "metadata": {
+    "description": "NBA-0 Measure First: walk-forward evaluation of SERVED win probability (norm.cdf(margin/sigma)) and Elo baseline on 2019-20 through 2024-25 regular season games.",
+    "seasons": "2019-20, 2020-21, 2021-22, 2022-23, 2023-24, 2024-25 (6 seasons)",
+    "data_source": "frozen history: data/history/nba_history.json.gz (regular season only, no playoffs)",
+    "n_games_raw_history": 7308,
+    "n_games_after_feature_engineering": 7289,
+    "n_walkforward_pooled_test": 4564,
+    "walkforward_windows": 4,
+    "walkforward_method": "expanding window, date-based splits, causality enforced (train_max_date < test_min_date)",
+    "leak_free_verification": {
+      "features_causal": "build_training_frame uses shift-1 rolling features; compute_h_features emits features BEFORE folding game result into state",
+      "total_drift_correction": "compute_total_drift is ONLY applied at retrain time on full training frame; NOT applied during walk-forward evaluation (walk-forward uses raw model predictions)",
+      "early_season_blending": "shrunk_projections uses only completed_rows (past games) for shrinkage; never sees future games",
+      "model_refit_per_window": "walk_forward_metrics/regression re-fit model_factory on each window's training data only; no shared state across windows",
+      "sigma_source": "margin_sigma = first-window-only training MAE * MAE_TO_SIGMA. Zero leakage: sigma fitted only on games before first scored window. New sigma=13.621 (prior 13.530). Served metrics unchanged (log_loss=0.6224, AUC=0.7027) confirming measurement is robust."
+    },
+    "note_on_n_discrepancy": "The deep-dive audit cited n=8,388 for 2019-2025; this run uses frozen history through 2025-04-13 (end of 2024-25 regular season), giving 7,308 raw games. The 8,388 may include playoffs or partial 2025-26 season not in frozen history."
+  },
+  "served_win_probability": {
+    "log_loss": 0.6224006651503735,
+    "brier": 0.21657177111591014,
+    "auc": 0.7026911906315039,
+    "accuracy": 0.6522787028921998,
+    "n": 4564,
+    "margin_sigma": 13.621326481411774,
+    "n_definition": "pooled test games across all 4 walk-forward windows"
+  },
+  "elo_baseline": {
+    "log_loss": 0.680110116321614,
+    "brier": 0.2406136638126133,
+    "auc": 0.6483888189979188,
+    "accuracy": 0.6049517966695881,
+    "n": 4564,
+    "n_definition": "pooled test games across all 4 walk-forward windows"
+  },
+  "logistic_classifier": {
+    "log_loss": 0.6238510223383211,
+    "brier": 0.21725497978723904,
+    "auc": 0.6999613658248687,
+    "accuracy": 0.6461437335670465,
+    "n": 4564,
+    "n_definition": "pooled test games across all 4 walk-forward windows"
+  },
+  "margin": {
+    "mae": 10.799792443951944,
+    "naive_mae": 12.075477452960357,
+    "naive_mae_fixed": 12.044697633654689,
+    "n": 4564,
+    "n_definition": "pooled test games across all 4 walk-forward windows"
+  },
+  "total": {
+    "mae": 14.948386920069613,
+    "naive_mae": 16.05719704465399,
+    "naive_mae_fixed": 16.54119193689746,
+    "n": 4564,
+    "n_definition": "pooled test games across all 4 walk-forward windows"
+  },
+  "bootstrap_served_vs_elo": {
+    "log_loss": {
+      "metric": "log_loss",
+      "lower_is_better": true,
+      "baseline": 0.680110116321614,
+      "candidate": 0.6224006651503735,
+      "difference": -0.05770945117124049,
+      "ci_low": -0.06858648999507633,
+      "ci_high": -0.047030054845484004,
+      "alpha": 0.05,
+      "n": 4564,
+      "n_resamples": 2000,
+      "n_resamples_used": 2000,
+      "seed": 20261007,
+      "excludes_zero": true,
+      "improved": true
+    },
+    "brier": {
+      "metric": "brier",
+      "lower_is_better": true,
+      "baseline": 0.2406136638126133,
+      "candidate": 0.21657177111591014,
+      "difference": -0.02404189269670315,
+      "ci_low": -0.028686129007830217,
+      "ci_high": -0.019420525315525405,
+      "alpha": 0.05,
+      "n": 4564,
+      "n_resamples": 2000,
+      "n_resamples_used": 2000,
+      "seed": 20261007,
+      "excludes_zero": true,
+      "improved": true
+    },
+    "auc": {
+      "metric": "auc",
+      "lower_is_better": false,
+      "baseline": 0.6483888189979188,
+      "candidate": 0.7026911906315039,
+      "difference": 0.05430237163358509,
+      "ci_low": 0.04099225981062229,
+      "ci_high": 0.06783952541638508,
+      "alpha": 0.05,
+      "n": 4564,
+      "n_resamples": 2000,
+      "n_resamples_used": 2000,
+      "seed": 20261007,
+      "excludes_zero": true,
+      "improved": true
+    }
+  },
+  "bootstrap_margin_vs_naive": {
+    "metric": "mae",
+    "lower_is_better": true,
+    "baseline": 12.075477452960357,
+    "candidate": 10.799792443951944,
+    "difference": -1.2756850090084129,
+    "ci_low": -1.4339726628232197,
+    "ci_high": -1.119573628758691,
+    "alpha": 0.05,
+    "n": 4564,
+    "n_resamples": 2000,
+    "n_resamples_used": 2000,
+    "seed": 20261007,
+    "excludes_zero": true,
+    "improved": true
+  },
+  "bootstrap_total_vs_naive_fixed": {
+    "metric": "mae",
+    "lower_is_better": true,
+    "baseline": 16.54119193689746,
+    "candidate": 14.948386920069613,
+    "difference": -1.592805016827846,
+    "ci_low": -1.7841064117808374,
+    "ci_high": -1.4081579096749826,
+    "alpha": 0.05,
+    "n": 4564,
+    "n_resamples": 2000,
+    "n_resamples_used": 2000,
+    "seed": 20261007,
+    "excludes_zero": true,
+    "improved": true
+  }
+}

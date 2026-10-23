@@ -22,9 +22,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from nba_predictor.features.build import build_training_frame
 from nba_predictor.models.candidate_race import default_candidates, elo_probability_factory
+from nba_predictor.models.game_outcome import train_margin_model
 from nba_predictor.models.evaluate.walk_forward_eval import (
     walk_forward_metrics,
     walk_forward_regression,
+    expanding_windows,
 )
 from nba_predictor.models.evaluate.paired_bootstrap import paired_bootstrap
 from nba_predictor.models.probability import MAE_TO_SIGMA, win_prob
@@ -116,9 +118,20 @@ def main() -> int:
         date_col="game_date",
         fixed_baseline=3.0,
     )
-    train_margin_mae = train_margin_wf["pooled"]["mae"]
-    production_sigma = train_margin_mae * MAE_TO_SIGMA
-    print(f"Production sigma (from train-split walk-forward): MAE={train_margin_mae:.4f}, sigma={production_sigma:.4f}")
+    # Sigma fitted ONLY on first window's training data (before any scored games).
+    # This ensures zero leakage: sigma uses only games before the first scored window.
+    from nba_predictor.models.evaluate.walk_forward_eval import expanding_windows as _ew
+    windows_data = _ew(df["game_date"], WINDOWS)
+    first_train_idx = windows_data[0][0]
+    first_train_df = df.iloc[first_train_idx]
+    # Train margin model on first training split; predict in-sample; compute residual sigma
+    margin_model_first = train_margin_model(
+        first_train_df[feature_cols], first_train_df["home_margin"], candidate="ridge"
+    )
+    first_train_preds = margin_model_first.predict(first_train_df[feature_cols].values)
+    first_train_residuals = np.abs(first_train_df["home_margin"].values - first_train_preds)
+    production_sigma = float(np.mean(first_train_residuals) * MAE_TO_SIGMA)
+    print(f"Production sigma (first-window-only, no scored games): MAE={np.mean(first_train_residuals):.4f}, sigma={production_sigma:.4f}")
 
     # Also compute full walk-forward sigma for comparison
     full_margin_wf = walk_forward_regression(

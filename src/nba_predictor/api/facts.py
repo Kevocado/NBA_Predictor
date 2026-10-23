@@ -172,6 +172,7 @@ def _write_box_history_disk(as_of: str, frame, schedule_state) -> None:
     Writes to a temp file first and renames atomically, so a failed/partial
     write cannot clobber the last good copy on disk.
     """
+    tmp = None
     try:
         path = _box_history_disk_path(as_of)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -185,10 +186,11 @@ def _write_box_history_disk(as_of: str, frame, schedule_state) -> None:
         os.replace(tmp, path)
     except (OSError, ValueError):  # noqa: BLE001
         logger.exception("box history disk write failed for %s", as_of)
-        try:
-            tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
+        if tmp is not None:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def _box_score_history(as_of: str) -> pd.DataFrame:

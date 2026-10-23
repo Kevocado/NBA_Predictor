@@ -90,11 +90,38 @@ def main() -> int:
     # Get candidates
     candidates = default_candidates(feature_cols)
 
-    # --- 1. SERVED win probability: from margin model via norm.cdf ---
-    print("\n--- Computing SERVED win probability (margin -> win_prob) ---")
+    # --- CRITICAL: Compute sigma from TRAIN-SPLIT walk-forward (matches production) ---
+    # retrain.py splits 80/20 chronologically, runs walk-forward on train_df only,
+    # computes sigma from pooled test residuals, publishes in manifest.
+    # We do the same here to get the production sigma, then evaluate on full walk-forward.
+    from nba_predictor.pipeline.retrain import _nba_season_start_year, chronological_split
 
-    # Walk-forward for margin model (ridge won the race)
-    margin_wf = walk_forward_regression(
+    train_games, holdout_games = chronological_split(games, date_col="game_date", holdout_fraction=0.2)
+    print(f"\nTrain/holdout split: train={len(train_games)}, holdout={len(holdout_games)}")
+    print(f"Train date range: {train_games['game_date'].min()} -> {train_games['game_date'].max()}")
+    print(f"Holdout date range: {holdout_games['game_date'].min()} -> {holdout_games['game_date'].max()}")
+
+    train_df, _ = build_training_frame(train_games, players=players)
+    train_df = train_df.assign(
+        home_margin=train_df["home_pts"] - train_df["away_pts"],
+        home_total=train_df["home_pts"] + train_df["away_pts"],
+    )
+
+    # Walk-forward on TRAIN split only (matches production retrain.py)
+    train_margin_wf = walk_forward_regression(
+        train_df,
+        model_factory=lambda tr: candidates["ridge"]["margin"](tr),
+        target="home_margin",
+        windows=WINDOWS,
+        date_col="game_date",
+        fixed_baseline=3.0,
+    )
+    train_margin_mae = train_margin_wf["pooled"]["mae"]
+    production_sigma = train_margin_mae * MAE_TO_SIGMA
+    print(f"Production sigma (from train-split walk-forward): MAE={train_margin_mae:.4f}, sigma={production_sigma:.4f}")
+
+    # Also compute full walk-forward sigma for comparison
+    full_margin_wf = walk_forward_regression(
         df,
         model_factory=lambda tr: candidates["ridge"]["margin"](tr),
         target="home_margin",
@@ -102,25 +129,27 @@ def main() -> int:
         date_col="game_date",
         fixed_baseline=3.0,
     )
+    full_margin_mae = full_margin_wf["pooled"]["mae"]
+    full_sigma = full_margin_mae * MAE_TO_SIGMA
+    print(f"Full walk-forward sigma (for reference): MAE={full_margin_mae:.4f}, sigma={full_sigma:.4f}")
 
+    # Use PRODUCTION sigma for SERVED win probability evaluation
+    margin_sigma = production_sigma
+
+    # --- 1. SERVED win probability: from margin model via norm.cdf ---
+    print("\n--- Computing SERVED win probability (margin -> win_prob) ---")
+
+    # Full walk-forward for margin predictions (for evaluation on all games)
+    margin_wf = full_margin_wf  # reuse
     margin_preds = np.asarray(margin_wf["pooled"]["preds"])
     margin_y = np.asarray(margin_wf["pooled"]["y"])
-    margin_mae = margin_wf["pooled"]["mae"]
-    # Sigma from walk-forward POOLED TEST residuals (out-of-fold).
-    # CRITICAL: Each test game's residual comes from a model trained ONLY on strictly earlier games.
-    # walk_forward_regression uses expanding_windows which splits by DATE (train_max_date < test_min_date).
-    # The model_factory is called on each window's training data ONLY. The pooled residuals are therefore
-    # genuine out-of-fold residuals. This matches production exactly:
-    # retrain.py runs walk_forward_regression on training split, computes sigma = pooled_MAE * MAE_TO_SIGMA,
-    # publishes in manifest; serving uses that sigma. Here we evaluate on all data via walk-forward,
-    # so the pooled test residuals ARE the out-of-fold residuals for the full dataset.
-    margin_sigma = margin_mae * MAE_TO_SIGMA
 
     # SERVED win probability = norm.cdf(predicted_margin / margin_sigma)
     served_win_probs = np.array([win_prob(float(m), margin_sigma) for m in margin_preds])
     outcomes = (margin_y > 0).astype(int)
 
-    print(f"Margin walk-forward: MAE={margin_mae:.4f}, sigma={margin_sigma:.4f}, n={len(outcomes)}")
+    print(f"Full walk-forward: n={len(outcomes)} test games")
+    print(f"Using production sigma={margin_sigma:.4f} (from train-split walk-forward)")
 
     # Compute metrics for SERVED win probability
     from sklearn.metrics import log_loss, brier_score_loss, roc_auc_score, accuracy_score
@@ -198,8 +227,8 @@ def main() -> int:
 
     # --- 5. Margin and Total MAE with bootstrap ---
     print("\n--- Margin MAE (ridge) ---")
-    print(f"  MAE={margin_mae:.4f}, naive={margin_wf['pooled']['naive_mae']:.4f}, "
-          f"naive_fixed={margin_wf['pooled'].get('naive_mae_fixed', 'N/A')}")
+    print(f"  MAE={full_margin_mae:.4f}, naive={full_margin_wf['pooled']['naive_mae']:.4f}, "
+          f"naive_fixed={full_margin_wf['pooled'].get('naive_mae_fixed', 'N/A')}")
 
     # Get the first training window's mean total for fixed baseline (matches walk_forward_regression fixed_baseline).
     # This is a SINGLE constant computed from the FIRST training window only (prior data),
@@ -296,9 +325,9 @@ def main() -> int:
             "n_definition": "pooled test games across all 4 walk-forward windows",
         },
         "margin": {
-            "mae": margin_mae,
-            "naive_mae": margin_wf["pooled"]["naive_mae"],
-            "naive_mae_fixed": margin_wf["pooled"].get("naive_mae_fixed"),
+            "mae": full_margin_mae,
+            "naive_mae": full_margin_wf["pooled"]["naive_mae"],
+            "naive_mae_fixed": full_margin_wf["pooled"].get("naive_mae_fixed"),
             "n": int(len(margin_y)),
             "n_definition": "pooled test games across all 4 walk-forward windows",
         },
@@ -347,7 +376,7 @@ def main() -> int:
     print(f"SERVED win probability (from margin): log_loss={served_log_loss:.4f}, auc={served_auc:.4f}")
     print(f"Elo-only baseline:                     log_loss={elo_log_loss:.4f}, auc={elo_auc:.4f}")
     print(f"Logistic classifier (legacy):          log_loss={log_log_loss:.4f}, auc={log_auc:.4f}")
-    print(f"Margin MAE: {margin_mae:.4f} (vs naive {margin_wf['pooled']['naive_mae']:.4f})")
+    print(f"Margin MAE: {full_margin_mae:.4f} (vs naive {full_margin_wf['pooled']['naive_mae']:.4f})")
     print(f"Total MAE:  {total_mae:.4f} (vs naive {total_wf['pooled']['naive_mae']:.4f})")
 
     # Compare to the "0.68 / 0.58" claim

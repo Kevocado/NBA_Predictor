@@ -106,6 +106,9 @@ def main() -> int:
     margin_preds = np.asarray(margin_wf["pooled"]["preds"])
     margin_y = np.asarray(margin_wf["pooled"]["y"])
     margin_mae = margin_wf["pooled"]["mae"]
+    # Sigma from walk-forward pooled residuals (out-of-fold). This mirrors production:
+    # retrain runs walk-forward on training data, publishes sigma = pooled_MAE * MAE_TO_SIGMA
+    # in manifest, then serving uses that sigma. Here we use the same walk-forward sigma.
     margin_sigma = margin_mae * MAE_TO_SIGMA
 
     # SERVED win probability = norm.cdf(predicted_margin / margin_sigma)
@@ -193,13 +196,18 @@ def main() -> int:
     print(f"  MAE={margin_mae:.4f}, naive={margin_wf['pooled']['naive_mae']:.4f}, "
           f"naive_fixed={margin_wf['pooled'].get('naive_mae_fixed', 'N/A')}")
 
+    # Get the first training window's mean total for fixed baseline (matches walk_forward_regression fixed_baseline)
+    from nba_predictor.models.evaluate.walk_forward_eval import expanding_windows
+    first_train_idx = expanding_windows(df["game_date"], WINDOWS)[0][0]
+    fixed_baseline_total = float(df.iloc[first_train_idx]["home_total"].mean())
+
     total_wf = walk_forward_regression(
         df,
         model_factory=lambda tr: candidates["ridge"]["total"](tr),
         target="home_total",
         windows=WINDOWS,
         date_col="game_date",
-        fixed_baseline=float(df["home_total"].mean()),
+        fixed_baseline=fixed_baseline_total,
     )
     total_mae = total_wf["pooled"]["mae"]
     print(f"--- Total MAE (ridge) ---")
@@ -223,15 +231,12 @@ def main() -> int:
           f"95% CI=[{boot_margin['ci_low']:+.4f}, {boot_margin['ci_high']:+.4f}]  "
           f"improved={boot_margin['improved']}")
 
-    # Bootstrap total MAE vs naive_fixed
+    # Bootstrap total MAE vs naive_fixed (using same fixed_baseline_total as walk_forward_regression)
     total_preds = np.asarray(total_wf["pooled"]["preds"])
     total_y = np.asarray(total_wf["pooled"]["y"])
     total_naive_fixed = total_wf["pooled"].get("naive_mae_fixed")
     if total_naive_fixed is not None:
-        # Reconstruct naive fixed predictions (constant = league avg from first train window)
-        first_train_idx = __import__("nba_predictor.models.evaluate.walk_forward_eval", fromlist=["expanding_windows"]).expanding_windows(df["game_date"], WINDOWS)[0][0]
-        fixed_baseline = float(df.iloc[first_train_idx]["home_total"].mean())
-        total_naive = np.full_like(total_y, fixed_baseline)
+        total_naive = np.full_like(total_y, fixed_baseline_total)
         boot_total = paired_bootstrap(total_y, total_naive, total_preds, "mae",
                                        n_resamples=N_RESAMPLES, seed=SEED)
         print(f"  Total MAE vs naive_fixed: diff={boot_total['difference']:+.4f}  "
@@ -244,9 +249,9 @@ def main() -> int:
             "description": "NBA-0 Measure First: walk-forward evaluation of SERVED win probability (norm.cdf(margin/sigma)) and Elo baseline on 2019-20 through 2024-25 regular season games.",
             "seasons": "2019-20, 2020-21, 2021-22, 2022-23, 2023-24, 2024-25 (6 seasons)",
             "data_source": "frozen history: data/history/nba_history.json.gz (regular season only, no playoffs)",
-            "n_games_raw": len(games),          # 7,308 games from history after season filter
-            "n_games_after_features": len(df),  # 7,289 games after build_training_frame (drops games without box scores)
-            "n_walkforward_pooled_test": int(len(outcomes)),  # 4,564 = sum of test games across 4 expanding windows
+            "n_games_raw_history": len(games),                    # 7,308 games from history after season filter
+            "n_games_after_feature_engineering": len(df),         # 7,289 games after build_training_frame (drops games without box scores)
+            "n_walkforward_pooled_test": int(len(outcomes)),      # 4,564 = sum of test games across 4 expanding windows (THIS is the n for all metrics)
             "walkforward_windows": WINDOWS,
             "walkforward_method": "expanding window, date-based splits, causality enforced (train_max_date < test_min_date)",
             "leak_free_verification": {
@@ -254,6 +259,7 @@ def main() -> int:
                 "total_drift_correction": "compute_total_drift is ONLY applied at retrain time on full training frame; NOT applied during walk-forward evaluation (walk-forward uses raw model predictions)",
                 "early_season_blending": "shrunk_projections uses only completed_rows (past games) for shrinkage; never sees future games",
                 "model_refit_per_window": "walk_forward_metrics/regression re-fit model_factory on each window's training data only; no shared state across windows",
+                "sigma_source": "margin_sigma = walk-forward pooled MAE * MAE_TO_SIGMA (out-of-fold residuals). Mirrors production: retrain publishes sigma from walk-forward in manifest, serving uses it.",
             },
             "note_on_n_discrepancy": "The deep-dive audit cited n=8,388 for 2019-2025; this run uses frozen history through 2025-04-13 (end of 2024-25 regular season), giving 7,308 raw games. The 8,388 may include playoffs or partial 2025-26 season not in frozen history.",
         },

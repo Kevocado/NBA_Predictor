@@ -3,8 +3,8 @@
     "description": "NBA-0 Measure First: walk-forward evaluation of SERVED win probability (norm.cdf(margin/sigma)) and Elo baseline on 2019-20 through 2024-25 regular season games.",
     "seasons": "2019-20, 2020-21, 2021-22, 2022-23, 2023-24, 2024-25 (6 seasons)",
     "data_source": "frozen history: data/history/nba_history.json.gz (regular season only, no playoffs)",
-    "n_games_raw": 7308,
-    "n_games_after_features": 7289,
+    "n_games_raw_history": 7308,
+    "n_games_after_feature_engineering": 7289,
     "n_walkforward_pooled_test": 4564,
     "walkforward_windows": 4,
     "walkforward_method": "expanding window, date-based splits, causality enforced (train_max_date < test_min_date)",
@@ -12,7 +12,8 @@
       "features_causal": "build_training_frame uses shift-1 rolling features; compute_h_features emits features BEFORE folding game result into state",
       "total_drift_correction": "compute_total_drift is ONLY applied at retrain time on full training frame; NOT applied during walk-forward evaluation (walk-forward uses raw model predictions)",
       "early_season_blending": "shrunk_projections uses only completed_rows (past games) for shrinkage; never sees future games",
-      "model_refit_per_window": "walk_forward_metrics/regression re-fit model_factory on each window's training data only; no shared state across windows"
+      "model_refit_per_window": "walk_forward_metrics/regression re-fit model_factory on each window's training data only; no shared state across windows",
+      "sigma_source": "margin_sigma = walk-forward pooled MAE * MAE_TO_SIGMA (out-of-fold residuals). Mirrors production: retrain publishes sigma from walk-forward in manifest, serving uses it."
     },
     "note_on_n_discrepancy": "The deep-dive audit cited n=8,388 for 2019-2025; this run uses frozen history through 2025-04-13 (end of 2024-25 regular season), giving 7,308 raw games. The 8,388 may include playoffs or partial 2025-26 season not in frozen history."
   },
@@ -51,7 +52,7 @@
   "total": {
     "mae": 14.948386920069613,
     "naive_mae": 16.05719704465399,
-    "naive_mae_fixed": 15.865030674846626,
+    "naive_mae_fixed": 16.54119193689746,
     "n": 4564,
     "n_definition": "pooled test games across all 4 walk-forward windows"
   },

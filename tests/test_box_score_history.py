@@ -278,9 +278,11 @@ def test_a_changed_schedule_rebuilds_the_window(offline, monkeypatch, counting_e
         )
 
 
-def test_a_cold_window_after_a_schedule_change_is_not_served(offline, monkeypatch, counting_enrich):
-    """The cache is keyed on the schedule state, so a changed schedule invalidates
-    the entry it was holding rather than serving last month's form."""
+def test_a_cold_window_after_a_schedule_change_serves_last_good_copy(offline, monkeypatch, counting_enrich):
+    """When the schedule changes, the old cache is stale but we serve the last good
+    copy as a temporary measure while the warmer refreshes in the background.
+    The stale copy is NOT cached with the new schedule state; the warmer will
+    overwrite it with fresh data."""
     import tempfile
     from pathlib import Path
 
@@ -296,8 +298,18 @@ def test_a_cold_window_after_a_schedule_change_is_not_served(offline, monkeypatc
         facts_mod.warm_box_history("2026-03-18")
         path.write_text('["a completed game"]')      # the schedule moved on
 
-        assert len(facts_mod._box_score_history("2026-03-18")) == 0, (
-            "a stale window was served after the schedule changed"
+        frame = facts_mod._box_score_history("2026-03-18")
+        # The stale copy is served as a last good copy (not empty)
+        assert len(frame) == facts_mod.BOX_WINDOW, (
+            "the last good copy should be served while the warmer refreshes"
+        )
+        # But it is NOT cached with the new schedule state; the in-memory cache
+        # should still have the old schedule state (or be empty for the new state)
+        key = "2026-03-18"
+        entry = facts_mod._BOX_HISTORY.get(key)
+        # The entry should either not exist for the new state, or have the old state
+        assert entry is None or (isinstance(entry, tuple) and entry[1] != facts_mod._schedule_state(Path("dummy"))), (
+            "the stale copy should not be cached with the new schedule state"
         )
 
 

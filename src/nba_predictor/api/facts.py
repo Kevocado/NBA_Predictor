@@ -153,15 +153,14 @@ def _read_box_history_disk(as_of: str):
         path = _box_history_disk_path(as_of)
         if not path.exists():
             return None
-        data = pd.read_json(path, orient="split")
-        # New format: dict with 'frame' and 'schedule_state'
+        # Read as plain JSON first (the file is a dict with 'frame' and 'schedule_state')
+        import json
+        data = json.loads(path.read_text())
         if isinstance(data, dict) and 'frame' in data and 'schedule_state' in data:
-            frame = pd.DataFrame(data['frame'])
-            schedule_state = tuple(data['schedule_state'])
+            frame_data = data['frame']
+            frame = pd.DataFrame(frame_data['data'], columns=frame_data['columns'], index=frame_data['index'])
+            schedule_state = tuple(data['schedule_state']) if data['schedule_state'] is not None else None
             return frame, schedule_state
-        # Legacy format: just a frame, no schedule state
-        if isinstance(data, pd.DataFrame):
-            return data, None
         return None
     except (OSError, ValueError):
         return None
@@ -181,7 +180,8 @@ def _write_box_history_disk(as_of: str, frame, schedule_state) -> None:
             'frame': frame.to_dict(orient="split"),
             'schedule_state': list(schedule_state) if schedule_state is not None else None,
         }
-        pd.DataFrame([data]).to_json(tmp, orient="split")
+        import json
+        tmp.write_text(json.dumps(data))
         os.replace(tmp, path)
     except (OSError, ValueError):  # noqa: BLE001
         logger.exception("box history disk write failed for %s", as_of)
@@ -231,17 +231,18 @@ def _box_score_history(as_of: str) -> pd.DataFrame:
             if isinstance(disk_entry, tuple) and len(disk_entry) == 2:
                 frame, cached_state = disk_entry
                 if cached_state != current_state:
+                    # Stale but usable: serve the last good copy while the warmer refreshes.
+                    # Do NOT cache it with current_state; the warmer will overwrite with fresh data.
                     logger.info(
-                        "box-score history for %s stale on disk (schedule changed); not serving", as_of
+                        "box-score history for %s stale on disk (schedule changed); serving last good copy", as_of
                     )
-                    frame = None
+                else:
+                    _BOX_HISTORY[key] = (frame, current_state)
+                    while len(_BOX_HISTORY) > BOX_HISTORY_KEEP:
+                        del _BOX_HISTORY[next(iter(_BOX_HISTORY))]
             else:
                 # Legacy disk format without schedule state - treat as stale
                 frame = None
-            if frame is not None:
-                _BOX_HISTORY[key] = (frame, current_state)
-                while len(_BOX_HISTORY) > BOX_HISTORY_KEEP:
-                    del _BOX_HISTORY[next(iter(_BOX_HISTORY))]
     if frame is None or (isinstance(frame, pd.DataFrame) and not len(frame)):
         logger.info(
             "box-score history for %s is not warm; no matchup duels on this request", as_of

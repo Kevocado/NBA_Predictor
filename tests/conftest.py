@@ -51,20 +51,6 @@ def _no_warmers(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _clean_box_history_disk():
-    """Ensure box-history disk cache is empty for each test."""
-    from nba_predictor import config
-    import shutil
-    d = config.CACHE_DIR / "box_history"
-    if d.exists():
-        shutil.rmtree(d)
-    d.mkdir(parents=True, exist_ok=True)
-    yield
-    if d.exists():
-        shutil.rmtree(d)
-
-
-@pytest.fixture(autouse=True)
 def _clean_box_history_memory(monkeypatch):
     """Ensure box-history in-memory cache is empty for each test."""
     from nba_predictor.api import facts as facts_mod

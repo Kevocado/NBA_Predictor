@@ -23,6 +23,20 @@ import pytest
 from nba_predictor.api import facts as facts_mod
 from nba_predictor.api import app as app_mod
 
+import shutil
+from pathlib import Path
+
+@pytest.fixture(autouse=True)
+def _clean_box_history_disk_tmp(tmp_path):
+    """Use a temp dir for box-history disk cache in box_score_history tests."""
+    from nba_predictor import config
+    test_cache = tmp_path / "cache"
+    test_cache.mkdir(parents=True, exist_ok=True)
+    original = config.CACHE_DIR
+    config.CACHE_DIR = test_cache
+    yield
+    config.CACHE_DIR = original
+
 
 def _game(game_id, date, home, away, completed=True):
     return {

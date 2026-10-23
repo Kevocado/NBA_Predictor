@@ -28,14 +28,44 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def _no_box_history_warmer(monkeypatch):
-    """The app's lifespan must not start the real warmer under pytest."""
+def _no_warmers(monkeypatch):
+    """The app's lifespan must not start any real warmers under pytest.
+
+    All warmers start daemon threads that do I/O and leave global state.
+    They are exercised in their own test files with injected clock/sleep/stop.
+    """
     from nba_predictor.api import app as app_module
 
     def _noop(*args, **kwargs):
         return threading.Thread(target=lambda: None)
 
     monkeypatch.setattr(app_module, "start_box_history_warmer", _noop)
-    # Same reason: the player-props refresher fetches box scores from ESPN.
+    monkeypatch.setattr(app_module, "start_mae_warmer", _noop)
+    monkeypatch.setattr(app_module, "start_odds_refresher", _noop)
     monkeypatch.setattr(app_module, "start_player_props_refresher", _noop)
+    # warm_player_props_cache is called directly in lifespan, not a thread starter.
+    # It reads local DB but may create the tracking.db file; stub it to avoid
+    # polluting the shipped tracking database during tests.
+    monkeypatch.setattr(app_module, "warm_player_props_cache", lambda *a, **k: True)
     return _noop
+
+
+@pytest.fixture(autouse=True)
+def _clean_box_history_disk():
+    """Ensure box-history disk cache is empty for each test."""
+    from nba_predictor import config
+    import shutil
+    d = config.CACHE_DIR / "box_history"
+    if d.exists():
+        shutil.rmtree(d)
+    d.mkdir(parents=True, exist_ok=True)
+    yield
+    if d.exists():
+        shutil.rmtree(d)
+
+
+@pytest.fixture(autouse=True)
+def _clean_box_history_memory(monkeypatch):
+    """Ensure box-history in-memory cache is empty for each test."""
+    from nba_predictor.api import facts as facts_mod
+    monkeypatch.setattr(facts_mod, "_BOX_HISTORY", {})

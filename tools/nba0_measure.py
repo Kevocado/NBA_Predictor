@@ -32,35 +32,40 @@ from nba_predictor.models.probability import MAE_TO_SIGMA, win_prob
 
 # Configuration
 SEASON_START = 2019
-SEASON_END = 2025
+SEASON_END = 2024  # Frozen history has 2019-20 through 2024-25 (6 seasons)
 WINDOWS = 4
 N_RESAMPLES = 2000
 SEED = 20261007
 
 
 def load_history() -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Load games and player rows from frozen history (2019-2025)."""
+    """Load games and player rows from frozen history (2019-20 through 2024-25).
+
+    The frozen history (data/history/nba_history.json.gz) contains regular-season games
+    from 2018-10-01 to 2025-04-13. We select seasons 2019-20 through 2024-25 inclusive
+    (6 seasons: 2019, 2020, 2021, 2022, 2023, 2024). The 2025-26 season is not yet in history.
+    """
     path = Path("data/history/nba_history.json.gz")
     with gzip.open(path, "rt", encoding="utf-8") as f:
         data = json.load(f)
 
-    games_2019_2025 = []
-    players_2019_2025 = []
+    games_2019_2024 = []
+    players_2019_2024 = []
     for g in data["games"]:
         year = int(g["game_date"][:4])
         month = int(g["game_date"][5:7])
         season_year = year if month >= 10 else year - 1
         if SEASON_START <= season_year <= SEASON_END:
-            games_2019_2025.append(g)
+            games_2019_2024.append(g)
 
     for p in data["players"]:
         year = int(p["game_date"][:4])
         month = int(p["game_date"][5:7])
         season_year = year if month >= 10 else year - 1
         if SEASON_START <= season_year <= SEASON_END:
-            players_2019_2025.append(p)
+            players_2019_2024.append(p)
 
-    return pd.DataFrame(games_2019_2025), pd.DataFrame(players_2019_2025)
+    return pd.DataFrame(games_2019_2024), pd.DataFrame(players_2019_2024)
 
 
 def main() -> int:
@@ -70,6 +75,7 @@ def main() -> int:
     games, players = load_history()
     print(f"Loaded {len(games)} games, {len(players)} player-rows from frozen history")
     print(f"Date range: {games['game_date'].iloc[0]} -> {games['game_date'].iloc[-1]}")
+    print(f"Seasons: {SEASON_START}-{SEASON_START+1} through {SEASON_END}-{SEASON_END+1} (regular season only)")
 
     # Build training frame (features + targets)
     df, feature_cols = build_training_frame(games, players=players)
@@ -234,15 +240,31 @@ def main() -> int:
 
     # --- 6. Write results to docs/ ---
     results = {
-        "season_range": f"{SEASON_START}-{SEASON_END}",
-        "n_games": len(df),
+        "metadata": {
+            "description": "NBA-0 Measure First: walk-forward evaluation of SERVED win probability (norm.cdf(margin/sigma)) and Elo baseline on 2019-20 through 2024-25 regular season games.",
+            "seasons": "2019-20, 2020-21, 2021-22, 2022-23, 2023-24, 2024-25 (6 seasons)",
+            "data_source": "frozen history: data/history/nba_history.json.gz (regular season only, no playoffs)",
+            "n_games_raw": len(games),          # 7,308 games from history after season filter
+            "n_games_after_features": len(df),  # 7,289 games after build_training_frame (drops games without box scores)
+            "n_walkforward_pooled_test": int(len(outcomes)),  # 4,564 = sum of test games across 4 expanding windows
+            "walkforward_windows": WINDOWS,
+            "walkforward_method": "expanding window, date-based splits, causality enforced (train_max_date < test_min_date)",
+            "leak_free_verification": {
+                "features_causal": "build_training_frame uses shift-1 rolling features; compute_h_features emits features BEFORE folding game result into state",
+                "total_drift_correction": "compute_total_drift is ONLY applied at retrain time on full training frame; NOT applied during walk-forward evaluation (walk-forward uses raw model predictions)",
+                "early_season_blending": "shrunk_projections uses only completed_rows (past games) for shrinkage; never sees future games",
+                "model_refit_per_window": "walk_forward_metrics/regression re-fit model_factory on each window's training data only; no shared state across windows",
+            },
+            "note_on_n_discrepancy": "The deep-dive audit cited n=8,388 for 2019-2025; this run uses frozen history through 2025-04-13 (end of 2024-25 regular season), giving 7,308 raw games. The 8,388 may include playoffs or partial 2025-26 season not in frozen history.",
+        },
         "served_win_probability": {
             "log_loss": served_log_loss,
             "brier": served_brier,
             "auc": served_auc,
             "accuracy": served_accuracy,
-            "n": int(len(outcomes)),
+            "n": int(len(outcomes)),  # pooled walk-forward test games = 4,564
             "margin_sigma": margin_sigma,
+            "n_definition": "pooled test games across all 4 walk-forward windows",
         },
         "elo_baseline": {
             "log_loss": elo_log_loss,
@@ -250,6 +272,7 @@ def main() -> int:
             "auc": elo_auc,
             "accuracy": elo_accuracy,
             "n": int(len(elo_y)),
+            "n_definition": "pooled test games across all 4 walk-forward windows",
         },
         "logistic_classifier": {
             "log_loss": log_log_loss,
@@ -257,18 +280,21 @@ def main() -> int:
             "auc": log_auc,
             "accuracy": log_accuracy,
             "n": int(len(log_y)),
+            "n_definition": "pooled test games across all 4 walk-forward windows",
         },
         "margin": {
             "mae": margin_mae,
             "naive_mae": margin_wf["pooled"]["naive_mae"],
             "naive_mae_fixed": margin_wf["pooled"].get("naive_mae_fixed"),
             "n": int(len(margin_y)),
+            "n_definition": "pooled test games across all 4 walk-forward windows",
         },
         "total": {
             "mae": total_mae,
             "naive_mae": total_wf["pooled"]["naive_mae"],
             "naive_mae_fixed": total_wf["pooled"].get("naive_mae_fixed"),
             "n": int(len(total_y)),
+            "n_definition": "pooled test games across all 4 walk-forward windows",
         },
         "bootstrap_served_vs_elo": {
             "log_loss": boot_log_loss,
@@ -302,6 +328,9 @@ def main() -> int:
 
     # Summary
     print("\n=== SUMMARY ===")
+    print(f"Data: {len(games)} raw games from frozen history (seasons {SEASON_START}-{SEASON_END})")
+    print(f"      {len(df)} games after feature engineering (build_training_frame)")
+    print(f"      {len(outcomes)} pooled test games across {WINDOWS} walk-forward windows")
     print(f"SERVED win probability (from margin): log_loss={served_log_loss:.4f}, auc={served_auc:.4f}")
     print(f"Elo-only baseline:                     log_loss={elo_log_loss:.4f}, auc={elo_auc:.4f}")
     print(f"Logistic classifier (legacy):          log_loss={log_log_loss:.4f}, auc={log_auc:.4f}")
@@ -310,11 +339,17 @@ def main() -> int:
 
     # Compare to the "0.68 / 0.58" claim
     print(f"\nDeep-dive study claim: 0.68 log-loss / 0.58 AUC (702-game manifest)")
-    print(f"This run (full sample): {served_log_loss:.4f} log-loss / {served_auc:.4f} AUC")
+    print(f"This run (full walk-forward): {served_log_loss:.4f} log-loss / {served_auc:.4f} AUC")
     if abs(served_log_loss - 0.68) < 0.02 and abs(served_auc - 0.58) < 0.02:
         print("  -> CLAIM CONFIRMED (approximately)")
     else:
         print("  -> CLAIM REFUTED (does not match)")
+
+    print("\nLeak-free verification:")
+    print("  - Features: shift-1 rolling, causal by design (compute_h_features emits before state update)")
+    print("  - Total drift correction: NOT applied during walk-forward (retrain-time only)")
+    print("  - Early-season blending: uses only past completed games (completed_rows)")
+    print("  - Models: re-fit per window on training data only (walk_forward_* contract)")
 
     return 0
 

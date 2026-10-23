@@ -106,9 +106,12 @@ def main() -> int:
     margin_preds = np.asarray(margin_wf["pooled"]["preds"])
     margin_y = np.asarray(margin_wf["pooled"]["y"])
     margin_mae = margin_wf["pooled"]["mae"]
-    # Sigma from walk-forward pooled residuals (out-of-fold). This mirrors production:
-    # retrain runs walk-forward on training data, publishes sigma = pooled_MAE * MAE_TO_SIGMA
-    # in manifest, then serving uses that sigma. Here we use the same walk-forward sigma.
+    # Sigma from walk-forward POOLED TEST residuals (out-of-fold).
+    # Each test game's residual comes from a model that NEVER saw that game during training.
+    # This is the standard out-of-fold residual sigma estimation, matching production:
+    # retrain.py runs walk_forward_regression on training data, computes sigma from pooled MAE,
+    # publishes in manifest; serving uses that sigma. Here we evaluate on all data via walk-forward,
+    # so the pooled test residuals ARE the out-of-fold residuals.
     margin_sigma = margin_mae * MAE_TO_SIGMA
 
     # SERVED win probability = norm.cdf(predicted_margin / margin_sigma)
@@ -196,7 +199,9 @@ def main() -> int:
     print(f"  MAE={margin_mae:.4f}, naive={margin_wf['pooled']['naive_mae']:.4f}, "
           f"naive_fixed={margin_wf['pooled'].get('naive_mae_fixed', 'N/A')}")
 
-    # Get the first training window's mean total for fixed baseline (matches walk_forward_regression fixed_baseline)
+    # Get the first training window's mean total for fixed baseline (matches walk_forward_regression fixed_baseline).
+    # This is a SINGLE constant computed from the FIRST training window only (prior data),
+    # not the overall mean. It represents what a naive forecaster would know at season start.
     from nba_predictor.models.evaluate.walk_forward_eval import expanding_windows
     first_train_idx = expanding_windows(df["game_date"], WINDOWS)[0][0]
     fixed_baseline_total = float(df.iloc[first_train_idx]["home_total"].mean())

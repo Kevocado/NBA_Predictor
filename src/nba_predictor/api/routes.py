@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import sqlite3
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -125,7 +126,7 @@ def _market_lines(db_path: Path, g: dict) -> tuple[float | None, float | None]:
     """
     from collections import Counter
 
-    rows = [r for r in store.get_market_predictions_for_game(db_path, g["game_id"]) if r["market"] in ("spread", "total") and r["point"] is not None]
+    rows = [r for r in _read_or([], store.get_market_predictions_for_game, db_path, g["game_id"]) if r["market"] in ("spread", "total") and r["point"] is not None]
     if not rows:
         return None, None
     latest = max(r["created_at"] for r in rows)
@@ -136,11 +137,36 @@ def _market_lines(db_path: Path, g: dict) -> tuple[float | None, float | None]:
     return mode(spreads), mode(totals)
 
 
+def _read_or(default, fn, *args, **kwargs):
+    """Run a read against the tracking DB, degrading instead of 500ing the page.
+
+    The tracking DB is not the schedule: a prediction or a market line is an
+    OPTIONAL field (`prediction: Prediction | null`, `markets: []`), and the page
+    already renders without one. When the file is unreadable -- corrupted, locked
+    by a writer, missing -- the truthful answer is the game with no pick, not a
+    500 that reads to the visitor as "the whole site is down".
+
+    On 2026-10-26 a mid-commit I/O error left the DB malformed and every one of
+    these reads raised `database disk image is malformed`, so `/games/week`
+    failed for every week and the page showed "We couldn't load this week's
+    games. Check your connection and try again." A data problem was rendered as
+    a network problem, and no games were shown at all.
+
+    Writers do NOT go through this: a failed write must stay a failure, because
+    a silent one is a lost prediction rather than a missing one.
+    """
+    try:
+        return fn(*args, **kwargs)
+    except sqlite3.DatabaseError as exc:
+        logger.warning("tracking DB read failed (%s): %s", getattr(fn, "__name__", fn), exc)
+        return default
+
+
 def _prediction_out(db_path: Path, g: dict, manifest: dict | None = None) -> tuple[PredictionOut | None, bool]:
     """The pick to show and whether it was rebuilt after tip-off. The latest
     pick made before tip-off wins; a later backtest row only shows (labelled
     rebuilt) when no pre-tip pick exists."""
-    rows = store.get_predictions_for_game(db_path, g["game_id"])
+    rows = _read_or([], store.get_predictions_for_game, db_path, g["game_id"])
     if not rows:
         return None, False
     row = latest_pre_tip(rows, g)
@@ -245,7 +271,7 @@ def get_game_detail(
             american_odds=row["american_odds"], point=row["point"],
             rebuilt=not made_before_tip(row["created_at"], game),
         )
-        for row in store.get_market_predictions_for_game(db_path, game_id)
+        for row in _read_or([], store.get_market_predictions_for_game, db_path, game_id)
     ]
 
     head_to_head = [
@@ -259,7 +285,7 @@ def get_game_detail(
     base = _game_out(game, db_path)
 
     # Injury summary: the availability gate's own sentence
-    picks = picks_by_player_stat(db_path, game_id, game)
+    picks = _read_or({}, picks_by_player_stat, db_path, game_id, game)
     out_entries = resolve_out_players(injuries, {key[0] for key in picks})
     doubtful_entries = resolve_doubtful_players(injuries, {key[0] for key in picks})
     # This game's two teams only: the report is league-wide, and a player who

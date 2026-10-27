@@ -5,10 +5,18 @@ import threading
 import time
 import warnings
 from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Sequence
 
 _CONNECT_TIMEOUT_SECONDS = 30
+
+#: How long a READ connection waits for a lock, against the writer's 30s above.
+#: A page read must not sit on a lock: `/games/week` reads once per game, and the
+#: browser gives up at 15s (frontend REQUEST_TIMEOUT_MS), so the request has to
+#: fail into "no pick" well before that. Writers keep the long timeout: a rescore
+#: waiting out a reader is correct, a visitor waiting out a rescore is not.
+_READ_TIMEOUT_SECONDS = 5.0
 
 #: Set to a truthy value to open connections with SQLite's `nolock=1`, for the
 #: Azure Files (SMB) mount where SQLite's fcntl locking is not honoured.
@@ -38,9 +46,25 @@ def _nolock_enabled() -> bool:
     return os.environ.get(NOLOCK_ENV, "").strip().lower() in {"1", "true", "yes"}
 
 
-def _connect(db_path: Path) -> sqlite3.Connection:
+#: Set by API page reads (see `bounded_reads`): connections opened inside it wait
+#: `_READ_TIMEOUT_SECONDS` for a lock instead of the writer's 30s.
+_read_bound: ContextVar[bool] = ContextVar("tracking_read_bound", default=False)
+
+
+@contextmanager
+def bounded_reads():
+    token = _read_bound.set(True)
+    try:
+        yield
+    finally:
+        _read_bound.reset(token)
+
+
+def _connect(db_path: Path, timeout: float | None = None) -> sqlite3.Connection:
+    if timeout is None:
+        timeout = _READ_TIMEOUT_SECONDS if _read_bound.get() else _CONNECT_TIMEOUT_SECONDS
     query = "?nolock=1" if _nolock_enabled() else ""
-    return sqlite3.connect(f"file:{db_path}{query}", uri=True, timeout=_CONNECT_TIMEOUT_SECONDS)
+    return sqlite3.connect(f"file:{db_path}{query}", uri=True, timeout=timeout)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS predictions (

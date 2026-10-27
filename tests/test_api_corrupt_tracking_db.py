@@ -92,3 +92,56 @@ def test_the_game_detail_degrades_too(tmp_path):
     assert body["game_id"] == "g1"
     assert body["prediction"] is None
     assert body["markets"] == []
+
+
+def test_a_failed_read_is_not_retried_for_every_game_in_the_request(tmp_path, monkeypatch):
+    from nba_predictor.tracking import store
+
+    client = _client_with_corrupt_db(tmp_path)
+    from nba_predictor.api import deps
+    from nba_predictor.api.app import app
+
+    schedule = tmp_path / "many.json"
+    schedule.write_text(
+        "[" + ",".join(
+            f'{{"game_id": "g{i}", "game_date": "2026-10-27", "home_team": "BOS", "away_team": "MIA"}}'
+            for i in range(5)
+        ) + "]"
+    )
+    app.dependency_overrides[deps.get_schedule_path] = lambda: schedule
+    calls = []
+    real = store.get_predictions_for_game
+
+    def counting(*a, **k):
+        calls.append(a[1])
+        return real(*a, **k)
+
+    monkeypatch.setattr(store, "get_predictions_for_game", counting)
+
+    response = client.get("/games/week", params={"start": "2026-10-26"})
+
+    assert response.status_code == 200, response.text
+    assert len(response.json()) == 5
+    assert len(calls) == 1, f"every game re-hit the unreadable DB: {calls}"
+
+
+def test_the_detail_says_nothing_about_availability_when_the_picks_cannot_be_read(tmp_path):
+    client = _client_with_corrupt_db(tmp_path)
+
+    body = client.get("/games/g1").json()
+
+    assert body["injury_summary"] is None
+
+
+def test_page_reads_wait_five_seconds_for_a_lock_but_writers_keep_thirty(tmp_path):
+    import sqlite3 as _sqlite3
+    from unittest import mock
+
+    from nba_predictor.tracking import store
+
+    db = tmp_path / "t.db"
+    with mock.patch.object(_sqlite3, "connect") as connect:
+        with store.bounded_reads():
+            store._connect(db)
+        store._connect(db)
+    assert [c.kwargs["timeout"] for c in connect.call_args_list] == [5.0, 30]

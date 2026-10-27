@@ -3,6 +3,7 @@ import logging
 import os
 import sqlite3
 import threading
+from contextvars import ContextVar
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -137,6 +138,9 @@ def _market_lines(db_path: Path, g: dict) -> tuple[float | None, float | None]:
     return mode(spreads), mode(totals)
 
 
+_READ_FAILED: ContextVar[bool] = ContextVar("tracking_read_failed", default=False)
+
+
 def _read_or(default, fn, *args, **kwargs):
     """Run a read against the tracking DB, degrading instead of 500ing the page.
 
@@ -155,10 +159,16 @@ def _read_or(default, fn, *args, **kwargs):
     Writers do NOT go through this: a failed write must stay a failure, because
     a silent one is a lost prediction rather than a missing one.
     """
+    if _READ_FAILED.get():
+        return default
     try:
-        return fn(*args, **kwargs)
+        with store.bounded_reads():
+            return fn(*args, **kwargs)
     except sqlite3.DatabaseError as exc:
         logger.warning("tracking DB read failed (%s): %s", getattr(fn, "__name__", fn), exc)
+        # One failed read means the rest of this request would fail the same way, each waiting out the
+        # lock timeout again (`/games/week` reads once per game): answer the rest with the default.
+        _READ_FAILED.set(True)
         return default
 
 
@@ -286,13 +296,15 @@ def get_game_detail(
 
     # Injury summary: the availability gate's own sentence
     picks = _read_or({}, picks_by_player_stat, db_path, game_id, game)
+    picks_unreadable = _READ_FAILED.get()
     out_entries = resolve_out_players(injuries, {key[0] for key in picks})
     doubtful_entries = resolve_doubtful_players(injuries, {key[0] for key in picks})
     # This game's two teams only: the report is league-wide, and a player who
     # is playing for neither of them is not this game's news.
     out_entries = for_teams(out_entries, {game["home_team"], game["away_team"]})
     doubtful_entries = for_teams(doubtful_entries, {game["home_team"], game["away_team"]})
-    injury_summary = f"Checked against ESPN availability — {len(out_entries)} Out, {len(doubtful_entries)} Day-to-Day"
+    # Without the picks there is nothing to check availability against: say nothing rather than "0 Out".
+    injury_summary = None if picks_unreadable else f"Checked against ESPN availability — {len(out_entries)} Out, {len(doubtful_entries)} Day-to-Day"
 
     return GameDetailOut(
         **base.model_dump(),

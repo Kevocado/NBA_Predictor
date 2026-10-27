@@ -46,12 +46,34 @@ type Props<T> = {
 
 const MISSING = "—";
 
+function toSortNumber(value: number | string | null): number | null {
+  if (value === null) return null;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  const t = value.trim();
+  if (t === "" || t.toLowerCase() === "dnp" || t === "—" || t === "-") return null;
+  if (/^\d+:\d{2}(:\d{2})?$/.test(t)) {
+    return t.split(":").map(Number).reduce((acc, p) => acc * 60 + p, 0);
+  }
+  if (t.endsWith("%")) {
+    const n = Number(t.slice(0, -1));
+    return Number.isNaN(n) ? null : n;
+  }
+  const n = Number(t);
+  return Number.isNaN(n) ? null : n;
+}
+
 function compare(a: number | string | null, b: number | string | null, dir: "asc" | "desc"): number {
-  // Missing values always sort last, whichever way the column is sorted.
-  if (a === null && b === null) return 0;
-  if (a === null) return 1;
-  if (b === null) return -1;
-  const order = typeof a === "number" && typeof b === "number" ? a - b : String(a).localeCompare(String(b));
+  // Missing values (null, dashes, DNP) always sort last, whichever way.
+  const aMissing = a === null || (typeof a === "string" && (a.trim() === "" || a.trim().toLowerCase() === "dnp" || a.trim() === "—" || a.trim() === "-"));
+  const bMissing = b === null || (typeof b === "string" && (b.trim() === "" || b.trim().toLowerCase() === "dnp" || b.trim() === "—" || b.trim() === "-"));
+  if (aMissing && bMissing) return 0;
+  if (aMissing) return 1;
+  if (bMissing) return -1;
+  const an = toSortNumber(a);
+  const bn = toSortNumber(b);
+  let order: number;
+  if (an !== null && bn !== null) order = an - bn;
+  else order = String(a).localeCompare(String(b));
   return dir === "asc" ? order : -order;
 }
 
@@ -68,11 +90,12 @@ export function StatTable<T>({ rows, columns, rowKey, initialSort, caption, expa
     : rows;
 
   const toggleSort = (col: Column<T>) =>
-    setSort((cur) =>
-      cur?.key === col.key
-        ? { key: col.key, dir: cur.dir === "asc" ? "desc" : "asc" }
-        : { key: col.key, dir: col.firstDir ?? (col.numeric ? "desc" : "asc") },
-    );
+    setSort((cur) => {
+      const first = col.firstDir ?? (col.numeric ? "desc" : "asc");
+      if (!cur || cur.key !== col.key) return { key: col.key, dir: first };
+      if (cur.dir === first) return { key: col.key, dir: first === "asc" ? "desc" : "asc" };
+      return null;
+    });
 
   return (
     // relative: the visually hidden caption and tooltips are absolutely

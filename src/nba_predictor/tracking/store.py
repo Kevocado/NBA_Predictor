@@ -1,30 +1,70 @@
 import logging
+import os
 import sqlite3
 import threading
 import time
 import warnings
 from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Sequence
 
 _CONNECT_TIMEOUT_SECONDS = 30
-# The tracking DB can live on an Azure Files (SMB) mount for persistence
-# across container restarts. SQLite's OS-level file locking (fcntl-based)
-# isn't honored reliably over that network filesystem -- CREATE TABLE on
-# an empty file fails immediately with "database is locked" even with no
-# real contention and a generous timeout. Every connection below opens
-# with nolock=1 to bypass that broken locking, and _DB_LOCK is what
-# actually serializes access instead -- safe only because the container
-# app is pinned to exactly one replica, making this process the sole
-# writer.
+
+#: How long a READ connection waits for a lock, against the writer's 30s above.
+#: A page read must not sit on a lock: `/games/week` reads once per game, and the
+#: browser gives up at 15s (frontend REQUEST_TIMEOUT_MS), so the request has to
+#: fail into "no pick" well before that. Writers keep the long timeout: a rescore
+#: waiting out a reader is correct, a visitor waiting out a rescore is not.
+_READ_TIMEOUT_SECONDS = 5.0
+
+#: Set to a truthy value to open connections with SQLite's `nolock=1`, for the
+#: Azure Files (SMB) mount where SQLite's fcntl locking is not honoured.
+#:
+#: It is OFF by default and must stay that way. Every connection used to set it
+#: unconditionally, justified by "the container app is pinned to exactly one
+#: replica, making this process the sole writer" -- which was false. The daily
+#: `nba-rescore` systemd unit runs `docker exec ... refresh_full`, a SECOND
+#: process in the same container writing the same file, and `_DB_LOCK` below is
+#: a `threading.Lock`: threads, not processes. On 2026-10-26 that produced an
+#: outage: the rescore died at `sqlite3.OperationalError: disk I/O error` during
+#: a commit and left the file malformed, so every read raised "database disk
+#: image is malformed" and the games page 500'd.
+#:
+#: The DB lives on a local ext4 volume now (compose binds ./volumes/nba-tracking),
+#: where locking works. Turn this on only for SMB, and then only if you accept
+#: that concurrent writers are your problem.
+NOLOCK_ENV = "NBA_TRACKING_DB_NOLOCK"
+
 _DB_LOCK = threading.Lock()
 
 
 logger = logging.getLogger(__name__)
 
 
-def _connect(db_path: Path) -> sqlite3.Connection:
-    return sqlite3.connect(f"file:{db_path}?nolock=1", uri=True, timeout=_CONNECT_TIMEOUT_SECONDS)
+def _nolock_enabled() -> bool:
+    return os.environ.get(NOLOCK_ENV, "").strip().lower() in {"1", "true", "yes"}
+
+
+#: Set by API page reads (see `bounded_reads`): connections opened inside it wait
+#: `_READ_TIMEOUT_SECONDS` for a lock instead of the writer's 30s.
+_read_bound: ContextVar[bool] = ContextVar("tracking_read_bound", default=False)
+
+
+@contextmanager
+def bounded_reads():
+    token = _read_bound.set(True)
+    try:
+        yield
+    finally:
+        _read_bound.reset(token)
+
+
+def _connect(db_path: Path, timeout: float | None = None) -> sqlite3.Connection:
+    if timeout is None:
+        timeout = _READ_TIMEOUT_SECONDS if _read_bound.get() else _CONNECT_TIMEOUT_SECONDS
+    query = "?nolock=1" if _nolock_enabled() else ""
+    return sqlite3.connect(f"file:{db_path}{query}", uri=True, timeout=timeout)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS predictions (

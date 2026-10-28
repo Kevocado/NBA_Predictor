@@ -30,7 +30,7 @@ and pushing to GHCR, then `az containerapp update` (matching
   matches every sibling Dockerfile.
 - Container App name: `nba-predictor`. Resource group: `predictor-hub-rg`
   (existing, shared with PL/F1/NFL-CFB). GHCR image:
-  `ghcr.io/kevocado/nba-predictor`. These exact names come from Phase 0's
+  `ghcr.io/kevinsigey/nba-predictor`. These exact names come from Phase 0's
   confirmed sibling pattern (`PL_Predictor/.github/workflows/deploy-azure.yml`).
 - No deploy or Azure-provisioning command in this plan is executed
   automatically — Task 6's `az containerapp create` is a one-time,
@@ -464,7 +464,7 @@ git commit -m "feat: add multi-stage Dockerfile for frontend + API"
   these are Azure/GHCR credentials, not sport-data API keys, but the same
   reuse principle applies: they're already set up at the account level).
 - Produces: on push to `main` (excluding snapshot-only commits), builds and
-  pushes `ghcr.io/kevocado/nba-predictor` and deploys it to the
+  pushes `ghcr.io/kevinsigey/nba-predictor` and deploys it to the
   `nba-predictor` Container App. On a schedule, regenerates
   `data/public_snapshot.json` and commits it directly to `main`.
 
@@ -499,9 +499,9 @@ jobs:
 
       - name: Build and push image
         run: |
-          docker build -t ghcr.io/kevocado/nba-predictor:${{ github.sha }} -t ghcr.io/kevocado/nba-predictor:latest .
-          docker push ghcr.io/kevocado/nba-predictor:${{ github.sha }}
-          docker push ghcr.io/kevocado/nba-predictor:latest
+          docker build -t ghcr.io/kevinsigey/nba-predictor:${{ github.sha }} -t ghcr.io/kevinsigey/nba-predictor:latest .
+          docker push ghcr.io/kevinsigey/nba-predictor:${{ github.sha }}
+          docker push ghcr.io/kevinsigey/nba-predictor:latest
 
       - name: Log in to Azure
         uses: azure/login@v2
@@ -515,7 +515,7 @@ jobs:
           az containerapp update \
             --name nba-predictor \
             --resource-group predictor-hub-rg \
-            --image ghcr.io/kevocado/nba-predictor:${{ github.sha }}
+            --image ghcr.io/kevinsigey/nba-predictor:${{ github.sha }}
 ```
 
 - [ ] **Step 2: Write `.github/workflows/refresh-public-snapshot.yml`**
@@ -614,7 +614,7 @@ resource group. See `.github/workflows/deploy-azure.yml`.
      --name nba-predictor \\
      --resource-group predictor-hub-rg \\
      --environment <environment-name-from-step-1> \\
-     --image ghcr.io/kevocado/nba-predictor:latest \\
+     --image ghcr.io/kevinsigey/nba-predictor:latest \\
      --target-port 8000 \\
      --ingress external \\
      --registry-server ghcr.io \\

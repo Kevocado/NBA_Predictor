@@ -48,9 +48,9 @@ jobs:
 
       - name: Build and push image
         run: |
-          docker build -t ghcr.io/kevocado/nba-predictor-deploy:${{ github.sha }} -t ghcr.io/kevocado/nba-predictor-deploy:latest .
-          docker push ghcr.io/kevocado/nba-predictor-deploy:${{ github.sha }}
-          docker push ghcr.io/kevocado/nba-predictor-deploy:latest
+          docker build -t ghcr.io/kevinsigey/nba-predictor-deploy:${{ github.sha }} -t ghcr.io/kevinsigey/nba-predictor-deploy:latest .
+          docker push ghcr.io/kevinsigey/nba-predictor-deploy:${{ github.sha }}
+          docker push ghcr.io/kevinsigey/nba-predictor-deploy:latest
 
 
   # Legacy. Azure is being cut over to the VPS, so this stays off unless the
@@ -81,7 +81,7 @@ jobs:
           az containerapp update \
             --name nba-predictor \
             --resource-group predictor-hub-rg \
-            --image ghcr.io/kevocado/nba-predictor-deploy:${{ github.sha }}
+            --image ghcr.io/kevinsigey/nba-predictor-deploy:${{ github.sha }}
 
   # Pulls the image pushed above on the VPS stack at /opt/stack. `bin/deploy` is
   # the only thing the CI key can ask for -- a forced command in the deploy

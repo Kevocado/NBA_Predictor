@@ -25,9 +25,9 @@ jobs:
 
       - name: Build and push image
         run: |
-          docker build -t ghcr.io/kevocado/nba-predictor-deploy:${{ github.sha }} -t ghcr.io/kevocado/nba-predictor-deploy:latest .
-          docker push ghcr.io/kevocado/nba-predictor-deploy:${{ github.sha }}
-          docker push ghcr.io/kevocado/nba-predictor-deploy:latest
+          docker build -t ghcr.io/kevinsigey/nba-predictor-deploy:${{ github.sha }} -t ghcr.io/kevinsigey/nba-predictor-deploy:latest .
+          docker push ghcr.io/kevinsigey/nba-predictor-deploy:${{ github.sha }}
+          docker push ghcr.io/kevinsigey/nba-predictor-deploy:latest
 
       - name: Log in to Azure
         uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2.3.1
@@ -41,4 +41,4 @@ jobs:
           az containerapp update \
             --name nba-predictor \
             --resource-group predictor-hub-rg \
-            --image ghcr.io/kevocado/nba-predictor-deploy:${{ github.sha }}
+            --image ghcr.io/kevinsigey/nba-predictor-deploy:${{ github.sha }}

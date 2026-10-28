@@ -36,7 +36,7 @@ WORKFLOW = WORKFLOW_DIR / "deploy.yml"
 
 # Must match `image:` in vps-stack/compose.yml. If either side changes, the
 # deploy pushes a tag the stack never pulls.
-IMAGE = "ghcr.io/kevocado/nba-predictor-deploy"
+IMAGE = "ghcr.io/kevinsigey/nba-predictor-deploy"
 # Must match the service key in vps-stack/compose.yml, which is what
 # `bin/deploy` is called with.
 SERVICE = "nba"

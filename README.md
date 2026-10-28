@@ -67,7 +67,7 @@ pipeline that no longer existed. It is stated correctly now.
      --name nba-predictor \
      --resource-group predictor-hub-rg \
      --environment <environment-name-from-step-1> \
-     --image ghcr.io/kevocado/nba-predictor:latest \
+     --image ghcr.io/kevinsigey/nba-predictor:latest \
      --target-port 8000 \
      --ingress external \
      --registry-server ghcr.io \

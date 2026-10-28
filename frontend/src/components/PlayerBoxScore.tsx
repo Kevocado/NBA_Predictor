@@ -70,6 +70,7 @@ function playerRow(row: BoxScoreRow, bands?: Record<string, number> | null): Sti
   return {
     key: row.player_id,
     testId: "box-score-row",
+    sortValues: [row.player_name, row.predicted.points ?? null, row.predicted.rebounds ?? null, row.predicted.assists ?? null, row.predicted.threes ?? null],
     header: (
       <>
         {row.player_name}
@@ -97,6 +98,7 @@ function teamFooter(rows: BoxScoreRow[]): StickyRow[] {
       testId: "box-score-actual-totals",
       total: true,
       header: "Actual",
+      sortValues: ["Actual", ...STAT_KEYS.map((key) => sumStat(rows, key, "actual"))],
       cells: STAT_KEYS.map((key) => sumStat(rows, key, "actual")),
     },
   ];

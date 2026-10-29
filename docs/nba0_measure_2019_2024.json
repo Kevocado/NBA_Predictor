@@ -13,7 +13,7 @@
       "total_drift_correction": "compute_total_drift is ONLY applied at retrain time on full training frame; NOT applied during walk-forward evaluation (walk-forward uses raw model predictions)",
       "early_season_blending": "shrunk_projections uses only completed_rows (past games) for shrinkage; never sees future games",
       "model_refit_per_window": "walk_forward_metrics/regression re-fit model_factory on each window's training data only; no shared state across windows",
-      "sigma_source": "margin_sigma = first-window-only training MAE * MAE_TO_SIGMA. Zero leakage: sigma fitted only on games before first scored window. New sigma=13.621 (prior 13.530). Served metrics unchanged (log_loss=0.6224, AUC=0.7027) confirming measurement is robust."
+      "sigma_source": "margin_sigma = first-window-only training MAE * MAE_TO_SIGMA. Zero leakage: sigma fitted only on games before first scored window (sigma=13.621). Served metrics unchanged (log_loss=0.6224, AUC=0.7027)."
     },
     "note_on_n_discrepancy": "The deep-dive audit cited n=8,388 for 2019-2025; this run uses frozen history through 2025-04-13 (end of 2024-25 regular season), giving 7,308 raw games. The 8,388 may include playoffs or partial 2025-26 season not in frozen history."
   },
@@ -27,10 +27,10 @@
     "n_definition": "pooled test games across all 4 walk-forward windows"
   },
   "elo_baseline": {
-    "log_loss": 0.680110116321614,
-    "brier": 0.2406136638126133,
-    "auc": 0.6483888189979188,
-    "accuracy": 0.6049517966695881,
+    "log_loss": 0.6515894968347371,
+    "brier": 0.22892088007163439,
+    "auc": 0.6831015282825459,
+    "accuracy": 0.6253286590709903,
     "n": 4564,
     "n_definition": "pooled test games across all 4 walk-forward windows"
   },
@@ -60,11 +60,11 @@
     "log_loss": {
       "metric": "log_loss",
       "lower_is_better": true,
-      "baseline": 0.680110116321614,
+      "baseline": 0.6515894968347371,
       "candidate": 0.6224006651503735,
-      "difference": -0.05770945117124049,
-      "ci_low": -0.06858648999507633,
-      "ci_high": -0.047030054845484004,
+      "difference": -0.029188831684363592,
+      "ci_low": -0.036764631449867365,
+      "ci_high": -0.021800754100339673,
       "alpha": 0.05,
       "n": 4564,
       "n_resamples": 2000,
@@ -76,11 +76,11 @@
     "brier": {
       "metric": "brier",
       "lower_is_better": true,
-      "baseline": 0.2406136638126133,
+      "baseline": 0.22892088007163439,
       "candidate": 0.21657177111591014,
-      "difference": -0.02404189269670315,
-      "ci_low": -0.028686129007830217,
-      "ci_high": -0.019420525315525405,
+      "difference": -0.012349108955724247,
+      "ci_low": -0.015502722349541044,
+      "ci_high": -0.009273940252932307,
       "alpha": 0.05,
       "n": 4564,
       "n_resamples": 2000,
@@ -92,11 +92,11 @@
     "auc": {
       "metric": "auc",
       "lower_is_better": false,
-      "baseline": 0.6483888189979188,
+      "baseline": 0.6831015282825459,
       "candidate": 0.7026911906315039,
-      "difference": 0.05430237163358509,
-      "ci_low": 0.04099225981062229,
-      "ci_high": 0.06783952541638508,
+      "difference": 0.01958966234895798,
+      "ci_low": 0.013110872667054931,
+      "ci_high": 0.02647911688000202,
       "alpha": 0.05,
       "n": 4564,
       "n_resamples": 2000,

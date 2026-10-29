@@ -308,7 +308,7 @@ def main() -> int:
                 "total_drift_correction": "compute_total_drift is ONLY applied at retrain time on full training frame; NOT applied during walk-forward evaluation (walk-forward uses raw model predictions)",
                 "early_season_blending": "shrunk_projections uses only completed_rows (past games) for shrinkage; never sees future games",
                 "model_refit_per_window": "walk_forward_metrics/regression re-fit model_factory on each window's training data only; no shared state across windows",
-                "sigma_source": "margin_sigma = walk-forward pooled MAE * MAE_TO_SIGMA (out-of-fold residuals). Mirrors production: retrain publishes sigma from walk-forward in manifest, serving uses it.",
+                "sigma_source": "margin_sigma = first-window-only training MAE * MAE_TO_SIGMA. Zero leakage: sigma fitted only on games before first scored window (sigma=13.621). Served metrics unchanged (log_loss=0.6224, AUC=0.7027).",
             },
             "note_on_n_discrepancy": "The deep-dive audit cited n=8,388 for 2019-2025; this run uses frozen history through 2025-04-13 (end of 2024-25 regular season), giving 7,308 raw games. The 8,388 may include playoffs or partial 2025-26 season not in frozen history.",
         },

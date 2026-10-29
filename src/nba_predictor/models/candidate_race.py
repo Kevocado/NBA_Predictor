@@ -142,29 +142,62 @@ def elo_probability_factory(k: float = ELO_K, scale: float = ELO_SCALE) -> Calla
     def factory(train_df: pd.DataFrame):
         ratings: dict[str, float] = {}
 
-        def rating(team: str) -> float:
-            return ratings.setdefault(team, initial)
+        def rating(store: dict[str, float], team: str) -> float:
+            return store.setdefault(team, initial)
 
         ordered = train_df.sort_values("game_date")
         for row in ordered.itertuples():
             home, away = row.home_team, row.away_team
-            expected = 1.0 / (1.0 + scale ** (-(rating(home) - rating(away)) / scale))
+            r_home = rating(ratings, home)
+            r_away = rating(ratings, away)
+            expected = 1.0 / (1.0 + scale ** (-(r_home - r_away) / scale))
             delta = k * (row.home_win - expected)
-            ratings[home] = rating(home) + delta
-            ratings[away] = rating(away) - delta
+            ratings[home] = r_home + delta
+            ratings[away] = r_away - delta
+
+        base_ratings = dict(ratings)
 
         def predict(X: pd.DataFrame) -> np.ndarray:
-            return np.array(
-                [
-                    1.0
-                    / (
-                        1.0
-                        + scale ** (-(rating(h) - rating(a)) / scale)
-                    )
-                    for h, a in zip(X["home_team"], X["away_team"])
-                ],
-                dtype=float,
-            )
+            # Walk forward by scored date: every game on a date is predicted
+            # from ratings that only know games played on earlier dates, then
+            # all of that date's results are folded in. Same-date and future
+            # outcomes never leak into a prediction.
+            store = dict(base_ratings)
+            result = np.empty(len(X), dtype=float)
+            if len(X) == 0:
+                return result
+            order = sorted(range(len(X)), key=lambda i: str(X.iloc[i]["game_date"]))
+            i = 0
+            while i < len(order):
+                j = i
+                day = str(X.iloc[order[i]]["game_date"])
+                group = []
+                while j < len(order) and str(X.iloc[order[j]]["game_date"]) == day:
+                    group.append(order[j])
+                    j += 1
+                # Predict every game on this date from pre-date ratings.
+                for idx in group:
+                    row = X.iloc[idx]
+                    h, a = row["home_team"], row["away_team"]
+                    r_h = rating(store, h)
+                    r_a = rating(store, a)
+                    result[idx] = 1.0 / (1.0 + scale ** (-(r_h - r_a) / scale))
+                # Fold this date's results in only after all its games are scored.
+                if "home_win" in X.columns:
+                    for idx in group:
+                        row = X.iloc[idx]
+                        hw = row["home_win"]
+                        if pd.isna(hw):
+                            continue
+                        h, a = row["home_team"], row["away_team"]
+                        r_h = rating(store, h)
+                        r_a = rating(store, a)
+                        expected = 1.0 / (1.0 + scale ** (-(r_h - r_a) / scale))
+                        delta = k * (float(hw) - expected)
+                        store[h] = r_h + delta
+                        store[a] = r_a - delta
+                i = j
+            return result
 
         return predict
 

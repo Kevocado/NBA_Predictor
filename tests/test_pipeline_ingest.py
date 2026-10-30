@@ -610,6 +610,8 @@ def test_train_player_prop_models_writes_four_model_files_and_manifest(tmp_path)
     assert manifest["model_version"] == "v-test"
     assert set(manifest["models"]) == {"points", "rebounds", "assists", "threes"}
     assert manifest["metrics"]["points"]["mae"] is not None
+    # 20 games is under the 50-row holdout floor, so the MAE is in-sample and the manifest must say so.
+    assert manifest["training"]["in_sample_metrics"] is True
 
 
 def test_train_player_prop_models_handles_empty_training_frame(tmp_path):

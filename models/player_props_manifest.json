@@ -20,5 +20,9 @@
     "threes": {
       "mae": 0.8849121795403851
     }
+  },
+  "training": {
+    "in_sample_metrics": true,
+    "note": "written before the chronological holdout existed; every mae here is the error on the rows the model was fitted on"
   }
 }

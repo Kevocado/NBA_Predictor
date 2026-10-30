@@ -43,3 +43,24 @@ def test_snapshots_append_never_overwrite(tmp_path):
     assert path.name == "nba_injuries_2026-10-20.jsonl.gz"
     lines = gzip.open(path, "rt").read().splitlines()
     assert len(lines) == 4 and json.loads(lines[0])["player_name"] == "Jaylen Brown"
+
+
+def test_main_makes_one_stubbed_fetch_and_appends_a_timestamped_snapshot(tmp_path, monkeypatch):
+    # OUT_DIR is relative, so run from a temp dir; requests.get is stubbed, so no network.
+    monkeypatch.chdir(tmp_path)
+    calls = []
+
+    class Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return PAYLOAD
+
+    monkeypatch.setattr(injury_log.requests, "get", lambda url, timeout: calls.append(url) or Resp())
+    assert injury_log.main() == 0
+    assert calls == [injury_log.URL]
+    (path,) = (tmp_path / "data" / "injuries").glob("nba_injuries_*.jsonl.gz")
+    rows = [json.loads(line) for line in gzip.open(path, "rt")]
+    assert len(rows) == 2 and rows[0]["player_name"] == "Jaylen Brown"
+    assert rows[0]["seen_at"].endswith("+00:00") and rows[0]["seen_at"][:10] == path.name[len("nba_injuries_"):-len(".jsonl.gz")]

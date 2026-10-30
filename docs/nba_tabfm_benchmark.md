@@ -25,8 +25,16 @@ Selected policy: **most recent 2000 rows** (`recent_2000`).
 | TabFM + Platt | 0.8819 | 0.2565 | 0.6750 | 0.1597 |
 | TabFM + isotonic | 2.1164 | 0.2510 | 0.6795 | 0.1361 |
 
-TabFM loses to the current model; its Platt/isotonic layer (fit on the
-training window only) makes it worse.
+TabFM (default) loses to the current model.
+
+**The Platt and isotonic rows are not valid.** Both layers are fitted on the
+last 200 training rows, but those rows are inside TabFM's own 2,000-row
+context, so TabFM has effectively seen their answers and its predictions on
+them are over-confident. The fitted calibration then does not transfer to the
+scored games. Do not read the 0.8819 / 2.1164 log-loss as evidence that
+calibration hurts; a valid test would fit the calibrator on a block held out of
+the context. This does not affect the raw TabFM, current-model, margin, total
+or bootstrap rows.
 
 ## Margin / total (pooled, MAE)
 
@@ -43,7 +51,9 @@ training window only) makes it worse.
 
 ## Runtime
 
-- Total runtime ~5.7 h across 4 windows; peak RSS ~7.3 GB.
+- Total runtime about 46 minutes (2,762 s) across 4 windows on CPU, ~11.5 minutes per window; peak RSS ~7.3 GB.
+
+Licence: the default TabFM weights are non-commercial, non-production; this was an offline research run.
 
 Raw numbers: `docs/nba_tabfm_benchmark_2019_2024.json`. Negative result: TabFM
 does not beat the current NBA model on this data.
